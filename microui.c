@@ -21,17 +21,17 @@
 */
 
 #include <stdio.h>
-#include <lib/string.h>
 #include <stdlib.h>
-#include <printf.h>
 #include <io.h>
+#include <lib/string.h>
 #include "microui.h"
+#include "printf.h"
 
 #define unused(x) ((void) (x))
 
 #define expect(x) do {                                               \
     if (!(x)) {                                                      \
-      printf("Fatal error: %s:%d: assertion '%s' failed\n", \
+      printf("Fatal error: %s:%d: assertion '%s' failed\n",          \
         __FILE__, __LINE__, #x);                                     \
       halt();                                                        \
     }                                                                \
@@ -53,20 +53,20 @@ static mu_Rect unclipped_rect = { 0, 0, 0x1000000, 0x1000000 };
 
 static mu_Style default_style = {
   /* font | size | padding | spacing | indent */
-  0, { 68, 10 }, 5, 4, 24,
+  NULL, { 68, 10 }, 5, 4, 24,
   /* title_height | scrollbar_size | thumb_size */
   24, 12, 8,
   {
-    {  0,   0,   0,  255 }, /* MU_COLOR_TEXT */
-    { 128,  128,  128,  255 }, /* MU_COLOR_BORDER */
-    { 128,  128,  128,  255 }, /* MU_COLOR_WINDOWBG */
-    { 128,  128,  128,  255 }, /* MU_COLOR_TITLEBG */
-    { 255,   255,   255,   255 }, /* MU_COLOR_TITLETEXT */
+    { 230, 230, 230, 255 }, /* MU_COLOR_TEXT */
+    { 25,  25,  25,  255 }, /* MU_COLOR_BORDER */
+    { 50,  50,  50,  255 }, /* MU_COLOR_WINDOWBG */
+    { 25,  25,  25,  255 }, /* MU_COLOR_TITLEBG */
+    { 240, 240, 240, 255 }, /* MU_COLOR_TITLETEXT */
     { 0,   0,   0,   0   }, /* MU_COLOR_PANELBG */
-    { 128, 128, 128,  255 }, /* MU_COLOR_BUTTON */
+    { 75,  75,  75,  255 }, /* MU_COLOR_BUTTON */
     { 95,  95,  95,  255 }, /* MU_COLOR_BUTTONHOVER */
-    { 128, 128, 128, 255 }, /* MU_COLOR_BUTTONFOCUS */
-    { 128,  128,  128,  255 }, /* MU_COLOR_BASE */
+    { 115, 115, 115, 255 }, /* MU_COLOR_BUTTONFOCUS */
+    { 30,  30,  30,  255 }, /* MU_COLOR_BASE */
     { 35,  35,  35,  255 }, /* MU_COLOR_BASEHOVER */
     { 40,  40,  40,  255 }, /* MU_COLOR_BASEFOCUS */
     { 43,  43,  43,  255 }, /* MU_COLOR_SCROLLBASE */
@@ -141,9 +141,9 @@ void mu_begin(mu_Context *ctx) {
   expect(ctx->text_width && ctx->text_height);
   ctx->command_list.idx = 0;
   ctx->root_list.idx = 0;
-  ctx->scroll_target = 0;
+  ctx->scroll_target = NULL;
   ctx->hover_root = ctx->next_hover_root;
-  ctx->next_hover_root = 0;
+  ctx->next_hover_root = NULL;
   ctx->mouse_delta.x = ctx->mouse_pos.x - ctx->last_mouse_pos.x;
   ctx->mouse_delta.y = ctx->mouse_pos.y - ctx->last_mouse_pos.y;
   ctx->frame++;
@@ -319,7 +319,7 @@ static mu_Container* get_container(mu_Context *ctx, mu_Id id, int opt) {
     }
     return &ctx->containers[idx];
   }
-  if (opt & MU_OPT_CLOSED) { return 0; }
+  if (opt & MU_OPT_CLOSED) { return NULL; }
   /* container not found in pool: init new container */
   idx = mu_pool_init(ctx, ctx->container_pool, MU_CONTAINERPOOL_SIZE, id);
   cnt = &ctx->containers[idx];
@@ -418,7 +418,7 @@ void mu_input_text(mu_Context *ctx, const char *text) {
   int len = strlen(ctx->input_text);
   int size = strlen(text) + 1;
   expect(len + size <= (int) sizeof(ctx->input_text));
-  memcpy(ctx->input_text + len, (char *)text, size);
+  memcpy(ctx->input_text + len, (void*)text, size);
 }
 
 
@@ -477,30 +477,10 @@ void mu_draw_rect(mu_Context *ctx, mu_Rect rect, mu_Color color) {
 
 
 void mu_draw_box(mu_Context *ctx, mu_Rect rect, mu_Color color) {
-    (void)color;
-    /*XXX
   mu_draw_rect(ctx, mu_rect(rect.x + 1, rect.y, rect.w - 2, 1), color);
   mu_draw_rect(ctx, mu_rect(rect.x + 1, rect.y + rect.h - 1, rect.w - 2, 1), color);
   mu_draw_rect(ctx, mu_rect(rect.x, rect.y, 1, rect.h), color);
   mu_draw_rect(ctx, mu_rect(rect.x + rect.w - 1, rect.y, 1, rect.h), color);
-    */
-
-    mu_draw_rect(ctx, mu_rect(rect.x, rect.y, rect.w - 1, rect.h - 1), mu_color(255,255,255,255));
-    mu_draw_rect(ctx, mu_rect(rect.x + 1, rect.y + 1, rect.w - 4, 1), mu_color(223,233,223,255));
-    mu_draw_rect(ctx, mu_rect(rect.x + 1, rect.y + 1, 1, rect.h - 4), mu_color(223,233,223,255));
-
-    mu_draw_rect(ctx, mu_rect(rect.x + 2, rect.y + 2, rect.w - 4, rect.h - 4), mu_color(192,192,192,255));
-
-    mu_draw_rect(ctx, mu_rect(rect.x, rect.y + rect.h, rect.w, 1), mu_color(0,0,0,255));
-    mu_draw_rect(ctx, mu_rect(rect.x + rect.w - 1, rect.y, 1, rect.h), mu_color(0,0,0,255));
-
-    mu_draw_rect(ctx, mu_rect(rect.x + 1, rect.y + rect.h - 1, rect.w - 2, 1), mu_color(64,64,64,255));
-    mu_draw_rect(ctx, mu_rect(rect.x + 2, rect.y + rect.h - 2, rect.w - 3, 1), mu_color(128,128,128,255));
-    mu_draw_rect(ctx, mu_rect(rect.x, rect.y, 1, rect.h), mu_color(223,233,233,255));
-    mu_draw_rect(ctx, mu_rect(rect.x + rect.w - 1, rect.y, 1, rect.h), mu_color(64,64,64,255));
-    mu_draw_rect(ctx, mu_rect(rect.x + rect.w - 2, rect.y + 1, 1, rect.h - 1), mu_color(128,128,128,255));
-    //mu_draw_rect(ctx, mu_rect(rect.x + 1, rect.y + 1, rect.w - 3, rect.h - 3), color);
-
 }
 
 
@@ -516,7 +496,7 @@ void mu_draw_text(mu_Context *ctx, mu_Font font, const char *str, int len,
   /* add command */
   if (len < 0) { len = strlen(str); }
   cmd = mu_push_command(ctx, MU_COMMAND_TEXT, sizeof(mu_TextCommand) + len);
-  memcpy(cmd->text.str, (void *)str, len);
+  memcpy(cmd->text.str, (void*)str, len);
   cmd->text.str[len] = '\0';
   cmd->text.pos = pos;
   cmd->text.color = color;
@@ -571,7 +551,7 @@ void mu_layout_row(mu_Context *ctx, int items, const int *widths, int height) {
   mu_Layout *layout = get_layout(ctx);
   if (widths) {
     expect(items <= MU_MAX_WIDTHS);
-    memcpy(layout->widths, (void *)widths, items * sizeof(widths[0]));
+    memcpy(layout->widths, (void*)widths, items * sizeof(widths[0]));
   }
   layout->items = items;
   layout->position = mu_vec2(layout->indent, layout->next_row);
@@ -612,7 +592,7 @@ mu_Rect mu_layout_next(mu_Context *ctx) {
   } else {
     /* handle next row */
     if (layout->item_index == layout->items) {
-      mu_layout_row(ctx, layout->items, 0, layout->size.y);
+      mu_layout_row(ctx, layout->items, NULL, layout->size.y);
     }
 
     /* position */
@@ -854,7 +834,7 @@ static int number_textbox(mu_Context *ctx, mu_Real *value, mu_Rect r, mu_Id id) 
     int res = mu_textbox_raw(
       ctx, ctx->number_edit_buf, sizeof(ctx->number_edit_buf), id, r, 0);
     if (res & MU_RES_SUBMIT || ctx->focus != id) {
-        *value = 0; //XXX strtod(ctx->number_edit_buf, 0);
+        *value = 0; //XXX strtod(ctx->number_edit_buf, NULL);
       ctx->number_edit = 0;
     } else {
       return 1;
@@ -1075,7 +1055,7 @@ static void begin_root_container(mu_Context *ctx, mu_Container *cnt) {
   push(ctx->container_stack, cnt);
   /* push container to roots list and push head command */
   push(ctx->root_list, cnt);
-  cnt->head = push_jump(ctx, 0);
+  cnt->head = push_jump(ctx, NULL);
   /* set as hover root if the mouse is overlapping this container and it has a
   ** higher zindex than the current hover root */
   if (rect_overlaps_vec2(cnt->rect, ctx->mouse_pos) &&
@@ -1094,7 +1074,7 @@ static void end_root_container(mu_Context *ctx) {
   /* push tail 'goto' jump command and set head 'skip' command. the final steps
   ** on initing these are done in mu_end() */
   mu_Container *cnt = mu_get_current_container(ctx);
-  cnt->tail = push_jump(ctx, 0);
+  cnt->tail = push_jump(ctx, NULL);
   cnt->head->jump.dst = ctx->command_list.items + ctx->command_list.idx;
   /* pop base clip rect and container */
   mu_pop_clip_rect(ctx);
