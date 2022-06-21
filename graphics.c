@@ -149,8 +149,35 @@ void mu() {
     ctx.text_height = text_height;
 }
 
+#define MAX_STARS 1000
+
+typedef struct {
+	int x, y, speed;
+} star_type;
+
+star_type stars[MAX_STARS];
+int stars_initialized = 0;
+
 void paint_desktop() {
     draw_rect(0, 0, 640, 480, 0x2D);
+
+    if (stars_initialized == 0) {
+        for (int i = 0;i<MAX_STARS;i++){
+            stars[i].x=rand() % 640;
+            stars[i].y=rand() % 480;
+            stars[i].speed = 1 + rand() % 16; // change 16 for diff effects
+        }
+        stars_initialized = 1;
+    }
+
+    for (int i=0;i<MAX_STARS;i++) {
+        stars[i].x -= stars[i].speed;
+        
+        if (stars[i].x <= 0)
+            stars[i].x = 640;
+        
+        draw_rect(stars[i].x, stars[i].y, 1, 1, 0xffffff);
+    }
 
     //draw_line(rand() % 639, rand() % 479, rand() % 639, rand() % 479, 0xffffffff);
 

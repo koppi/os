@@ -163,7 +163,7 @@ void fat_read(file *f, char *buf) {
     unsigned char *sector = (unsigned char *) dev->read(get_phys_sector(f));
     memcpy(buf, sector, SECTOR_SIZE);
     
-    uint32_t fat_offset;
+    uint32_t fat_offset = 0;
     switch(dev->minfo.type) {
     case FAT12:
         fat_offset = f->current_cluster + (f->current_cluster / 2);
