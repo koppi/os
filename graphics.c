@@ -158,9 +158,13 @@ typedef struct {
 star_type stars[MAX_STARS];
 int stars_initialized = 0;
 
+unsigned long createRGB(int r, int g, int b) {   
+    return ((r & 0xff) << 16) + ((g & 0xff) << 8) + (b & 0xff);
+}
+
 void paint_desktop() {
     draw_rect(0, 0, 640, 480, 0x2D);
-
+    
     if (stars_initialized == 0) {
         for (int i = 0;i<MAX_STARS;i++){
             stars[i].x=rand() % 640;
