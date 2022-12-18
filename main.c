@@ -61,20 +61,10 @@ void floppy_detect() {
     klogf(LOG_INFO, "Floppy drive B is a: %s\n", drive_type[b]);
 }
 
-static const char *e820names[] = {
-    "invalid",
-    "available",
-    "reserved",
-    "acpi",
-    "nvs",
-    "unusable"
-};
-
 extern uint32_t multiboot2_mem_size;
 
 void kernel_main(unsigned long magic, unsigned long addr) {
     unsigned size = *(unsigned *) addr;
-    (void)e820names;
 
     uint64_t tsc = rdtsc();
     
@@ -112,7 +102,7 @@ void kernel_main(unsigned long magic, unsigned long addr) {
               (unsigned) (map.base_address & 0xffffffff),
               (unsigned) (map.size >> 32),
               (unsigned) (map.size & 0xffffffff),
-              e820names[(unsigned) map.type]);
+              e820_type_to_string((unsigned) map.type));
             
             pmm_init_reg(map.base_address & 0xffffffff, map.size & 0xffffffff);
         }
