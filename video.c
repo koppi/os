@@ -20,7 +20,7 @@ void vbe_init() {
         return;
     }
         
-    klogf(LOG_DEBUG, "vbe: framebuffer at 0x%lx %dx%d %lu bpp scanline %d.\n",
+    klogf(LOG_DEBUG, "vbe: framebuffer at 0x%lx %lux%lu %u bpp scanline %lu.\n",
           bfb_addr, bfb_width, bfb_height, bfb_bpp, bfb_scanline);
 
     vbemem.buffer_size = bfb_width * bfb_height * (bfb_bpp / 8);
