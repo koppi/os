@@ -147,7 +147,7 @@ char tolower(char c) {
     return c + 32;
 }
 
-int vsprintf(char *str, char *format, va_list args) {
+int vsprintf(char *str, const char *format, va_list args) {
     int j = 0;
     char buf[256];
     char *in_string;

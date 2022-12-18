@@ -34,7 +34,7 @@ void to_uppercase(char *str, char *format);
 void to_lowercase(char *str, char *format);
 char toupper(char c);
 char tolower(char c);
-int vsprintf(char *str, char *format, va_list args);
+int vsprintf(char *str, const char *format, va_list args);
 char *strchr(char *str, int c);
 char *strcat(char *dest, char *src);
 
