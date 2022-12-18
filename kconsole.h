@@ -4,4 +4,4 @@
 
 extern chardev_t *kconsole;
 
-void _putchar(char c);
+void putchar_(char c);
