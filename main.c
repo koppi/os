@@ -1,3 +1,5 @@
+#include <ver.h>
+
 #include <log.h>
 #include <uart.h>
 #include <assert.h>
@@ -40,6 +42,8 @@
 
 #include <pci.h>
 
+struct version_tuplet os_ver = {.maj = 0, .min = 0, .rev = 0};
+
 void floppy_detect() {
     unsigned char a, b, c;
     outportb(0x70, 0x10);
@@ -70,13 +74,15 @@ extern uint32_t multiboot2_mem_size;
 
 void kernel_main(unsigned long magic, unsigned long addr) {
     unsigned size = *(unsigned *) addr;
-    (void)size;
     (void)e820names;
 
     uint64_t tsc = rdtsc();
     
     uart_init();
     kconsole = &uartdev;
+
+  	klogf(LOG_INFO, "-- os %lu.%lu.%lu --\n", os_ver.maj, os_ver.min, os_ver.rev);
+    klogf(LOG_INFO, "  kernel ELF size = %u\n", size);
     
     if (magic == MULTIBOOT_LOADER_MAGIC) {
         klogf(LOG_INFO, "MultiBoot 1 addr: 0x%lx magic: 0x%x size: 0x%x\n",
