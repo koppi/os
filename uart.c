@@ -22,15 +22,26 @@ chardev_t uartdev = { uart_read, uart_write };
 
 extern void uart_int();
 
+#define BAUD_RATE (9600)
+#define BASE_BAUD_RATE (115200)
+#define DLAB_FLAG (0x80)
+#define MODE_8N1 (3)
+
 void uart_init(void) {
+
+  // We need to specify ratio between baud rate and the base crystal
+  // oscillation rate of a 16550 UART serial chip.
+  uint16_t ratio = BAUD_RATE / BASE_BAUD_RATE;
+	
   // Disable all interrupts.
   outportb(UART_PORT + 1, 0);
 
   // 9600 baud, 8 data bits, 1 stop bit, parity off.
-  outportb(UART_PORT + 3, 0x80); // Unlock divisor
-  outportb(UART_PORT + 0, 115200/9600);
-  outportb(UART_PORT + 3, 0x03); // Lock divisor, 8 data bits.
-  outportb(UART_PORT + 4, 0x0B); // Interrupt enable and DTR,RTS high
+  outportb(UART_PORT + 3, DLAB_FLAG); // Enable DLAB - 'Divisor Latch Access Bit'. Lets
+			              // us set baud rate.
+  outportb(UART_PORT + 0, ratio);
+  outportb(UART_PORT + 3, MODE_8N1); // Lock divisor, 8 data bits.
+  outportb(UART_PORT + 4, 0x0B);     // Interrupt enable and DTR,RTS high
 
   // Turn off the FIFO.
   outportb(UART_PORT + 2, 0);
@@ -73,8 +84,10 @@ void uart_handler(void) {
     }
 }
 
+#define LSR_THR (0x20)
+
 uint8_t uart_tx_empty(void) {
-  return inportb(UART_PORT_CONTROL) & 0x20;
+  return inportb(UART_PORT_CONTROL) & LSR_THR;
 }
 
 void uart_putc(char c) {
