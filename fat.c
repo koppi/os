@@ -99,7 +99,7 @@ void to_normal_file_name(char *name, char *str) {
 }
 
 void print_dir(directory_t *dir) {
-    printf("%s %s %d %d %d\n",
+    printf("%s %s %d %d %lu\n",
            dir->filename, dir->extension,
            dir->attrs, dir->first_cluster,
            dir->file_size);

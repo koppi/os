@@ -51,7 +51,7 @@ void ex_bounds_check() {
 
 void ex_invalid_opcode(struct regs *re) {
     printf("Invalid opcode\n");
-    printf("eip: %x cs: %x\neax: %d ebx: %d ecx: %d edx: %d\nesp: %x ebp: %x esi: %d edi: %d\nds: %x es: %x fs: %x gs: %x\n", re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp, re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
+    printf("eip: %lx cs: %lx\neax: %lu ebx: %lu ecx: %lu edx: %lu\nesp: %lx ebp: %lx esi: %lu edi: %lu\nds: %lx es: %lx fs: %lx gs: %lx\n", re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp, re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
     if(re->es == 0x10) {
         // If an Invalid Opcode occurs in kernel mode, we don't really want to continue
         panic("");
@@ -87,9 +87,9 @@ void ex_stack_fault() {
 }
 
 void ex_gpf(struct regs_error *re) {
-    printf("\nGeneral protection fault\nError code: %b\n", re->error);
-    printf("eip: %x cs: %x\neax: %d ebx: %d ecx: %d edx: %d\nesp: %x ebp: %x esi: %d edi: %d\nds: %x es: %x fs: %x gs: %x\n", re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp, re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
-    printf("cr2: %x cr3: %x\n", get_cr2(), get_pdbr());
+    printf("\nGeneral protection fault\nError code: %lu\n", re->error);
+    printf("eip: %lx cs: %lx\neax: %lu ebx: %lu ecx: %lu edx: %lu\nesp: %lx ebp: %lx esi: %lu edi: %lu\nds: %lx es: %lx fs: %lx gs: %lx\n", re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp, re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
+    printf("cr2: %x cr3: %lx\n", get_cr2(), get_pdbr());
     
     // If a GPF occurs in kernel mode, we don't really want to continue
     if(re->es == 0x10) {
@@ -120,7 +120,7 @@ void ex_page_fault(struct regs_error *re) {
     );
 
     //printf("\nPage fault at addr: 0x%x\n", (unsigned)virt_addr);
-    printf("Phys addr: 0x%x\n", phys_addr);
+    printf("Phys addr: 0x%lx\n", phys_addr);
     // If a Page Fault occurs in kernel mode, we don't really want to continue
     if(re->es == 0x10) {
         panic("");

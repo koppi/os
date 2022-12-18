@@ -97,7 +97,7 @@ int vmm_map(page_dir_t *pdir, vmm_addr_t virt, uint32_t flags) {
     // Get a memory block
     mm_addr_t phys = (mm_addr_t) pmm_malloc();
     if(!phys) {
-        printf("VMM: Failed allocating memory %x\n", phys);
+        printf("VMM: Failed allocating memory %lx\n", phys);
         return 0;
     }
     

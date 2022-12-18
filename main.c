@@ -79,20 +79,20 @@ void kernel_main(unsigned long magic, unsigned long addr) {
     kconsole = &uartdev;
     
     if (magic == MULTIBOOT_LOADER_MAGIC) {
-        klogf(LOG_INFO, "MultiBoot 1 addr: 0x%x magic: 0x%x size: 0x%x\n",
+        klogf(LOG_INFO, "MultiBoot 1 addr: 0x%lx magic: 0x%x size: 0x%x\n",
           (uintptr_t)addr, (unsigned) magic, size);
         
         multiboot_info_parse((const multiboot_info_t *)addr);
         multiboot_info_t *info = (multiboot_info_t *)addr;
         pmm_init(info->mem_upper + info->mem_lower);
     } else if (magic == MULTIBOOT2_LOADER_MAGIC) {
-        klogf(LOG_INFO, "MultiBoot 2 addr: 0x%x magic: 0x%x size: 0x%x\n",
+        klogf(LOG_INFO, "MultiBoot 2 addr: 0x%lx magic: 0x%x size: 0x%x\n",
           (uintptr_t)addr, (unsigned) magic, size);
         
         multiboot2_info_parse((const multiboot2_info_t *)addr);
         pmm_init(multiboot2_mem_size);
     } else {
-        klogf(LOG_EMERG, "Error: no multiboot, magic: 0x%x. Exiting.", magic);
+        klogf(LOG_EMERG, "Error: no multiboot, magic: 0x%lx. Exiting.", magic);
         exit_qemu(1);
     }
     
@@ -147,7 +147,7 @@ void kernel_main(unsigned long magic, unsigned long addr) {
 
     pci_test();
 
-    klogf(LOG_INFO, "Initialization took: %lu\n", rdtsc() - tsc);
+    klogf(LOG_INFO, "Initialization took: %llu\n", rdtsc() - tsc);
 
     sched_init();
     

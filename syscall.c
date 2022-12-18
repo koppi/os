@@ -32,7 +32,7 @@ void syscall_init() {
 }
 
 void syscall_disp(struct regs *re) {
-    printf("syscall_disp() eax %d ebx %d ecx %d\n", re->eax, re->ebx, re->ecx);
+    printf("syscall_disp() eax %lu ebx %lu ecx %lu\n", re->eax, re->ebx, re->ecx);
     if(re->eax >= MAX_SYSCALL) {
         re->eax = -1;
         return;

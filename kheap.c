@@ -78,6 +78,6 @@ int get_used_heap() {
 }
 
 void print_header(heap_header_t *head) {
-    printf("Size: %d Is free: %d Next: %x\n", head->size, head->is_free, head->next);
+    printf("Size: %d Is free: %d Next: %lu\n", head->size, head->is_free, (uint32_t)head->next);
 }
 

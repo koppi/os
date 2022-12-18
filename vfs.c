@@ -157,14 +157,11 @@ int vfs_get_dev(char *name) {
 
 void vfs_mount(char *name) {
     device_t *dev = get_dev_by_name(name);
-    if(&dev->fs) {
-        devs[dev->id] = &dev->fs;
-        fat_mount(dev);
-    }
+    devs[dev->id] = &dev->fs;
+    fat_mount(dev);
 }
 
 void vfs_unmount(char *name) {
     device_t *dev = get_dev_by_name(name);
-    if(&dev->fs)
-        devs[dev->id] = 0;
+    devs[dev->id] = 0;
 }
