@@ -7,7 +7,7 @@ void halt() {
     __asm__ volatile("hlt");
 }
 
-void exit_qemu(const int status_code) {
+void __attribute__((noreturn)) exit_qemu(const int status_code) {
   if (status_code) {
     outportb(0xf4, status_code); // qemu isa-debug-exit port
   }
@@ -16,6 +16,9 @@ void exit_qemu(const int status_code) {
   outportb(0x64, 0xd1);
   while ((inportb(0x64) & 2) != 0);
   outportb(0x60, 0xfe); // keyboard reset
+  
+  // Busy-wait halt.
+  while(1);
 }
 
 void enable_int() {
