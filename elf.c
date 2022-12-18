@@ -14,10 +14,7 @@ int elf_validate(elf_header_t *eh) {
     if(eh == 0)
         return 0;
 
-    //printf("ELF magic: %d %c %c %c\n",
-    //       eh->magic[0], eh->magic[1], eh->magic[2], eh->magic[3]);
-    
-    if(!((eh->magic[0] == 0x7F) && (eh->magic[1] == 'E') && (eh->magic[2] == 'L') && (eh->magic[3] == 'F'))) {
+    if(eh->magic != ELF_MAGIC_NUMBER) {
         printf("Magic number wrong\n");
         return 0;
     }
@@ -113,7 +110,7 @@ int load_elf_file(char *name) {
  */
 int load_elf_relocate(thread_t *thread, page_dir_t *pdir, elf_header_t *eh) {
     // Get the program header
-    program_header_t *ph = (program_header_t *) ((uint32_t) eh + eh->program_header);
+    elf_program_header_t *ph = (elf_program_header_t *) ((uint32_t) eh + eh->program_header);
     // Get the entry point of the program
     thread->eip = eh->entry;
     // Get the base image virtual address
