@@ -3,32 +3,6 @@
 #include <printf.h>
 #include <log.h>
 
-uint8_t inportb(uint16_t port) {
-    uint8_t ret;
-    __asm__ volatile("inb %%dx, %%al" : "=a" (ret) : "d" (port));
-    return ret;
-}
-
-uint32_t inportl(uint32_t port) {
-    uint32_t ret;
-    __asm__ volatile("inl %%dx,%%eax":"=a" (ret):"d"(port));
-    return ret;
-}
-
-uint16_t inportw(uint16_t port) {
-    uint16_t ret;
-    __asm__ volatile("inw %%dx, %%ax" : "=a" (ret) : "d" (port));
-    return ret;
-}
-
-void outportb(uint16_t port, uint8_t val) {
-    __asm__ volatile("outb %%al, %%dx" : : "d" (port), "a" (val));
-}
-
-void outportl(uint32_t port, uint32_t val) {
-    __asm__ volatile("outl %%eax,%%dx"::"d" (port), "a" (val));
-}
-
 void halt() {
     __asm__ volatile("hlt");
 }
