@@ -5,17 +5,17 @@
 #include <io.h>
 
 struct idt_ptr idtr;
-struct idt_info idt[MAX_INTERRUPTS];
+struct idt_info idt[NUM_INTERRUPTS];
 
 void idt_init(uint16_t code) {
     int i;
 
-    idtr.limit = sizeof(struct idt_info) * MAX_INTERRUPTS - 1;
+    idtr.limit = sizeof(struct idt_info) * NUM_INTERRUPTS - 1;
     idtr.base = (uint32_t) &idt;
     
     memset(&idt, 0, idtr.limit);
 
-    for(i = 0; i < MAX_INTERRUPTS; i++)
+    for(i = 0; i < NUM_INTERRUPTS; i++)
       install_ir(i, 0x80 | 0x0E, code, &default_ir_handler);
     
     install_ir(0, 0x80 | 0x0E, code, &ex_divide_by_zero);
@@ -58,10 +58,10 @@ void install_ir(uint32_t i, uint16_t flags, uint16_t sel, void *irq) {
     uint32_t ir_addr = (uint32_t) irq;
     
     idt[i].base_low = (uint16_t) ir_addr & 0xFFFF;
-	idt[i].base_high = (uint16_t) (ir_addr >> 16) & 0xFFFF;
-	idt[i].reserved = 0;
-	idt[i].flags = (uint8_t) flags;
-	idt[i].sel = sel;
+    idt[i].base_high = (uint16_t) (ir_addr >> 16) & 0xFFFF;
+    idt[i].ist = 0;
+    idt[i].flags = (uint8_t) flags;
+    idt[i].sel = sel;
 
     irq_clear_mask(i);
 

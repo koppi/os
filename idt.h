@@ -2,14 +2,15 @@
 
 #include <types.h>
 
-#define MAX_INTERRUPTS 256
+#define NUM_INTERRUPTS (256)
 
+// See https://wiki.osdev.org/Interrupt_Descriptor_Table#Structure_on_IA-32
 struct idt_info {
-    uint16_t base_low;
-    uint16_t sel;
-    uint8_t reserved;
-    uint8_t flags;
-    uint16_t base_high;
+    uint16_t base_low;  // Lower bits.
+    uint16_t sel;       // Code selector.
+    uint8_t ist;        // unused, set to 0.
+    uint8_t flags;      // gate type, dpl, and p fields.
+    uint16_t base_high; // Middle bits.
 } __attribute__((__packed__));
 
 struct idt_ptr {
