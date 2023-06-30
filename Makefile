@@ -8,9 +8,9 @@ MAKEFLAGS += --no-print-directory
 
 TARGET ?= i386
 
-CC=i686-elf-gcc
-LD=i686-elf-ld
-OBJCOPY=i686-elf-objcopy
+CC=gcc
+LD=ld
+OBJCOPY=objcopy
 
 SRCS = $(wildcard *.[cS] *.asm) $(wildcard lib/*.c)
 OBJS = $(addsuffix .o,$(basename $(SRCS))) font.o
