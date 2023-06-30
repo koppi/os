@@ -6,7 +6,7 @@ MNT=/mnt/hda
 IMG=hda.img
 
 qemu-img create $IMG 5M
-mkfs.fat $IMG
+/sbin/mkfs.fat $IMG
 
 sudo mkdir -p $MNT
 sudo losetup $LO $IMG

@@ -6,7 +6,7 @@ MNT=/mnt/floppy
 IMG=floppy.img
 
 #qemu-img create $IMG 1.44M
-mkfs.fat $IMG
+/sbin/mkfs.fat $IMG
 
 sudo mkdir -p $MNT
 sudo losetup $LO $IMG
