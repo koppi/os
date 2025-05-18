@@ -9,11 +9,11 @@ char senddir[64];
 char dir[64];
 
 void print_meminfo() {
-    printf("Total mem: %lu MB, free mem: %lu MB\n",
+    printf("Total mem: %u MB, free mem: %u MB\n",
            get_mem_size() / 1024, (get_max_blocks() - get_used_blocks()) * 4 / 1024);
     printf("Heap size: %d KB, free heap: %d KB\n",
            get_heap_size() / 1024, (get_heap_size() - get_used_heap()) / 1024);
-    printf("cr0: %x cr2: %x cr3: %lx\n", get_cr0(), get_cr2(), get_pdbr());
+    printf("cr0: %x cr2: %x cr3: %x\n", get_cr0(), get_cr2(), get_pdbr());
 }
 
 char *get_argument(char *command, int n) {

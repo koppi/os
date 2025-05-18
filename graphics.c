@@ -46,8 +46,8 @@ void paint_mouse() {
         for (int j=0; j<11; j++) {
             if (*buf) {
                 uint32_t color = mouse_color_mapping[*buf];
-                if (mouse_x + j >= 0 && mouse_x + j < 640 &&
-                    mouse_y + i >= 0 && mouse_y + i < 480) {
+                if (mouse_x + j >= 0 && mouse_x + j < 1280 &&
+                    mouse_y + i >= 0 && mouse_y + i < 1024) {
                     draw_pixel(mouse_x + j, mouse_y + i, color);
                 }
             }
@@ -163,12 +163,12 @@ unsigned long createRGB(int r, int g, int b) {
 }
 
 void paint_desktop() {
-    draw_rect(0, 0, 640, 480, 0x2D);
+    draw_rect(0, 0, 1280, 1024, 0x2D);
     
     if (stars_initialized == 0) {
         for (int i = 0;i<MAX_STARS;i++){
-            stars[i].x=rand() % 640;
-            stars[i].y=rand() % 480;
+            stars[i].x=rand() % 1280;
+            stars[i].y=rand() % 1024;
             stars[i].speed = 1 + rand() % 16; // change 16 for diff effects
         }
         stars_initialized = 1;
@@ -178,7 +178,7 @@ void paint_desktop() {
         stars[i].x -= stars[i].speed;
         
         if (stars[i].x <= 0)
-            stars[i].x = 640;
+            stars[i].x = 1280;
         
         draw_rect(stars[i].x, stars[i].y, 1, 1, 0xffffff);
     }

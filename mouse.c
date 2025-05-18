@@ -106,12 +106,12 @@ read_next:
 }
 
 void mouse_check_bounds() {
-    if(mouse_info.x > 640-1)
-        mouse_info.x = 640-1;
+    if(mouse_info.x > 1280-1)
+        mouse_info.x = 1280-1;
     else if(mouse_info.x < 0)
         mouse_info.x = 0;
-    if(mouse_info.y > 480-1)
-        mouse_info.y = 480-1;
+    if(mouse_info.y > 1024-1)
+        mouse_info.y = 1024-1;
     else if(mouse_info.y < 0)
         mouse_info.y = 0;
 }

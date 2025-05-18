@@ -3,8 +3,8 @@
 #include <multiboot.h>
 #include <multiboot2.h>
 
-    .set CONFIG_BFB_WIDTH, 640
-    .set CONFIG_BFB_HEIGHT, 480
+    .set CONFIG_BFB_WIDTH, 1280
+    .set CONFIG_BFB_HEIGHT, 1024
     .set CONFIG_BFB_BPP, 32
     
     .set ALIGN,    1 << 0
