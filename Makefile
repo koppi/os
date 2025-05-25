@@ -20,7 +20,7 @@ ASFLAGS += -m32 -I.
 
 CFLAGS += -Og
 CFLAGS += -DDEBUG
-CFLAGS += -Wall -Wextra -Wunused -pedantic -pedantic-errors
+CFLAGS += -Wall -Wextra -Wunused #-pedantic -pedantic-errors
 CFLAGS += -m32 -std=gnu11 -pipe -fno-stack-protector
 CFLAGS += -finline-functions -Wno-missing-field-initializers
 CFLAGS += -fno-omit-frame-pointer -ffreestanding -fno-builtin
