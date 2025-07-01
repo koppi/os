@@ -53,10 +53,10 @@ QEMUFLAGS += -usb
 all: lib apps $(KERNEL) qemu-iso
 
 lib:
-	make -C lib
+	$(MAKE) -C lib
 
 apps:
-	make -C apps
+	$(MAKE) -C apps
 
 iso: $(KERNEL)
 	@mkdir -p iso/boot/grub
@@ -101,8 +101,8 @@ kernel.lst: $(KERNEL)
 	objdump -D $(KERNEL) > kernel.lst
 
 clean:
-	@make -C lib clean
-	@make -C apps clean
+	@$(MAKE) -C lib clean
+	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) *.d lib/*.d *~ os.iso iso
 
 .PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox clean

@@ -1,11 +1,11 @@
 all:
-	make -C 01
-	make -C hello
-	make -C example
+	$(MAKE) -C 01
+	$(MAKE) -C hello
+	$(MAKE) -C example
 
 clean:
-	make -C 01 clean
-	make -C hello clean
-	make -C example clean
+	$(MAKE) -C 01 clean
+	$(MAKE) -C hello clean
+	$(MAKE) -C example clean
 
 .phony: all clean
