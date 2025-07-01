@@ -28,6 +28,11 @@ static inline void outportb(uint16_t port, uint8_t val) {
     __asm__ volatile("outb %%al, %%dx" : : "d" (port), "a" (val));
 }
 
+// 16-bit output
+static inline void outportw(uint16_t port, uint16_t val) {
+    __asm__ volatile ("outw %0, %1" : : "a"(val), "Nd"(port));
+}
+
 // Output a single uint32 to the specified port.
 static inline void outportl(uint32_t port, uint32_t val) {
     __asm__ volatile("outl %%eax,%%dx"::"d" (port), "a" (val));

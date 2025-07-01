@@ -3,6 +3,8 @@
 #include <io.h>
 #include <log.h>
 
+#include <pci_ac97.h>
+
 #define PCI_CONFIG  0xCF8
 #define PCI_DATA    0xCFC
 
@@ -89,6 +91,7 @@ void pci_test() {
                     
                     if (vendor == 0x8086 && device == 0x2415) {
                         klogf(LOG_INFO, "=> found 82801 AA AC'97 sound card.\n");
+                        ac97_init();
                     }
 
                     devices++;
