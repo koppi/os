@@ -1,20 +1,20 @@
 #include <sched.h>
 
-#include <lib/string.h>
-#include <proc.h>
-#include <lib/system_calls.h>
-#include <paging.h>
-#include <kheap.h>
 #include <io.h>
+#include <kheap.h>
+#include <paging.h>
 #include <pit.h>
+#include <proc.h>
 #include <tss.h>
+#include <lib/string.h>
+#include <lib/system_calls.h>
 
-#include <video.h>
-#include <printf.h>
-#include <kconsole.h>
 #include <commands.h>
 #include <graphics.h>
+#include <kconsole.h>
 #include <pcspk.h>
+#include <printf.h>
+#include <video.h>
 
 #include <floppy.h>
 
@@ -199,9 +199,9 @@ void print_procs() {
     process_t *app = list;
     printf("n_proc = %d\n", n_proc);
     for(int i = 0; i < n_proc; i++) {
-        printf("%s id: %d page directory: 0x%lx state: %d\n",
+        printf("%s id: %d page directory: 0x%x state: %d\n",
                app->name, app->thread_list->pid, (uint32_t)app->pdir, app->state);
-        printf("    eip: 0x%lx esp: 0x%lx stack limit: 0x%lx\nimage base: 0x%lx image size: %lx\n\n",
+        printf("    eip: 0x%x esp: 0x%x stack limit: 0x%x\nimage base: 0x%x image size: %x\n\n",
                app->thread_list->eip, app->thread_list->esp, app->thread_list->stack_limit,
                app->thread_list->image_base, app->thread_list->image_size);
         app = app->next;

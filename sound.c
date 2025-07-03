@@ -97,7 +97,7 @@ static uint8_t dsp_detect_timeout(uint8_t* b) {
     return 0;
 }
 
-static void reset() {
+static uint8_t reset() {
     uint8_t status = 0;
     
     outportb(DSP_RESET, 1);
@@ -121,9 +121,10 @@ static void reset() {
         goto fail;
     }
 
-    return;
+    return 0;
 fail:
     klogf(LOG_ERR, "Failed to reset SB16: %d\n", 128);
+    return 1;
 }
 
 static void set_sample_rate(uint16_t hz) {
@@ -191,21 +192,23 @@ void sound_init() {
     hxcmod_load(&modctx, modfile_0, modfile_0_size);
 
     install_ir(32 + MIXER_IRQ, 0x80 | 0x0E, 0x8, &sound_int);
-    reset();
-    configure();
+    if (reset() == 0)
+    {
+        configure();
 
-    transfer(buffer, BUFFER_SIZE);
-    set_sample_rate(SAMPLE_RATE);
+        transfer(buffer, BUFFER_SIZE);
+        set_sample_rate(SAMPLE_RATE);
 
-    uint16_t sample_count = (BUFFER_SIZE / 2) - 1;
-    dsp_write(DSP_PLAY | DSP_PROG_16 | DSP_AUTO_INIT);
-    dsp_write(DSP_SIGNED | DSP_MONO);
-    dsp_write((uint8_t) ((sample_count >> 0) & 0xFF));
-    dsp_write((uint8_t) ((sample_count >> 8) & 0xFF));
+        uint16_t sample_count = (BUFFER_SIZE / 2) - 1;
+        dsp_write(DSP_PLAY | DSP_PROG_16 | DSP_AUTO_INIT);
+        dsp_write(DSP_SIGNED | DSP_MONO);
+        dsp_write((uint8_t) ((sample_count >> 0) & 0xFF));
+        dsp_write((uint8_t) ((sample_count >> 8) & 0xFF));
 
-    dsp_write(DSP_ON);
-    dsp_write(DSP_ON_16);
+        dsp_write(DSP_ON);
+        dsp_write(DSP_ON_16);
 
-    //printf("playing module '%s'.\n", modctx.song.title);
-    //klogf(LOG_DEBUG, "sound_init() ok.\n");
+        printf("playing module '%s'.\n", modctx.song.title);
+        klogf(LOG_DEBUG, "sound_init() ok.\n");
+    }
 }

@@ -41,22 +41,22 @@ QEMUFLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 QEMUFLAGS += -enable-kvm
 QEMUFLAGS += -audiodev id=pa,driver=pa -machine pcspk-audiodev=pa
 QEMUFLAGS += -device sb16,audiodev=pa
+QEMUFLAGS += -device ac97,audiodev=pa
 #QEMUFLAGS += -d in_asm,cpu,guest_errors,exec
 QEMUFLAGS += -rtc base=localtime,clock=vm
 QEMUFLAGS += -drive file=floppy.img,format=raw,index=0,if=floppy
 QEMUFLAGS += -drive file=hda.img,format=raw,if=ide,index=0,media=disk
 QEMUFLAGS += -drive file=os.iso,if=ide,index=1,media=cdrom
 QEMUFLAGS += -display sdl
-#QEMUFLAGS += -soundhw ac97
 QEMUFLAGS += -usb
 
 all: lib apps $(KERNEL) qemu-iso
 
 lib:
-	make -C lib
+	$(MAKE) -C lib
 
 apps:
-	make -C apps
+	$(MAKE) -C apps
 
 iso: $(KERNEL)
 	@mkdir -p iso/boot/grub
@@ -104,8 +104,8 @@ cloc::
 	cloc . --exclude-ext=md,txt,toml,json
 
 clean::
-	@make -C lib clean
-	@make -C apps clean
+	@$(MAKE) -C lib clean
+	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) *.d lib/*.d *~ os.iso iso
 
 .PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox cloc clean
