@@ -14,7 +14,7 @@ ac97_int:
     mov fs, ax
     mov gs, ax
 
-    call ac97_pcm_irq_handler
+;    call ac97_pcm_irq_handler
     
     mov al, 0x20
     out 0xA0, al

@@ -5,8 +5,6 @@
 #include <sched.h>
 #include <vfs.h>
 
-#include <pci_ac97_pcm.h>
-
 char senddir[64];
 char dir[64];
 
@@ -128,7 +126,7 @@ void console_exec(char *buf) {
     {
         console_read(dir, buf);
     } else if (strncmp(buf, "beep", 4) == 0) {
-        ac97_play_pcm_beep();
+        // ac97_play_pcm_beep();
     } else {
         printf("Command '%s' not found.\n", buf);
     }
