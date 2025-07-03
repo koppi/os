@@ -100,11 +100,14 @@ font.o:
 kernel.lst: $(KERNEL)
 	objdump -D $(KERNEL) > kernel.lst
 
-clean:
+cloc::
+	cloc . --exclude-ext=md,txt,toml,json
+
+clean::
 	@make -C lib clean
 	@make -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) *.d lib/*.d *~ os.iso iso
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox cloc clean
 
 -include $(OBJS:.o=.d)
