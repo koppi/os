@@ -20,6 +20,7 @@ ASFLAGS += -m32 -I.
 
 CFLAGS += -Og
 CFLAGS += -DDEBUG
+CFLAGS += -Werror
 CFLAGS += -Wall -Wextra -Wunused #-pedantic -pedantic-errors
 CFLAGS += -m32 -std=gnu11 -pipe -fno-stack-protector
 CFLAGS += -finline-functions -Wno-missing-field-initializers
@@ -31,12 +32,11 @@ CFLAGS += -I. -Iinclude
 #CFLAGS += -Wno-type-limits -Wno-array-bounds -Wno-discarded-qualifiers
 #CFLAGS += -Wno-int-conversion -Wno-sign-compare -Wno-maybe-uninitialized
 #CFLAGS += -Wno-strict-aliasing
-#CFLAGS += -Werror
 
-LDFLAGS += -melf_i386 -T kernel.lds -Map kernel.map -z muldefs
+LDFLAGS += -melf_i386 -T kernel.lds -Map kernel.map -z muldefs -z noexecstack
 
 QEMU ?= qemu-system-$(TARGET)
-QEMUFLAGS += -vga std -m 128M -no-reboot
+QEMUFLAGS += -vga std -m 256M -no-reboot
 QEMUFLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 QEMUFLAGS += -enable-kvm
 QEMUFLAGS += -audiodev id=pa,driver=pa -machine pcspk-audiodev=pa
@@ -50,7 +50,7 @@ QEMUFLAGS += -drive file=os.iso,if=ide,index=1,media=cdrom
 QEMUFLAGS += -display sdl
 QEMUFLAGS += -usb
 
-all: lib apps $(KERNEL) qemu-iso
+all: lib apps $(KERNEL)
 
 lib:
 	$(MAKE) -C lib
@@ -79,8 +79,6 @@ qemu-nox: iso
 $(KERNEL): $(OBJS)
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -o $@ $^
-	@grub-file --is-x86-multiboot $(KERNEL)
-	@grub-file --is-x86-multiboot2 $(KERNEL)
 
 .c.o:
 	@echo "  CC $<"
