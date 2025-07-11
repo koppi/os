@@ -4,6 +4,8 @@
 #include <printf.h>
 #include <sched.h>
 #include <vfs.h>
+#include <pci_ac97.h>
+#include <kheap.h>
 
 char senddir[64];
 char dir[64];
@@ -126,7 +128,11 @@ void console_exec(char *buf) {
     {
         console_read(dir, buf);
     } else if (strncmp(buf, "beep", 4) == 0) {
-        // ac97_play_pcm_beep();
+        uint16_t* audio_buffer = (uint16_t*)kmalloc(44100 * 2);
+        for (int i = 0; i < 44100; i++) {
+            audio_buffer[i] = (i % 100 < 50) ? 10000 : -10000;
+        }
+        ac97_play_buffer((uint8_t*)audio_buffer, 44100 * 2);
     } else {
         printf("Command '%s' not found.\n", buf);
     }

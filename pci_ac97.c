@@ -3,6 +3,9 @@
 #include <io.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <kheap.h>
+#include <proc.h>
+#include <idt.h>
 
 #define AC97_VENDOR_INTEL  0x8086
 #define AC97_DEVICE_ICH    0x2415
@@ -10,45 +13,56 @@
 #define AC97_PCI_BAR0      PCI_BAR0
 
 // AC'97 Base Offsets (relative to BAR0)
-#define AC97_REG_BDBAR     0x00  // PCM Output Buffer Descriptor List Base Address Register
-#define AC97_REG_CIV       0x04  // Current Index Value Register
-#define AC97_REG_LVI       0x05  // Last Valid Index Register
-#define AC97_REG_SR        0x06  // Status Register
-#define AC97_REG_PICB      0x08  // Position in Current Buffer
-#define AC97_REG_CR        0x0B  // Control Register
-#define AC97_REG_GCTL      0x2C  // Global Control Register
-#define AC97_REG_GSTS      0x30  // Global Status Register
+#define AC97_REG_BDBAR     0x10  // PCM Out Buffer Descriptor List Base Address
+#define AC97_REG_CIV       0x14  // PCM Out Current Index Value
+#define AC97_REG_LVI       0x15  // PCM Out Last Valid Index
+#define AC97_REG_SR        0x16  // PCM Out Status Register
+#define AC97_REG_PICB      0x18  // PCM Out Position in Current Buffer
+#define AC97_REG_CR        0x1B  // PCM Out Control Register
+
+#define AC97_REG_MASTER_VOL  0x02
+#define AC97_REG_PCM_VOL     0x18
+
+#define AC97_REG_GCTL      0x2C  // Global Control
+#define AC97_REG_GSTS      0x30  // Global Status
 
 // GCTL bits
 #define AC97_GCTL_COLD_RESET  (1 << 1)
-#define AC97_GCTL_WARM_RESET  (1 << 0)
 
 // GSTS bits
 #define AC97_GSTS_CRDY        (1 << 0) // Codec Ready
 
+// CR bits
+#define AC97_CR_START_DMA     0x01 // Start DMA
+#define AC97_CR_STOP_DMA      0x02 // Stop DMA
+#define AC97_CR_IOC_ENABLE    0x04 // Interrupt on Completion enable
+
+#define BDL_ENTRIES 32
+
+struct bdl_entry {
+    uint32_t address;
+    uint16_t length;
+    uint16_t flags; // b[15] = 1 for Interrupt on Completion
+} __attribute__((packed));
+
 static uint32_t ac97_base_addr = 0;
 static uint8_t ac97_found = 0;
+static volatile struct bdl_entry* bdl;
+static volatile uint8_t current_bdl_entry = 0;
 
-static int ac97_wait_codec_ready(uint32_t base) {
-    // Wait for Codec Ready (CRDY) bit in GSTS
-    for (int i = 0; i < 10000; ++i) {
-        if (inportl(base + AC97_REG_GSTS) & AC97_GSTS_CRDY)
-            return 1;
-        for (volatile int delay = 0; delay < 1000; ++delay); // crude delay
+extern void ac97_int();
+
+void ac97_irq_handler() {
+    
+    uint16_t status = inportw(ac97_base_addr + AC97_REG_SR);
+
+    if (status & 0x4) { // Interrupt on completion
+        // Acknowledge interrupt
+        outportw(ac97_base_addr + AC97_REG_SR, 0x4);
+        // You could handle buffer completion here, e.g., by adding a new buffer
+    } else {
+        outportw(ac97_base_addr + AC97_REG_SR, 0x1F);
     }
-    return 0;
-}
-
-static void ac97_codec_reset(uint32_t base) {
-    // Cold reset
-    outportl(base + AC97_REG_GCTL, AC97_GCTL_COLD_RESET);
-    for (volatile int i = 0; i < 100000; ++i);
-    outportl(base + AC97_REG_GCTL, 0);
-    for (volatile int i = 0; i < 100000; ++i);
-    // Optionally do a warm reset
-    outportl(base + AC97_REG_GCTL, AC97_GCTL_WARM_RESET);
-    for (volatile int i = 0; i < 100000; ++i);
-    outportl(base + AC97_REG_GCTL, 0);
 }
 
 void ac97_init(void) {
@@ -56,53 +70,49 @@ void ac97_init(void) {
     if (pci_find(AC97_VENDOR_INTEL, AC97_DEVICE_ICH, &bus, &dev, &func)) {
         klogf(LOG_INFO, "AC'97 (82801AA) found at %u:%u.%u\n", bus, dev, func);
 
-        // Read BAR0 (base address)
         ac97_base_addr = pci_read(bus, dev, func, AC97_PCI_BAR0) & ~0xF;
         klogf(LOG_INFO, "AC'97 base address: 0x%x\n", ac97_base_addr);
 
-        // Enable Bus Mastering and I/O space in PCI Command register (offset 0x04)
         uint32_t pci_cmd = pci_read(bus, dev, func, 0x04);
         pci_cmd |= (1 << 2) | (1 << 0); // Bus Master and I/O Enable
         pci_write(bus, dev, func, 0x04, pci_cmd);
 
-        // Reset the codec
-        ac97_codec_reset(ac97_base_addr);
+        outportl(ac97_base_addr + AC97_REG_GCTL, AC97_GCTL_COLD_RESET);
 
-        // Wait for codec ready
-        if (!ac97_wait_codec_ready(ac97_base_addr)) {
-            klogf(LOG_EMERG, "AC'97 codec not ready after reset!\n");
-            return;
-        } else {
-            klogf(LOG_INFO, "AC'97 codec ready.\n");
+        // Set master and PCM volume to a reasonable level (0x0000 is unmuted, max volume)
+        outportw(ac97_base_addr + AC97_REG_MASTER_VOL, 0x0000);
+        outportw(ac97_base_addr + AC97_REG_PCM_VOL, 0x0000);
+
+        bdl = (struct bdl_entry*)kmalloc(sizeof(struct bdl_entry) * BDL_ENTRIES);
+        for (int i = 0; i < BDL_ENTRIES; ++i) {
+            bdl[i].address = 0;
+            bdl[i].length = 0;
+            bdl[i].flags = 0;
         }
 
-        // --- Advanced: Setup for PCM output (buffer descriptor list) ---
-        // (This does not play sound yet, just initializes the DMA engine.)
+        outportl(ac97_base_addr + AC97_REG_BDBAR, (uint32_t)bdl);
 
-        // Allocate a simple static Buffer Descriptor List (BDL) in low memory
-        // In a real OS, you would allocate this dynamically and ensure it's DMA-safe
-        static uint32_t ac97_bdl[32 * 2] __attribute__((aligned(8))); // 32 entries, 8 bytes each (addr, length)
-        for (int i = 0; i < 32 * 2; ++i) ac97_bdl[i] = 0;
-
-        // Write BDL base physical address to BDBAR
-        outportl(ac97_base_addr + AC97_REG_BDBAR, (uint32_t)ac97_bdl);
-        klogf(LOG_INFO, "AC'97 PCM BDL addr set: 0x%x\n", (uint32_t)ac97_bdl);
-
-        // Set Last Valid Index (LVI) to 0 (no buffers yet)
-        outportb(ac97_base_addr + AC97_REG_LVI, 0);
-
-        // Clear status
-        outportw(ac97_base_addr + AC97_REG_SR, 0xFF);
-
-        // Enable PCM output DMA channel (set Run bit in Control Register)
-        outportb(ac97_base_addr + AC97_REG_CR, 0x1);
-
-        klogf(LOG_INFO, "AC'97 PCM output DMA channel enabled.\n");
+        uint8_t irq = pci_read(bus, dev, func, 0x3C) & 0xFF;
+        install_ir(irq, 0x8E, 0x8, &ac97_int);
+        klogf(LOG_INFO, "AC'97 IRQ: %u\n", irq);
 
         ac97_found = 1;
     } else {
         klogf(LOG_INFO, "AC'97 (82801AA) not found.\n");
     }
+}
+
+void ac97_play_buffer(uint8_t* buf, uint32_t len) {
+    if (!ac97_found) return;
+
+    bdl[current_bdl_entry].address = (uint32_t)buf;
+    bdl[current_bdl_entry].length = len;
+    bdl[current_bdl_entry].flags = 0x8000; // Interrupt on completion
+
+    outportb(ac97_base_addr + AC97_REG_LVI, current_bdl_entry);
+    outportb(ac97_base_addr + AC97_REG_CR, AC97_CR_START_DMA | AC97_CR_IOC_ENABLE);
+
+    current_bdl_entry = (current_bdl_entry + 1) % BDL_ENTRIES;
 }
 
 int ac97_present(void) { return ac97_found; }

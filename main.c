@@ -23,6 +23,10 @@
 #include <fpu.h>
 #include <sound.h>
 #include <pci.h>
+#include <printf.h>
+#include <commands.h>
+
+void kmain_console();
 
 #include "cpu.h"
 
@@ -109,6 +113,31 @@ void kernel_main(unsigned long magic, unsigned long addr)
 
     sched_init();
 
+    kmain_console();
+
     // ReSharper disable once CppDFAEndlessLoop
     while (1) halt();
 }
+
+void kmain_console() {
+    char cmdbuf[256];
+    int i = 0;
+    printf("> ");
+    while (1) {
+        char c = keyboard_get_lastkey();
+        if (c) {
+            keyboard_invalidate_lastkey();
+            if (c == '\n') {
+                cmdbuf[i] = 0;
+                printf("\n");
+                console_exec(cmdbuf);
+                i = 0;
+                printf("> ");
+            } else {
+                cmdbuf[i++] = c;
+                printf("%c", c);
+            }
+        }
+    }
+}
+
