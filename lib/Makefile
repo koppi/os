@@ -1,5 +1,6 @@
 CFLAGS += -m32
 CFLAGS += -c -I.. -I../include -ffreestanding -fno-builtin -nostdlib
+CFLAGS += -Werror -Wall -Wextra
 CFLAGS += -Wno-pointer-to-int-cast
 
 all:

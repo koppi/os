@@ -95,7 +95,7 @@ char getchar() {
     }
 }
 
-void gets(char *str) {
+void gets(char *str, size_t size) {
     int count = 0;
     char c;
 
@@ -106,7 +106,7 @@ void gets(char *str) {
         if(c == 0)
             continue;
         keyboard_invalidate_lastkey();
-        if(((int) c >= 32) && ((int) c <= 122))
+        if(((int) c >= 32) && ((int) c <= 122) && count < (int)size - 1)
             str[count++] = c;
         else if(c == '\b')
             if(count > 0)

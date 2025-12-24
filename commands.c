@@ -36,11 +36,15 @@ void console_cd(char *dir, char *command) {
     strcat(senddir, "/");
     char *arg = get_argument(command, 1);
     if(arg) {
-        strcat(senddir, arg);
-        if(vfs_cd(senddir)) {
-            strcpy(dir, senddir);
+        if(strlen(senddir) + strlen(arg) < 63) {
+            strcat(senddir, arg);
+            if(vfs_cd(senddir)) {
+                strcpy(dir, senddir);
+            } else {
+                printf("cd %s: directory not found\n", senddir);
+            }
         } else {
-            printf("cd %s: directory not found\n", senddir);
+            printf("Path too long\n");
         }
     } else {
         memset(dir, 0, 64);

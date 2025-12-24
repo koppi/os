@@ -9,5 +9,5 @@ void keyboard_read_key();
 char keyboard_get_lastkey();
 void keyboard_invalidate_lastkey();
 char getchar();
-void gets(char *str);
+void gets(char *str, size_t size);
 

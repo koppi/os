@@ -133,7 +133,7 @@ void kmain_console() {
                 console_exec(cmdbuf);
                 i = 0;
                 printf("> ");
-            } else {
+            } else if (i < 255) {
                 cmdbuf[i++] = c;
                 printf("%c", c);
             }
