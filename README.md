@@ -98,12 +98,13 @@ hard disk. The QEMU setup attaches `floppy.img` (floppy A), `hda.img`
 * Per-process user heap ([`heap.c`](heap.c)) backing the `malloc`/`free`
   syscalls; a first-fit free list over 4 pages.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
-  its own linker script and no crt0 (entry point is `main`). They are copied
-  onto both disk images as `hello` and `tst`:
+  its own linker script and no crt0 (entry point is `main`). All three are
+  copied onto both disk images:
   * [`apps/hello`](apps/hello) — prints a line via the `printf` syscall and
     returns
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
-  * [`apps/example`](apps/example) — interactive `scanf`/`malloc` demo
+  * [`apps/example`](apps/example) — reads a number, a char and a string with
+    `scanf` and echoes them back
 
 ### Console shell
 The kernel debug console ([`commands.c`](commands.c), `kmain_console`) runs as
@@ -170,12 +171,13 @@ The repo ships a prebuilt `floppy.img`; `hda.img` is built locally. Both hold a
 FAT volume with the compiled apps copied in.
 
 ```bash
-./hda.sh       # FAT hard-disk image via mtools (no root needed)
-./floppy.sh    # FAT floppy image (uses sudo + a loop device)
+./floppy.sh    # 1.44M FAT12 floppy image
+./hda.sh       # 5M FAT hard-disk image
 ```
 
-The in-kernel FAT driver only handles one sector per cluster, so `hda.sh`
-passes `mkfs.fat -s 1`.
+Both scripts use mtools (no root / loop device) and stage `hello`, `tst` and
+`example`. The in-kernel FAT driver only handles one sector per cluster, so the
+images are made with `mkfs.fat -C … 1440` / `mkfs.fat -s 1`.
 
 ### Run in QEMU
 

@@ -1,23 +1,17 @@
 #!/usr/bin/env bash
+# Build the floppy image (drive A). Uses mtools, so no root / loop device needed.
+set -e
 
-LO=`sudo losetup -f`
-
-MNT=/mnt/floppy
 IMG=floppy.img
 
-#qemu-img create $IMG 1.44M
-/sbin/mkfs.fat $IMG
+# -C 1440: create a standard 1.44M FAT12 floppy (1 sector per cluster), which
+# is the geometry the in-kernel FAT driver was written against.
+rm -f "$IMG"
+/sbin/mkfs.fat -C "$IMG" 1440
 
-sudo mkdir -p $MNT
-sudo losetup $LO $IMG
-sudo mount $LO $MNT -t msdos -o "fat=12"
+mcopy -i "$IMG" -D o apps/hello/hello   ::hello
+mcopy -i "$IMG" -D o apps/01/01         ::tst
+mcopy -i "$IMG" -D o apps/example/example ::example
+mcopy -i "$IMG" -D o mouse.bmp          ::mouse.bmp
 
-sudo rm -f $MNT/hello
-sudo cp apps/hello/hello $MNT/hello
-sudo rm -f $MNT/tst
-sudo cp apps/01/01 $MNT/tst
-sudo cp mouse.bmp $MNT/mouse.bmp
-
-sudo umount $MNT
-sudo losetup -d $LO
-sudo rm -rf $MNT
+mdir -i "$IMG" ::/
