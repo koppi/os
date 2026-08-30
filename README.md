@@ -108,9 +108,9 @@ keyboard driver, echoes them, supports backspace, and executes a line on Enter.
 Paths are resolved against the working directory. When none is set, a bare name
 resolves against `/fda` (the first floppy), so `start hello` runs
 `/fda/hello` and `read mouse.bmp` opens `/fda/mouse.bmp`. Devices are named
-`fd{a,b}` for the floppies and `hd{a,b,…}` for IDE disks; currently only the
-floppy is mounted at boot (`floppy_init()` — `ata_init()` is not wired into
-startup yet).
+`fd{a,b}` for the floppies and `hd{a,b,…}` for IDE disks; `main_proc` probes
+both at boot (`floppy_init()` / `ata_init()`) and any drive holding a FAT
+volume is mounted — e.g. `cd hda` / `ls` / `read hda/file`.
 
 ## Layout
 
@@ -197,5 +197,6 @@ keyboard → mouse → UART RX IRQ → sound → syscalls → TSS → RTC → PC
 scheduler.
 
 `sched_init()` does not return: it `iret`s into the scheduler's first process
-(`main_proc` in [`sched.c`](sched.c)), which starts the framebuffer redraw
-thread and then runs the interactive console (`kmain_console`).
+(`main_proc` in [`sched.c`](sched.c)), which brings up the floppy and IDE
+block devices, mounts their FAT volumes, starts the framebuffer redraw thread,
+and then runs the interactive console (`kmain_console`).

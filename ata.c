@@ -5,7 +5,7 @@
 #include <fat.h>
 #include <idt.h>
 #include <io.h>
-#include <kheap.h>
+#include <log.h>
 
 static ata_drives_t ata_info;
 uint8_t ata_irq_done = 0;
@@ -23,6 +23,9 @@ void ata_init() {
     ata_info_fill(&ata_info.secondary_slave, 0, ATA_SECONDARY_DATA, ATA_SECONDARY_ERR, ATA_SECONDARY_SECTORS, ATA_SECONDARY_LBA_LOW, ATA_SECONDARY_LBA_MID, ATA_SECONDARY_LBA_HIGH, ATA_SECONDARY_DRIVE_SEL, ATA_SECONDARY_STATUS, ATA_SECONDARY_IRQ);
     ata_info.cur_hdd = ata_info.primary_master;
     drive_t *temp_info = &ata_info.primary_master;
+    static const char *chan_name[4] = {
+        "primary master", "primary slave", "secondary master", "secondary slave"
+    };
     for(int i = 0; i < 4; i++) {
         if(temp_info->present == 1) {
             dev_info[i].id = i;
@@ -33,6 +36,7 @@ void ata_init() {
             dev_info[i].read = &ata_read_sector;
             fat_init(&dev_info[i].fs);
             device_register(&dev_info[i]);
+            klogf(LOG_INFO, "ATA %s: mounted as %s\n", chan_name[i], dev_info[i].mount);
         }
         temp_info++;
     }
@@ -124,7 +128,10 @@ void delay_400ns() {
 }
 
 char *ata_read_sector(int lba) {
-    char *buf = (char *) kmalloc(512);
+    // Shared scratch sector, like floppy_read_sector(): the caller must consume
+    // the data before the next read. Returning a fresh kmalloc() here leaked
+    // 512 bytes of kernel heap on every sector read.
+    static uint8_t buf[512];
     outportb(ata_info.cur_hdd.sel_reg, 0xE0 | ((lba >> 24) & 0x0F)); // maybe or with (ata_info.cur_hdd.type << 4)
     outportb(ata_info.cur_hdd.err_reg, 0x00);
     outportb(ata_info.cur_hdd.sectors_reg, (uint8_t) 1);
@@ -134,14 +141,18 @@ char *ata_read_sector(int lba) {
     outportb(ata_info.cur_hdd.status_reg, 0x20);
     //ata_wait_for_irq();
     delay_400ns();
-    
-    while(!(inportb(ata_info.cur_hdd.data_reg) & 0x08));
-    
+
+    // Wait for BSY to clear and DRQ to assert on the *status* register.
+    // (Polling the data register here would consume bytes from the sector.)
+    uint8_t st;
+    do {
+        st = inportb(ata_info.cur_hdd.status_reg);
+    } while((st & 0x80) || !(st & 0x08));
+
     for(int i = 0; i < 256; i++) {
-        uint16_t tmp = inportw(ata_info.cur_hdd.data_reg);
-        *(uint16_t *) (buf + i * 2) = tmp;
+        ((uint16_t *) buf)[i] = inportw(ata_info.cur_hdd.data_reg);
     }
     delay_400ns();
-    return buf;
+    return (char *) buf;
 }
 

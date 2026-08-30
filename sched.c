@@ -17,6 +17,7 @@
 #include <video.h>
 
 #include <floppy.h>
+#include <ata.h>
 
 process_t *list;
 static int n_proc = 1;
@@ -60,7 +61,8 @@ void demo_thread() {
 void main_proc() {
     //enable_int();
     floppy_init(); // requires irqs to be enabled
-    
+    ata_init();    // probes the IDE channels and mounts hd{a,b,...}
+
     mu();
 
     start_kernel_proc("draw_thread", &refresh_screen);
