@@ -151,13 +151,16 @@ Kernel flags: `-Og -std=gnu11 -ffreestanding -fno-builtin -nodefaultlibs
 
 ### Disk images
 
-The repo ships prebuilt `floppy.img` and `hda.img`. To regenerate them (creates
-FAT images and copies in the built apps; needs `sudo` + loop devices):
+The repo ships a prebuilt `floppy.img`; `hda.img` is built locally. Both hold a
+FAT volume with the compiled apps copied in.
 
 ```bash
-./floppy.sh
-./hda.sh
+./hda.sh       # FAT hard-disk image via mtools (no root needed)
+./floppy.sh    # FAT floppy image (uses sudo + a loop device)
 ```
+
+The in-kernel FAT driver only handles one sector per cluster, so `hda.sh`
+passes `mkfs.fat -s 1`.
 
 ### Run in QEMU
 
