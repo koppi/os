@@ -41,53 +41,95 @@ static const uint8_t shifted_keyboard_map[] =
   ' ', // Spacebar
 };
 
-static uint8_t lastkey = 0;
-static volatile uint8_t shift_pressed = 0;
+/* Scancode set 1 make codes. A break (release) code is the make code | 0x80. */
+#define SC_LSHIFT 0x2A
+#define SC_RSHIFT 0x36
+
+/*
+ * Decoded keystrokes are pushed here by the keyboard IRQ and drained by the
+ * console. Without it a key that arrives (make + break) between two polls is
+ * lost: the release IRQ would run before the consumer looked at the make.
+ *
+ * Single producer (the IRQ), single consumer. The size is a power of two so the
+ * indices wrap with a mask; a full buffer drops the newest key.
+ */
+#define KBD_BUF_SIZE 128
+#define KBD_BUF_MASK (KBD_BUF_SIZE - 1)
+
+static volatile char kbd_buf[KBD_BUF_SIZE];
+static volatile uint32_t kbd_head = 0; // next write slot  (IRQ only)
+static volatile uint32_t kbd_tail = 0; // next read slot   (consumer only)
+
+/* bit 0: left shift held, bit 1: right shift held */
+static volatile uint8_t shift_state = 0;
 
 extern void keyboard_int();
 
+static void kbd_buf_push(char c) {
+    uint32_t next = (kbd_head + 1) & KBD_BUF_MASK;
+    if(next == kbd_tail)
+        return; // buffer full, drop this key
+    kbd_buf[kbd_head] = c;
+    kbd_head = next;
+}
+
 void keyboard_init() {
+    kbd_head = kbd_tail = 0;
+    shift_state = 0;
     install_ir(33, 0x80 | 0x0E, 0x8, &keyboard_int);
     outportb(KBD_CHECK, 0xAE);
 }
 
 void keyboard_read_key() {
-    lastkey = 0;
-    if(inportb(KBD_CHECK) & 1) {
-        uint8_t keycode = inportb(KBD_IN);
+    if(!(inportb(KBD_CHECK) & 1))
+        return;
 
-        if (shift_pressed == 0 && (keycode == 42 || keycode == 54)) {
-            shift_pressed = keycode;
-        }
-        // Release shifted keyboard map if shift was relieved
-        if ((shift_pressed == 42 && keycode == 170) ||
-            (shift_pressed == 54 && keycode == 182)) {
-            shift_pressed = 0;
-        }
-        if (keycode > sizeof(keyboard_map)) {
-            return;
-        }
-        if (shift_pressed > 0) {
-            lastkey = shifted_keyboard_map[keycode];
-        } else {
-            lastkey = keyboard_map[keycode];
-        }
-	}
+    uint8_t code = inportb(KBD_IN);
+
+    if(code & 0x80) {
+        // Break (release) code.
+        uint8_t make = code & 0x7F;
+        if(make == SC_LSHIFT)
+            shift_state &= ~1u;
+        else if(make == SC_RSHIFT)
+            shift_state &= ~2u;
+        return;
+    }
+
+    // Make (press) code.
+    if(code == SC_LSHIFT) {
+        shift_state |= 1u;
+        return;
+    }
+    if(code == SC_RSHIFT) {
+        shift_state |= 2u;
+        return;
+    }
+    if(code >= sizeof(keyboard_map))
+        return;
+
+    char c = shift_state ? shifted_keyboard_map[code] : keyboard_map[code];
+    if(c)
+        kbd_buf_push(c);
 }
 
+/* Peek at the next buffered keystroke without consuming it (0 if none). */
 char keyboard_get_lastkey() {
-    return lastkey;
+    if(kbd_head == kbd_tail)
+        return 0;
+    return kbd_buf[kbd_tail];
 }
 
+/* Consume the keystroke last returned by keyboard_get_lastkey(). */
 void keyboard_invalidate_lastkey() {
-    lastkey = 0;
+    if(kbd_head != kbd_tail)
+        kbd_tail = (kbd_tail + 1) & KBD_BUF_MASK;
 }
 
 char getchar() {
     enable_int();
-    char c = 0;
     while(1) {
-        c = keyboard_get_lastkey();
+        char c = keyboard_get_lastkey();
         if(c == 0)
             continue;
         keyboard_invalidate_lastkey();
