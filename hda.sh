@@ -1,18 +1,14 @@
 #!/usr/bin/env bash
+# Build the IDE hard-disk image. Uses mtools, so no root / loop device needed.
+set -e
 
-LO=`sudo losetup -f`
-
-MNT=/mnt/hda
 IMG=hda.img
 
-qemu-img create $IMG 5M
-/sbin/mkfs.fat $IMG
+qemu-img create -f raw "$IMG" 5M
+# -s 1: one sector per cluster, which is all the in-kernel FAT driver supports.
+/sbin/mkfs.fat -s 1 -R 1 "$IMG"
 
-sudo mkdir -p $MNT
-sudo losetup $LO $IMG
-sudo mount $LO $MNT -t msdos
-sudo rm -f $MNT/hello
-sudo cp apps/hello/hello $MNT/hello
-sudo umount $MNT
-sudo losetup -d $LO
-sudo rm -rf $MNT
+mcopy -i "$IMG" -D o apps/hello/hello ::hello
+mcopy -i "$IMG" -D o apps/01/01     ::tst
+
+mdir -i "$IMG" ::/

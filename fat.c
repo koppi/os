@@ -39,11 +39,13 @@ void fat_mount(device_t *dev) {
     dev->minfo.fat_offset = bs->bpb.reserved_sectors;
     dev->minfo.fat_size = (bs->bpb.fat_sectors == 0) ? bs->bpb_ext.fat_sectors : bs->bpb.fat_sectors;
     dev->minfo.fat_entry_size = 8;
+    dev->minfo.cluster_sectors = bs->bpb.cluster_sectors;
     dev->minfo.n_root_entries = bs->bpb.n_dir_entries;
-    dev->minfo.root_offset = (bs->bpb.n_fats * dev->minfo.fat_size) + 1;
+    // Root directory begins right after the reserved area and the FAT copies.
+    dev->minfo.root_offset = dev->minfo.fat_offset + (bs->bpb.n_fats * dev->minfo.fat_size);
     dev->minfo.root_size = ((bs->bpb.n_dir_entries * 32) + (bs->bpb.sector_bytes - 1)) / bs->bpb.sector_bytes;
-    dev->minfo.first_data_sector = dev->minfo.fat_offset + (bs->bpb.n_fats * dev->minfo.fat_size) + dev->minfo.root_size;
-    dev->minfo.data_sectors = bs->bpb.n_sectors - (bs->bpb.reserved_sectors + (bs->bpb.n_fats * dev->minfo.fat_size) + dev->minfo.root_size);
+    dev->minfo.first_data_sector = dev->minfo.root_offset + dev->minfo.root_size;
+    dev->minfo.data_sectors = dev->minfo.n_sectors - dev->minfo.first_data_sector;
     
     uint32_t total_clusters = dev->minfo.data_sectors / bs->bpb.cluster_sectors;
     if(total_clusters < 4085)
@@ -107,7 +109,9 @@ void print_dir(directory_t *dir) {
 }
 
 uint32_t get_phys_sector(file *f) {
-    return 32 + f->current_cluster - 1;
+    device_t *dev = get_dev_by_id(f->dev);
+    return dev->minfo.first_data_sector +
+           (f->current_cluster - 2) * dev->minfo.cluster_sectors;
 }
 
 directory_t *fat_get_dir(file *f) {
@@ -115,8 +119,8 @@ directory_t *fat_get_dir(file *f) {
     to_dos_file_name(f->name, dos_file_name);
     device_t *dev = get_dev_by_id(f->dev);
     
-    for(int i = 0; i < 14; i++) {
-        directory_t *dir = (directory_t *) dev->read(dev->minfo.root_offset + i); // STUCK HERE WITH FOPEN
+    for(uint32_t i = 0; i < dev->minfo.root_size; i++) {
+        directory_t *dir = (directory_t *) dev->read(dev->minfo.root_offset + i);
         for(int j = 0; j < 16; j++, dir++) {
             if(strncmp(dos_file_name, (char *) dir->filename, NAME_LEN) == 0) {
                 offset = i;
@@ -139,7 +143,7 @@ int fat_touch(char *name) {
     to_dos_file_name(f.name, dos_file_name);
     device_t *dev = get_dev_by_id(f.dev);
     
-    for(int i = 0; i < 14; i++) {
+    for(uint32_t i = 0; i < dev->minfo.root_size; i++) {
         directory_t *dir = (directory_t *) dev->read(dev->minfo.root_offset + i);
         for(int j = 0; j < 16; j++, dir++) {
             if(dir->filename[0] == 0) {
@@ -349,7 +353,7 @@ void fat_ls(char *dir) {
     char *normal_name = kmalloc(NAME_LEN + 1);
     // TODO nested folder
     device_t *dev = get_dev_by_name(dir);
-    for(int i = 0; i < 14; i++) {
+    for(uint32_t i = 0; i < dev->minfo.root_size; i++) {
         directory_t *direc = (directory_t *) dev->read(dev->minfo.root_offset + i);
         for(int j = 0; j < 16; j++, direc++) {
             if(((char *) direc->filename)[0] == 0)

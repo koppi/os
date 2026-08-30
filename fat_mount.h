@@ -32,6 +32,7 @@ typedef struct fat_mount_info {
     uint32_t root_size;
     uint32_t fat_size;
     uint32_t fat_entry_size;
+    uint32_t cluster_sectors;
     uint32_t first_data_sector;
     uint32_t data_sectors;
 } fat_mount_info_t;

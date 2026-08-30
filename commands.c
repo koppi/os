@@ -90,10 +90,12 @@ static int build_path(char *out, size_t outsz, const char *dir, const char *name
 }
 
 /**
- * @brief Resolve a user-supplied name against the console working directory.
+ * @brief Resolve a user-supplied name to an absolute device path.
  *
- * Falls back to DEFAULT_DEVICE when no directory has been selected, so that
- * e.g. "start hello" locates "/fda/hello".
+ * A name that already contains '/' (e.g. "hda/hello") is treated as
+ * device-qualified and only gets a leading '/' if missing. A bare name is
+ * resolved against the console working directory, falling back to
+ * DEFAULT_DEVICE when none is set, so "start hello" locates "/fda/hello".
  *
  * @param out   Destination buffer.
  * @param outsz Size of @p out in bytes.
@@ -101,6 +103,15 @@ static int build_path(char *out, size_t outsz, const char *dir, const char *name
  * @return Non-zero on success, 0 if the path had to be truncated.
  */
 static int resolve_path(char *out, size_t outsz, const char *name) {
+    if(name && strchr((char *)name, '/')) {
+        size_t len = 0;
+        while(name[len] && name[len] != ' ') {
+            len++;
+        }
+        int n = snprintf(out, outsz, "%s%.*s",
+                         name[0] == '/' ? "" : "/", (int)len, name);
+        return (n >= 0 && (size_t)n < outsz);
+    }
     return build_path(out, outsz, dir[0] ? dir : DEFAULT_DEVICE, name);
 }
 
