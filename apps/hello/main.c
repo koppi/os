@@ -3,6 +3,6 @@
 #include <string.h>
 
 int main() {
-    while(1);
+    printf("Hello from userspace!\n");
     return 0;
 }

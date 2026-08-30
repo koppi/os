@@ -26,7 +26,6 @@
 #include <printf.h>
 #include <commands.h>
 
-void kmain_console();
 
 #include "cpu.h"
 
@@ -111,33 +110,10 @@ void kernel_main(unsigned long magic, unsigned long addr)
 
     klogf(LOG_INFO, "Initialization took: %llu\n", rdtsc() - tsc);
 
+    // sched_init() does not return: it iret's into the scheduler's first
+    // process (main_proc), which brings up the interactive console.
     sched_init();
-
-    kmain_console();
 
     // ReSharper disable once CppDFAEndlessLoop
     while (1) halt();
 }
-
-void kmain_console() {
-    char cmdbuf[256];
-    int i = 0;
-    printf("> ");
-    while (1) {
-        char c = keyboard_get_lastkey();
-        if (c) {
-            keyboard_invalidate_lastkey();
-            if (c == '\n') {
-                cmdbuf[i] = 0;
-                printf("\n");
-                console_exec(cmdbuf);
-                i = 0;
-                printf("> ");
-            } else if (i < 255) {
-                cmdbuf[i++] = c;
-                printf("%c", c);
-            }
-        }
-    }
-}
-

@@ -67,15 +67,8 @@ void main_proc() {
     //start_kernel_proc("demo_thread", &demo_thread);
     //start_kernel_proc("uart_read", &uart_read_proc);
 
-    //console_exec("help");
-    //console_exec("ls");
-    //console_exec("cd fda");
-    //console_exec("ls");
-    //console_exec("start tst");
-    //console_exec("start hello");
-    //console_exec("ps");
-    
-    while(1) halt();
+    // Hand control to the interactive console (does not return).
+    kmain_console();
 }
 
 void sched_add_proc(process_t *proc) {
@@ -91,10 +84,17 @@ void sched_add_proc(process_t *proc) {
 void sched_remove_proc(int id) {
     process_t *app = get_proc_by_id(id);
     if(app != 0) {
+        sched_state(0);
         app->prec->next = app->next;
         app->next->prec = app->prec;
         n_proc--;
-        list = app->next;
+        // Only move the run cursor if it pointed at the process we just
+        // unlinked; retarget it to a still-live neighbour, never to an
+        // unrelated process (which would corrupt that process's saved state
+        // on the next tick).
+        if(list == app)
+            list = app->prec;
+        sched_state(1);
     }
 }
 
