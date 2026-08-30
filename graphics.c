@@ -92,6 +92,16 @@ static  char logbuf[64000];
 static   int logbuf_updated = 0;
 
 void write_log(char *text) {
+    size_t used = strlen(logbuf);
+    size_t add = strlen(text);
+    if(used + add >= sizeof(logbuf)) {
+        /* Log buffer full: drop the oldest half to make room. */
+        size_t half = sizeof(logbuf) / 2;
+        memmove(logbuf, logbuf + half, used - half + 1);
+        used -= half;
+        if(used + add >= sizeof(logbuf))
+            return;
+    }
     strcat(logbuf, text);
     logbuf_updated = 1;
 }

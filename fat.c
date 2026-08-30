@@ -60,6 +60,7 @@ void to_dos_file_name(char *name, char *str) {
     if((!name) || (!str))
         return;
     
+    /* Caller must provide a buffer of at least NAME_LEN + 1 bytes. */
     memset(str, ' ', NAME_LEN);
     int i;
     for(i = 0; i < strlen(name) && i < NAME_LEN; i++) {
@@ -110,7 +111,7 @@ uint32_t get_phys_sector(file *f) {
 }
 
 directory_t *fat_get_dir(file *f) {
-    char *dos_file_name = kmalloc(NAME_LEN);
+    char *dos_file_name = kmalloc(NAME_LEN + 1);
     to_dos_file_name(f->name, dos_file_name);
     device_t *dev = get_dev_by_id(f->dev);
     
@@ -134,7 +135,7 @@ int fat_touch(char *name) {
         return 0;
     }
     
-    char *dos_file_name = kmalloc(NAME_LEN);
+    char *dos_file_name = kmalloc(NAME_LEN + 1);
     to_dos_file_name(f.name, dos_file_name);
     device_t *dev = get_dev_by_id(f.dev);
     
@@ -142,7 +143,9 @@ int fat_touch(char *name) {
         directory_t *dir = (directory_t *) dev->read(dev->minfo.root_offset + i);
         for(int j = 0; j < 16; j++, dir++) {
             if(dir->filename[0] == 0) {
-                strcpy((char *) dir->filename, dos_file_name);
+                /* filename[8] and extension[3] are contiguous in the packed
+                 * directory entry; copy exactly NAME_LEN bytes and no NUL. */
+                memcpy(dir->filename, dos_file_name, NAME_LEN);
                 dir->file_size = 0;
                 dir->first_cluster = 0;
                 dev->write(dev->minfo.root_offset + i);
@@ -218,7 +221,7 @@ void fat_write(file *f, char *str) {
     if(!f)
         return;
     
-    char *dos_file_name = kmalloc(NAME_LEN);
+    char *dos_file_name = kmalloc(NAME_LEN + 1);
     to_dos_file_name(f->name, dos_file_name);
     
     device_t *dev = get_dev_by_id(f->dev);
@@ -257,7 +260,7 @@ void fat_close(file *f) {
 
 file fat_directory(char *dir_name, int devid) {
     file f;
-    strcpy(f.name, dir_name);
+    strncpy(f.name, dir_name, sizeof(f.name) - 1);
     f.dev = devid;
     f.eof = 0;
     
@@ -277,8 +280,8 @@ file fat_directory(char *dir_name, int devid) {
 
 file fat_open_subdir(file directory, char *name) {
     file f;
-    strcpy(f.name, name);
-    char *dos_file_name = kmalloc(NAME_LEN);
+    strncpy(f.name, name, sizeof(f.name) - 1);
+    char *dos_file_name = kmalloc(NAME_LEN + 1);
     to_dos_file_name(name, dos_file_name);
     char *buf = kmalloc(SECTOR_SIZE);
     
@@ -325,7 +328,7 @@ file fat_search(char *name) {
     while(name++) {
         char pathname[16];
         int i;
-        for(i = 0; i < 16; i++) {
+        for(i = 0; i < (int)sizeof(pathname) - 1; i++) {
             if((name[i] == '/') || (name[i] == '\0'))
                 break;
             pathname[i] = name[i];
@@ -343,7 +346,7 @@ file fat_search(char *name) {
 }
 
 void fat_ls(char *dir) {
-    char *normal_name = kmalloc(NAME_LEN);
+    char *normal_name = kmalloc(NAME_LEN + 1);
     // TODO nested folder
     device_t *dev = get_dev_by_name(dir);
     for(int i = 0; i < 14; i++) {

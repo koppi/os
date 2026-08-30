@@ -29,7 +29,7 @@
  */
 int start_proc(char *name, char *arguments) {
     process_t *proc = (process_t *) kmalloc(sizeof(process_t));
-    strcpy(proc->name, name);
+    strncpy(proc->name, name, sizeof(proc->name) - 1);
     proc->state = PROC_NEW;
 
     // Create a new page directory
@@ -228,7 +228,9 @@ void end_proc(int ret) {
  */
 void remove_proc(int pid) {
     process_t *cur = get_proc_by_id(pid);
-    
+    if(cur == 0)
+        return;
+
     // Remove the executable
     for(uint32_t page = 0; page < cur->thread_list->image_size / PAGE_SIZE; page++) {
         vmm_unmap(cur->pdir, cur->thread_list->image_base + (page * PAGE_SIZE));
@@ -259,7 +261,7 @@ void remove_proc(int pid) {
  */
 int start_kernel_proc(char *name, void *addr) {
     process_t *proc = (process_t *) kmalloc(sizeof(process_t));
-    strcpy(proc->name, name);
+    strncpy(proc->name, name, sizeof(proc->name) - 1);
     proc->state = PROC_NEW;
     proc->pdir = get_kern_directory();
     proc->thread_list = create_thread();
@@ -311,5 +313,7 @@ int start_kernel_proc(char *name, void *addr) {
  */
 int proc_state(int id) {
     process_t *cur = get_proc_by_id(id);
+    if(cur == 0)
+        return PROC_STOPPED;
     return cur->state;
 }
