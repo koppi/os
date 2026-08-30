@@ -47,7 +47,7 @@ Current version: **0.0.0** (see [`ver.h`](ver.h)).
 | --- | --- |
 | ATA / IDE disk | [`ata.c`](ata.c), [`ata_asm.asm`](ata_asm.asm) |
 | Floppy disk (+ DMA) | [`floppy.c`](floppy.c), [`dma.c`](dma.c) |
-| PS/2 keyboard | [`keyboard.c`](keyboard.c), [`keyboard_asm.asm`](keyboard_asm.asm) |
+| PS/2 keyboard (IRQ-driven, ring-buffered) | [`keyboard.c`](keyboard.c), [`keyboard_asm.asm`](keyboard_asm.asm) |
 | PS/2 mouse | [`mouse.c`](mouse.c), [`mouse_asm.asm`](mouse_asm.asm) |
 | PCI bus | [`pci.c`](pci.c) |
 | AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sound.c`](sound.c) |
@@ -77,13 +77,40 @@ Current version: **0.0.0** (see [`ver.h`](ver.h)).
 
 ### Userspace
 * Minimal C library in [`lib/`](lib) (`stdio`, `stdlib`, `string`, `unistd`,
-  `system_calls`); headers in [`include/lib/`](include/lib).
-* Example programs in [`apps/`](apps):
-  * [`apps/hello`](apps/hello) — minimal program
-  * [`apps/01`](apps/01) — test program
+  `system_calls`); headers in [`include/lib/`](include/lib). Programs are
+  built position-dependent (`-fno-pic -fno-pie`): the `int 0x72` ABI passes the
+  first argument in `%ebx`, which PIC code reserves for the GOT.
+* Per-process user heap ([`heap.c`](heap.c)) backing the `malloc`/`free`
+  syscalls; a first-fit free list over 4 pages.
+* Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
+  its own linker script and no crt0 (entry point is `main`):
+  * [`apps/hello`](apps/hello) — prints a line via the `printf` syscall and
+    returns
+  * [`apps/01`](apps/01) — returns immediately (`tst` on the floppy)
   * [`apps/example`](apps/example) — interactive `scanf`/`malloc` demo
-* Kernel shell ([`commands.c`](commands.c)) commands:
-  `help`, `mem`, `ps`, `ls`, `cd`, `start <prog> [args]`, `read <file>`, `beep`.
+
+### Console shell
+The kernel debug console ([`commands.c`](commands.c), `kmain_console`) runs as
+the scheduler's first process. It reads keystrokes from the ring-buffered
+keyboard driver, echoes them, supports backspace, and executes a line on Enter.
+
+| Command | Effect |
+| --- | --- |
+| `help` | list commands |
+| `mem` | physical memory, kernel heap and `cr0/cr2/cr3` |
+| `ps` | process table |
+| `ls` | list the working directory (device list at the root) |
+| `cd [dir]` | change working directory; no argument resets to the root |
+| `start <prog> [args]` | load an ELF, run it in ring 3, block until it exits, then reap it |
+| `read <file>` | print a file |
+| `beep` | play a tone through the AC97 codec |
+
+Paths are resolved against the working directory. When none is set, a bare name
+resolves against `/fda` (the first floppy), so `start hello` runs
+`/fda/hello` and `read mouse.bmp` opens `/fda/mouse.bmp`. Devices are named
+`fd{a,b}` for the floppies and `hd{a,b,…}` for IDE disks; currently only the
+floppy is mounted at boot (`floppy_init()` — `ata_init()` is not wired into
+startup yet).
 
 ## Layout
 
@@ -144,6 +171,14 @@ QEMU is launched with 256 MB RAM, `-vga std`, the floppy + IDE hard disk +
 CD-ROM images, AC97 / SB16 / PC-speaker audio, an `isa-debug-exit` device (the
 kernel uses it to exit QEMU with a status code), and KVM acceleration.
 
+Once the `>` prompt appears, try:
+
+```
+start hello
+```
+
+It loads `/fda/hello`, which prints `Hello from userspace!` and exits 0.
+
 ### Other targets
 
 ```bash
@@ -159,4 +194,8 @@ make clean        # remove build artifacts
 UART/log → parse multiboot → physical MM (e820) → VMM → kernel heap →
 VGA or VBE → GDT → IDT → FPU → PIC → PIT (1 kHz) → VFS → floppy detect →
 keyboard → mouse → UART RX IRQ → sound → syscalls → TSS → RTC → PCI probe →
-scheduler → interactive shell (`kmain_console`).
+scheduler.
+
+`sched_init()` does not return: it `iret`s into the scheduler's first process
+(`main_proc` in [`sched.c`](sched.c)), which starts the framebuffer redraw
+thread and then runs the interactive console (`kmain_console`).
