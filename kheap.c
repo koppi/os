@@ -6,7 +6,12 @@
 extern uint32_t kernel_start;
 extern uint32_t kernel_end;
 
-#define HEAP_END 0x200000
+/*
+ * The kernel heap sits between the end of the kernel image and the top of the
+ * identity-mapped low 4 MB (pmm_init2() reserves 0..KERNEL_SPACE_END from the
+ * physical allocator, so nothing else hands these frames out).
+ */
+#define HEAP_END 0x400000
 
 heap_info_t heap_info;
 
@@ -14,12 +19,15 @@ heap_info_t heap_info;
  * Init the kernel heap memory
  */
 void kheap_init() {
-    heap_info.start = (vmm_addr_t *) &kernel_end;
-    heap_info.size = HEAP_END - (int) &kernel_end;
+    uint8_t *base = (uint8_t *) &kernel_end;
+    size_t total = HEAP_END - (uint32_t) &kernel_end;
+
+    heap_info.start = (vmm_addr_t *) base;
+    heap_info.size = total;
     heap_info.used = sizeof(heap_header_t);
-    heap_info.first_header = (heap_header_t *) heap_info.start;
+    heap_info.first_header = (heap_header_t *) base;
     heap_info.first_header->magic = HEAP_MAGIC;
-    heap_info.first_header->size = heap_info.size - heap_info.used;
+    heap_info.first_header->size = total - sizeof(heap_header_t);
     heap_info.first_header->is_free = 1;
     heap_info.first_header->next = 0;
 }
@@ -29,43 +37,59 @@ void *kmalloc(size_t len) {
 }
 
 void kfree(void *ptr) {
-    heap_header_t *head = ptr - sizeof(heap_header_t);
-    if((head->is_free == 0) && (head->magic == HEAP_MAGIC)) {
-        head->is_free = 1;
-        heap_info.used -= head->size;
-        
-        // Merge contiguous free sections
-        heap_header_t *app = head->next;
-        while((app != 0) && (app->is_free == 1)) {
-            head->size += app->size + sizeof(heap_header_t);
-            head->next = app->next;
-            
-            app = app->next;
-        }
+    if(!ptr)
+        return;
+
+    heap_header_t *head = (heap_header_t *) ((uint8_t *) ptr - sizeof(heap_header_t));
+    if((head->magic != HEAP_MAGIC) || head->is_free)
+        return;
+
+    head->is_free = 1;
+    heap_info.used -= head->size;
+
+    // Merge contiguous free sections that follow this one.
+    heap_header_t *app = head->next;
+    while((app != 0) && (app->magic == HEAP_MAGIC) && (app->is_free == 1)) {
+        head->size += app->size + sizeof(heap_header_t);
+        head->next = app->next;
+        heap_info.used -= sizeof(heap_header_t);
+        app = app->next;
     }
 }
 
 void *first_free(size_t len) {
-    heap_header_t *head = (heap_header_t *) heap_info.first_header;
-    
-    if(heap_info.used >= heap_info.size)
-        return 0;
-    
+    heap_header_t *head = heap_info.first_header;
+
+    len = (len + 3u) & ~((size_t) 3u);
+
     while(head != 0) {
-        if((head->size >= len) && (head->is_free == 1) && (head->magic == HEAP_MAGIC)) {
+        if(head->magic != HEAP_MAGIC) {
+            printf("\nkmalloc: heap corruption\n");
+            return 0;
+        }
+        if(head->is_free && head->size >= len) {
+            /* Split only if the tail can still hold a header plus a little
+             * payload; the old code used pointer arithmetic scaled by
+             * sizeof(heap_header_t), so the split header landed far outside
+             * the block and the free list marched off the end of the heap. */
+            if(head->size >= len + sizeof(heap_header_t) + 4) {
+                heap_header_t *split = (heap_header_t *)
+                    ((uint8_t *) head + sizeof(heap_header_t) + len);
+                split->magic = HEAP_MAGIC;
+                split->size = head->size - len - sizeof(heap_header_t);
+                split->is_free = 1;
+                split->next = head->next;
+                head->next = split;
+                head->size = len;
+                heap_info.used += sizeof(heap_header_t);
+            }
             head->is_free = 0;
-            heap_header_t *head2 = (heap_header_t *) head + len + sizeof(heap_header_t);
-            head2->size = head->size - len - sizeof(heap_header_t);
-            head2->magic = HEAP_MAGIC;
-            head2->is_free = 1;
-            head2->next = 0;
-            head->next = head2;
-            head->size = len;
-            heap_info.used += len + sizeof(heap_header_t);
-            return (void *) head + sizeof(heap_header_t);
+            heap_info.used += head->size;
+            return (uint8_t *) head + sizeof(heap_header_t);
         }
         head = head->next;
     }
+    printf("\nkmalloc: out of memory\n");
     return 0;
 }
 

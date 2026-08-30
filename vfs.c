@@ -5,10 +5,30 @@
 #include <fat.h>
 #include <device.h>
 #include <sched.h>
+#include <pit.h>
 #include <printf.h>
 #include <kheap.h>
 
 static filesystem *devs[MAX_DEVICES];
+
+/*
+ * The block drivers hand back a pointer to one shared sector buffer that the
+ * caller must consume before yielding, and fat.c keeps global FAT/scratch
+ * state — none of it is re-entrant. A filesystem operation therefore has to run
+ * to completion without the cooperative scheduler switching to another thread
+ * that also touches the filesystem (classically: the framebuffer thread
+ * loading the cursor bitmap while a process image is being read off the same
+ * disk). These bracket every VFS entry point that reaches a driver.
+ */
+static int fs_enter(void) {
+    int prev = get_sched_state();
+    sched_state(0);
+    return prev;
+}
+
+static void fs_leave(int prev) {
+    sched_state(prev);
+}
 
 void vfs_init() {
     for(int i = 0; i < MAX_DEVICES; i++)
@@ -27,66 +47,64 @@ void vfs_ls() {
 
 void vfs_ls_dir(char *dir) {
     int device = get_dev_id_by_name(dir);
-    if(device >= 0) {
-        if(devs[device])
-            return devs[device]->ls(dir + 1);
+    if(device >= 0 && devs[device]) {
+        int s = fs_enter();
+        devs[device]->ls(dir + 1);
+        fs_leave(s);
     }
 }
 
 int vfs_cd(char *name) {
     int device = get_dev_id_by_name(name);
-    if(device >= 0) {
-        if(devs[device]) {
-            char *p = strchr(name + 1, '/');
-            if(p) {
-                file f = devs[device]->cd(name + 1);
-                if(f.type == FS_DIR) {
-                    return 1;
-                } else {
-                    return 0;
-                }
-            }
-            return 1;
+    int ret = 0;
+    if(device >= 0 && devs[device]) {
+        if(strchr(name + 1, '/')) {
+            int s = fs_enter();
+            file f = devs[device]->cd(name + 1);
+            fs_leave(s);
+            ret = (f.type == FS_DIR);
+        } else {
+            ret = 1;
         }
     }
-    return 0;
+    return ret;
 }
 
 int vfs_touch(char *name) {
     int device = get_dev_id_by_name(name);
-    if(device >= 0) {
-        if(devs[device]) {
-            return devs[device]->touch(name + 1);
-        }
+    int ret = 0;
+    if(device >= 0 && devs[device]) {
+        int s = fs_enter();
+        ret = devs[device]->touch(name + 1);
+        fs_leave(s);
     }
-    return 0;
+    return ret;
 }
 
 int vfs_delete(char *name) {
     int device = get_dev_id_by_name(name);
-    if(device >= 0) {
-        if(devs[device]) {
-            return devs[device]->delete(name + 1);
-        }
+    int ret = 0;
+    if(device >= 0 && devs[device]) {
+        int s = fs_enter();
+        ret = devs[device]->delete(name + 1);
+        fs_leave(s);
     }
-    return 0;
+    return ret;
 }
 
 file *vfs_file_open(char *name, char *mode) {
     int device = get_dev_id_by_name(name);
     file *f = kmalloc(sizeof(file));
-    if(device >= 0) {
-        if(devs[device]) {
-            *f = devs[device]->open(name + 1);
-            if(f->type == FS_FILE) {
-                if(strcmp(mode, "w") == 0) {
-                    f->len = 0;
-                }
-                return f;
-            }
+    f->type = FS_NULL;
+    f->dev = 0;   // keep vfs_file_close() in-bounds if the open fails
+    if(device >= 0 && devs[device]) {
+        int s = fs_enter();
+        *f = devs[device]->open(name + 1);
+        fs_leave(s);
+        if(f->type == FS_FILE && strcmp(mode, "w") == 0) {
+            f->len = 0;
         }
     }
-    f->type = FS_NULL;
     return f;
 }
 
@@ -96,7 +114,9 @@ file *vfs_file_open_user(char *name, char *mode) {
         file *f = (file *) umalloc(sizeof(file), (vmm_addr_t *) cur->thread_list->heap);
         int device = get_dev_id_by_name(name);
         if(device >= 0 && devs[device]) {
+            int s = fs_enter();
             file fil = devs[device]->open(name + 1);
+            fs_leave(s);
             memcpy(f, &fil, sizeof(file));
             if(f->type == FS_FILE) {
                 if(strcmp(mode, "w") == 0) {
@@ -110,18 +130,19 @@ file *vfs_file_open_user(char *name, char *mode) {
 }
 
 void vfs_file_read(file *f, char *str) {
-    if (f) {
-        if(devs[f->dev]) {
-            devs[f->dev]->read(f, str);
-        }
+    if(f && devs[f->dev]) {
+        int s = fs_enter();
+        devs[f->dev]->read(f, str);
+        fs_leave(s);
     }
 }
 
 void vfs_file_write(file *f, char *str) {
-    if(f) {
-        if(devs[f->dev])
-            devs[f->dev]->write(f, str);
-    } 
+    if(f && devs[f->dev]) {
+        int s = fs_enter();
+        devs[f->dev]->write(f, str);
+        fs_leave(s);
+    }
 }
 
 void vfs_file_close(file *f) {

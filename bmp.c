@@ -9,39 +9,49 @@ bmp_image_t* bmp_image_from_file(char* filename) {
     struct bmp_image hdr;
     bmp_image_t* bmp;
 
-    file* fd = vfs_file_open(filename,"r");
+    file* fd = vfs_file_open(filename, "r");
+    if(fd->type != FS_FILE) {
+        printf("bmp_image_from_file(): %s not found\n", filename);
+        return NULL;
+    }
 
     vfs_file_read(fd, buff);
+    vfs_file_close(fd);
 
     memcpy(&hdr, buff, sizeof(struct bmp_image));
 
-    bmp = (bmp_image_t*)kmalloc(hdr.total_size);
-
-    if( bmp == NULL ) {
-      printf("bmp_image_from_file(): out of memory\n");
-      return NULL;
+    if(hdr.signature != 0x4D42 || hdr.total_size < hdr.offset ||
+       hdr.total_size > (1u << 20)) {
+        printf("bmp_image_from_file(): %s is not a usable BMP\n", filename);
+        return NULL;
     }
-    vfs_file_close(fd);
-    
-    fd = vfs_file_open(filename,"r");
-    //XXX
-    int j = 0;
-    while(fd->eof != 1) {
+
+    bmp = (bmp_image_t*)kmalloc(hdr.total_size);
+    if(bmp == NULL) {
+        printf("bmp_image_from_file(): out of memory\n");
+        return NULL;
+    }
+
+    // Copy the whole file in, clamping the final sector to the allocation.
+    fd = vfs_file_open(filename, "r");
+    uint32_t j = 0;
+    while(fd->eof != 1 && j < hdr.total_size) {
         char buf[512];
         vfs_file_read(fd, buf);
-        memcpy((uint8_t*)((uint32_t)bmp + j), buf, 512);
+        uint32_t n = hdr.total_size - j;
+        if(n > 512)
+            n = 512;
+        memcpy((uint8_t*)((uint32_t)bmp + j), buf, n);
         j += 512;
     }
+    vfs_file_close(fd);
 
     bmp->total_size = hdr.total_size;
-    bmp->data = (uint8_t*)((uint32_t)bmp + bmp->offset);
+    bmp->offset = hdr.offset;
     bmp->width = hdr.width;
     bmp->height = hdr.height;
     bmp->bpp = hdr.bpp;
-    bmp->offset = hdr.offset;
-
-    //printf("%s: %dkB %dx%dpx (%dbits), data @ +%d\n", filename, hdr.total_size,
-    //       hdr.width, hdr.height, hdr.bpp, hdr.offset);
+    bmp->data = (uint8_t*)((uint32_t)bmp + hdr.offset);
 
     return bmp;
 }
