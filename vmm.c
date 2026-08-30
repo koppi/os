@@ -100,12 +100,17 @@ int vmm_map(page_dir_t *pdir, vmm_addr_t virt, uint32_t flags) {
         printf("VMM: Failed allocating memory %x\n", phys);
         return 0;
     }
-    
+
     // If the page table is not present, create it
     if(!pdir[virt >> 22]) {
         if(!vmm_create_page_table(pdir, virt, flags)) {
             return 0;
         }
+    } else {
+        // A page-directory entry that already exists (e.g. cloned from the
+        // kernel directory) may lack permission bits this mapping needs -
+        // notably PAGE_USER. Widen it; PDE and PTE bits are ANDed by the CPU.
+        pdir[virt >> 22] |= (flags & (PAGE_PRESENT | PAGE_RW | PAGE_USER));
     }
     // Map the address to the page table
     // Use the virtual address to get the index in the page directory and keep only the first 12 bits
@@ -123,6 +128,10 @@ int vmm_map_phys(page_dir_t *pdir, vmm_addr_t virt, mm_addr_t phys, uint32_t fla
         if(!vmm_create_page_table(pdir, virt, flags)) {
             return 0;
         }
+    } else {
+        // Widen an existing PDE (e.g. one cloned from the kernel directory,
+        // which has no PAGE_USER) to carry the bits this mapping needs.
+        pdir[virt >> 22] |= (flags & (PAGE_PRESENT | PAGE_RW | PAGE_USER));
     }
     // Map the address to the page table
     // Use the virtual address to get the index in the page directory and keep only the first 12 bits
