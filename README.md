@@ -39,13 +39,28 @@ Current version: **0.0.0** (see [`ver.h`](ver.h)).
 
 ### Filesystems
 * Virtual filesystem layer — [`vfs.c`](vfs.c)
-* **FAT** (FAT12/16) driver — [`fat.c`](fat.c)
+* **FAT** (FAT12/16) driver — [`fat.c`](fat.c). Reads the layout from the BPB
+  (reserved sectors, FAT count/size, root-dir size), so it is not tied to
+  1.44M floppy geometry — but it still assumes one sector per cluster.
 * ELF loading helpers — [`elf.c`](elf.c)
+
+### Storage & block devices
+`main_proc` ([`sched.c`](sched.c)) probes both channels at boot:
+* **Floppy** — [`floppy.c`](floppy.c) + [`dma.c`](dma.c), mounted as `fda`
+  (and `fdb` if present).
+* **IDE / ATA hard disks** — [`ata.c`](ata.c), each detected drive mounted as
+  `hda`, `hdb`, …
+
+Any drive that carries a FAT volume is mounted automatically. Programs and
+files are loaded from whichever device the path names — `start hda/hello`,
+`read fda/mouse.bmp`, `cd hda` — so the OS runs equally from the floppy or the
+hard disk. The QEMU setup attaches `floppy.img` (floppy A), `hda.img`
+(primary master) and `os.iso` (the boot CD).
 
 ### Drivers
 | Area | Files |
 | --- | --- |
-| ATA / IDE disk | [`ata.c`](ata.c), [`ata_asm.asm`](ata_asm.asm) |
+| ATA / IDE disk (PIO, probed at boot) | [`ata.c`](ata.c), [`ata_asm.asm`](ata_asm.asm) |
 | Floppy disk (+ DMA) | [`floppy.c`](floppy.c), [`dma.c`](dma.c) |
 | PS/2 keyboard (IRQ-driven, ring-buffered) | [`keyboard.c`](keyboard.c), [`keyboard_asm.asm`](keyboard_asm.asm) |
 | PS/2 mouse | [`mouse.c`](mouse.c), [`mouse_asm.asm`](mouse_asm.asm) |
@@ -83,10 +98,11 @@ Current version: **0.0.0** (see [`ver.h`](ver.h)).
 * Per-process user heap ([`heap.c`](heap.c)) backing the `malloc`/`free`
   syscalls; a first-fit free list over 4 pages.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
-  its own linker script and no crt0 (entry point is `main`):
+  its own linker script and no crt0 (entry point is `main`). They are copied
+  onto both disk images as `hello` and `tst`:
   * [`apps/hello`](apps/hello) — prints a line via the `printf` syscall and
     returns
-  * [`apps/01`](apps/01) — returns immediately (`tst` on the floppy)
+  * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — interactive `scanf`/`malloc` demo
 
 ### Console shell
@@ -105,12 +121,11 @@ keyboard driver, echoes them, supports backspace, and executes a line on Enter.
 | `read <file>` | print a file |
 | `beep` | play a tone through the AC97 codec |
 
-Paths are resolved against the working directory. When none is set, a bare name
-resolves against `/fda` (the first floppy), so `start hello` runs
-`/fda/hello` and `read mouse.bmp` opens `/fda/mouse.bmp`. Devices are named
-`fd{a,b}` for the floppies and `hd{a,b,…}` for IDE disks; `main_proc` probes
-both at boot (`floppy_init()` / `ata_init()`) and any drive holding a FAT
-volume is mounted — e.g. `cd hda` / `ls` / `read hda/file`.
+Paths are resolved against the working directory. A name that contains `/` is
+taken as device-qualified (`start hda/hello`); a bare name resolves against the
+working directory, or against `/fda` when none is set — so `start hello` runs
+`/fda/hello` and `read mouse.bmp` opens `/fda/mouse.bmp`. See
+**Storage & block devices** for the device names.
 
 ## Layout
 
@@ -177,10 +192,15 @@ kernel uses it to exit QEMU with a status code), and KVM acceleration.
 Once the `>` prompt appears, try:
 
 ```
+ls
 start hello
+cd hda
+start tst
 ```
 
-It loads `/fda/hello`, which prints `Hello from userspace!` and exits 0.
+`start hello` loads `/fda/hello` (prints `Hello from userspace!`, exits 0);
+after `cd hda`, `start tst` loads and runs `/hda/tst` straight off the hard
+disk. Programs can be run back to back in one session.
 
 ### Other targets
 
