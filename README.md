@@ -290,9 +290,10 @@ FAT volume with the compiled apps copied in.
 ./hda.sh       # 5M FAT hard-disk image
 ```
 
-Both scripts use mtools (no root / loop device) and stage `hello`, `tst` and
-`example`. The in-kernel FAT driver only handles one sector per cluster, so the
-images are made with `mkfs.fat -C … 1440` / `mkfs.fat -s 1`.
+Both scripts use mtools (no root / loop device) and stage `hello`, `tst`,
+`example` and the `mouse.bmp` cursor bitmap. The in-kernel FAT driver only
+handles one sector per cluster, so the images are made with
+`mkfs.fat -C … 1440` / `mkfs.fat -s 1`.
 
 ### Run in QEMU
 

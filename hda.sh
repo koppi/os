@@ -11,5 +11,6 @@ qemu-img create -f raw "$IMG" 5M
 mcopy -i "$IMG" -D o apps/hello/hello     ::hello
 mcopy -i "$IMG" -D o apps/01/01           ::tst
 mcopy -i "$IMG" -D o apps/example/example ::example
+mcopy -i "$IMG" -D o mouse.bmp            ::mouse.bmp
 
 mdir -i "$IMG" ::/

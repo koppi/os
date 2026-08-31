@@ -62,24 +62,33 @@ void paint_mouse() {
     }
 }
 
-/** @brief Draw the mouse cursor, loading /fda/mouse.bmp once and caching it. */
+/**
+ * @brief Draw the mouse cursor, loading mouse.bmp once and caching it.
+ *
+ * The bitmap is staged on both disk images (see floppy.sh / hda.sh); try the
+ * floppy first, then the hard disk. If neither is mounted the cursor is simply
+ * not drawn — the load is attempted exactly once so a missing file cannot spam
+ * the console every frame.
+ */
 void paint_mouse2() {
-    static bmp_image_t* mouse_cursor;
+    static bmp_image_t *mouse_cursor;
+    static int tried;
+
+    if (!mouse_cursor && !tried) {
+        tried = 1;
+        mouse_cursor = bmp_image_from_file("/fda/mouse.bmp");
+        if (!mouse_cursor)
+            mouse_cursor = bmp_image_from_file("/hda/mouse.bmp");
+    }
+    if (!mouse_cursor)
+        return;
 
     int mouse_x = get_mouse_info()->x;
     int mouse_y = get_mouse_info()->y;
 
-    if (!mouse_cursor)
-        mouse_cursor = bmp_image_from_file("/fda/mouse.bmp");
-
-    //printf("paint_mouse: %dkB %dx%dpx (%dbits), data @ +%d\n", mouse_cursor->total_size,
-    //       mouse_cursor->width, mouse_cursor->height, mouse_cursor->bpp, mouse_cursor->offset);
-    
     draw_data_with_alfa((uint32_t *) mouse_cursor->data,
                         mouse_cursor->width, mouse_cursor->height,
                         mouse_x, mouse_y);
-
-    //kfree(mouse_cursor);
 }
 
 mu_Context ctx;
