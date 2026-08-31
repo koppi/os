@@ -10,6 +10,7 @@
 #include <net.h>
 #include <dhcp.h>
 #include <icmp.h>
+#include <ntp.h>
 #include <tcp.h>
 #include <e1000.h>
 
@@ -394,6 +395,7 @@ void net_thread(void) {
     maxrand((uint32_t)rdtsc() ^ (my_mac[4] << 8) ^ my_mac[5], 0xFFFF);
 
     dhcp_start();
+    int ntp_left = 3;                    /* boot-time RTC sync attempts */
     while (1) {
         if (net_task) {
             net_task_rc = net_task();
@@ -402,6 +404,14 @@ void net_thread(void) {
         }
         net_poll();
         dhcp_tick();
+
+        if (ntp_left && net_is_up()) {
+            if (ntp_sync() == 0)
+                ntp_left = 0;
+            else if (--ntp_left == 0)
+                klogf(LOG_WARNING, "ntp: giving up, RTC left unsynced\n");
+        }
+
         sleep(50);
     }
 }

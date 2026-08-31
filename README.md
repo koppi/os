@@ -133,8 +133,8 @@ an 8-entry **ARP** cache (replies to who-has for our address, resolves next
 hops), **IPv4** (20-byte header, checksum, on-link vs. gateway routing) and
 **UDP** (checksum omitted, a tiny port→handler table). No fragmentation, no
 options. Everything runs on the `net` kernel thread, so there is no locking; the
-console's `ping` / `dns` / `http` commands submit their work to it with
-`net_exec()` and block until it finishes.
+console's `ping` / `dns` / `http` / `ntpdate` commands submit their work to it
+with `net_exec()` and block until it finishes.
 
 * **DHCP** ([`dhcp.c`](dhcp.c)): on boot the `net` thread runs
   `DISCOVER → OFFER → REQUEST → ACK` against QEMU's SLIRP server and the machine
@@ -146,6 +146,11 @@ console's `ping` / `dns` / `http` commands submit their work to it with
 * **DNS** ([`dns.c`](dns.c)): a single-query A-record resolver over UDP to the
   DHCP-supplied server, honouring name compression. `dns <name>` prints the
   addresses; `ping` / `http` resolve names through it.
+* **NTP** ([`ntp.c`](ntp.c)): once DHCP has a lease the `net` thread does a
+  one-shot SNTP query (resolving `pool.ntp.org`, falling back to a fixed
+  address) and writes the answer to the CMOS clock — `ntp: RTC set to
+  Mon 2026-08-31 15:46:49 UTC`. The RTC is treated as UTC from then on;
+  `ntpdate` re-syncs on demand and `date` prints it.
 * **TCP** ([`tcp.c`](tcp.c)): minimal client — active open, stop-and-wait send,
   in-order receive, MSS option, a 1 s retransmit timer, up to four connections.
   No listen/accept, no congestion control. `http <host> [path]` (or
@@ -171,13 +176,14 @@ for anything more (there is no TLS or resolver cache).
 | Intel 82540EM gigabit NIC ("e1000", polled) | [`e1000.c`](e1000.c) |
 | IPv4 stack (Ethernet, ARP, IPv4, UDP, ICMP) | [`net.c`](net.c), [`icmp.c`](icmp.c) |
 | DHCP client / DNS resolver | [`dhcp.c`](dhcp.c), [`dns.c`](dns.c) |
+| SNTP client (sets the RTC at boot) | [`ntp.c`](ntp.c) |
 | Minimal client TCP | [`tcp.c`](tcp.c) |
 | QEMU / Bochs standard VGA (DISPI mode control) | [`pci_vga.c`](pci_vga.c) |
 | AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sound.c`](sound.c) |
 | PC speaker | [`pcspk.c`](pcspk.c) |
 | VGA / VBE framebuffer | [`vga.c`](vga.c), [`video.c`](video.c), [`graphics.c`](graphics.c) |
 | PIT timer (1 kHz tick) | [`pit.c`](pit.c) |
-| RTC / CMOS clock | [`rtc.c`](rtc.c) |
+| RTC / CMOS clock (Unix-time conversion, NTP-settable) | [`rtc.c`](rtc.c) |
 | Serial UART (kernel console / log) | [`uart.c`](uart.c) |
 
 ### Graphics / UI
@@ -234,6 +240,8 @@ keyboard driver, echoes them, supports backspace, and executes a line on Enter.
 | `ping <host> [count]` | ICMP echo (resolves names via DNS) |
 | `dns <name>` | DNS A-record lookup |
 | `http <host> [path]` | HTTP/1.0 GET, prints the response |
+| `date` | print the wall clock as a Unix timestamp and a UTC string |
+| `ntpdate` | re-sync the RTC from an NTP server, then print it |
 | `poweroff` | power the machine off (ACPI S5) |
 | `reboot` | reset the machine (0xCF9) |
 
@@ -345,5 +353,5 @@ PCI (enumerate + bind drivers) → scheduler.
 block devices, mounts their FAT volumes, starts the framebuffer redraw thread,
 the USB thread (`usb_thread` — enumerate, then poll HID endpoints and hub
 ports) and, if an e1000 was found, the `net` thread (`net_thread` — run the
-DHCP client, then service the RX ring), and then runs the interactive console
-(`kmain_console`).
+DHCP client, sync the RTC over NTP, then service the RX ring), and then runs
+the interactive console (`kmain_console`).

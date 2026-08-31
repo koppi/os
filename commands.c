@@ -23,6 +23,8 @@
 #include <dns.h>
 #include <icmp.h>
 #include <tcp.h>
+#include <ntp.h>
+#include <rtc.h>
 #include <keyboard.h>
 #include <commands.h>
 
@@ -423,6 +425,31 @@ static void console_ping(char *cmd) {
     net_exec(do_ping);
 }
 
+static int do_ntpdate(void) {
+    return ntp_sync();
+}
+
+/**
+ * @brief Print the wall clock as a Unix timestamp plus a readable UTC string.
+ */
+static void console_date(void) {
+    uint32_t now = rtc_now_unix();
+    char buf[40];
+    printf("%u  %s\n", now, unix_to_str(now, buf, sizeof buf));
+}
+
+/**
+ * @brief Handle "ntpdate" — re-sync the RTC from an NTP server, then print it.
+ */
+static void console_ntpdate(void) {
+    if (!net_is_up()) {
+        printf("ntpdate: network is down\n");
+        return;
+    }
+    if (net_exec(do_ntpdate) == 0)
+        console_date();
+}
+
 /**
  * @brief Handle "dns <name>".
  */
@@ -471,8 +498,8 @@ static void console_http(char *cmd) {
  * @brief Parse and execute one console command line.
  *
  * Recognised commands: help, mem, ps, ls, cd, start, read, beep, pci, net,
- * ping, dns, http, poweroff, reboot. Unknown input produces a "not found"
- * message.
+ * ping, dns, http, date, ntpdate, poweroff, reboot. Unknown input produces a
+ * "not found" message.
  *
  * @param buf NUL-terminated command line (without the trailing newline).
  */
@@ -491,6 +518,8 @@ void console_exec(char *buf) {
                "ping     - ping <host> [count]\n"
                "dns      - dns <name> (DNS lookup)\n"
                "http     - http <host> [path] (HTTP/1.0 GET)\n"
+               "date     - print the wall clock as a Unix timestamp\n"
+               "ntpdate  - sync the RTC from an NTP server\n"
                "poweroff - powers the machine off (ACPI)\n"
                "reboot   - reboots the machine\n");
     } else if(strcmp(buf, "pci") == 0) {
@@ -503,6 +532,10 @@ void console_exec(char *buf) {
         console_dns(buf);
     } else if(strncmp(buf, "http", 4) == 0) {
         console_http(buf);
+    } else if(strcmp(buf, "date") == 0) {
+        console_date();
+    } else if(strcmp(buf, "ntpdate") == 0) {
+        console_ntpdate();
     } else if(strcmp(buf, "poweroff") == 0) {
         printf("Powering off.\n");
         exit_qemu(0);

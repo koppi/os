@@ -47,5 +47,22 @@ int get_weekday_from_date(datetime_t * dt);
 /** @return Non-zero if @p year is a leap year. */
 int is_leap_year(int year, int month);
 
+/**
+ * @brief Read the clock and return it as seconds since the Unix epoch.
+ *
+ * The CMOS registers are read as UTC (QEMU seeds them from the host with
+ * @c -rtc base=localtime, but @ref ntp_sync overwrites them with UTC).
+ */
+uint32_t rtc_now_unix(void);
+
+/** @brief Set the CMOS clock (and the cached datetime) from Unix time @p secs (UTC). */
+void rtc_set_unix(uint32_t secs);
+
+/**
+ * @brief Format Unix time @p secs as "Ddd YYYY-MM-DD HH:MM:SS UTC" into @p buf.
+ * @return @p buf.
+ */
+char *unix_to_str(uint32_t secs, char *buf, size_t n);
+
 /** @brief Enable the periodic RTC interrupt. */
 void rtc_init();

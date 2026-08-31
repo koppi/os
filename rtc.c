@@ -67,17 +67,101 @@ void rtc_read_datetime() {
 
 /*
  * Write a datetime struct to rtc
+ *
+ * Encodes each field to match the clock's current data mode (register B bit 2:
+ * clear = BCD, the QEMU default), so this is the exact inverse of
+ * rtc_read_datetime(). 24-hour mode is assumed.
  * */
+static uint8_t to_bcd(uint8_t v) {
+    return (uint8_t)(((v / 10) << 4) | (v % 10));
+}
+
 void rtc_write_datetime(datetime_t * dt) {
+    int bcd = !(get_rtc_register(0x0B) & 0x04);
+
+    uint8_t sec = dt->second, min = dt->minute, hr = dt->hour;
+    uint8_t day = dt->day, mon = dt->month, yr = dt->year;
+    if (bcd) {
+        sec = to_bcd(sec); min = to_bcd(min); hr  = to_bcd(hr);
+        day = to_bcd(day); mon = to_bcd(mon); yr  = to_bcd(yr);
+    }
+
     // Wait until rtc is not updating
     while(is_updating_rtc());
 
-    set_rtc_register(0x00, dt->second);
-    set_rtc_register(0x02, dt->minute);
-    set_rtc_register(0x04, dt->hour);
-    set_rtc_register(0x07, dt->day);
-    set_rtc_register(0x08, dt->month);
-    set_rtc_register(0x09, dt->year);
+    set_rtc_register(0x00, sec);
+    set_rtc_register(0x02, min);
+    set_rtc_register(0x04, hr);
+    set_rtc_register(0x07, day);
+    set_rtc_register(0x08, mon);
+    set_rtc_register(0x09, yr);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Unix time <-> calendar (Howard Hinnant's days-from-civil)          *
+ * ------------------------------------------------------------------ */
+/** @return Days from 1970-01-01 to @p y-@p m-@p d (@p m in 1..12). */
+static long days_from_civil(int y, int m, int d) {
+    y -= (m <= 2);
+    int era = (y >= 0 ? y : y - 399) / 400;
+    int yoe = y - era * 400;                                   /* [0, 399]    */
+    int doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1; /* [0, 365]    */
+    int doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;           /* [0, 146096] */
+    return (long)era * 146097 + doe - 719468;
+}
+
+/** @brief Split day number @p z (days since 1970-01-01) into @p yr / @p mo / @p dy. */
+static void civil_from_days(long z, int *yr, int *mo, int *dy) {
+    z += 719468;
+    long era = (z >= 0 ? z : z - 146096) / 146097;
+    int doe = (int)(z - era * 146097);                              /* [0, 146096] */
+    int yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;/* [0, 399]    */
+    int y = yoe + (int)era * 400;
+    int doy = doe - (365 * yoe + yoe / 4 - yoe / 100);              /* [0, 365]    */
+    int mp = (5 * doy + 2) / 153;                                   /* [0, 11]     */
+    *dy = doy - (153 * mp + 2) / 5 + 1;                             /* [1, 31]     */
+    *mo = mp < 10 ? mp + 3 : mp - 9;                                /* [1, 12]     */
+    *yr = y + (*mo <= 2);
+}
+
+uint32_t rtc_now_unix(void) {
+    rtc_read_datetime();
+    datetime_t *dt = &current_datetime;
+    long days = days_from_civil(2000 + dt->year, dt->month, dt->day);
+    return (uint32_t)(days * 86400L +
+                      dt->hour * 3600L + dt->minute * 60L + dt->second);
+}
+
+void rtc_set_unix(uint32_t secs) {
+    long     days = (long)(secs / 86400u);
+    uint32_t rem  = secs % 86400u;
+    int y, m, d;
+    civil_from_days(days, &y, &m, &d);
+
+    datetime_t dt;
+    dt.century = 21;
+    dt.year    = (uint8_t)(y - 2000);
+    dt.month   = (uint8_t)m;
+    dt.day     = (uint8_t)d;
+    dt.hour    = (uint8_t)(rem / 3600u);
+    dt.minute  = (uint8_t)((rem / 60u) % 60u);
+    dt.second  = (uint8_t)(rem % 60u);
+
+    rtc_write_datetime(&dt);
+    current_datetime = dt;
+}
+
+char *unix_to_str(uint32_t secs, char *buf, size_t n) {
+    /* 1970-01-01 was a Thursday, so day 0 indexes "Thu". */
+    static const char *dow[7] = { "Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed" };
+    long     days = (long)(secs / 86400u);
+    uint32_t rem  = secs % 86400u;
+    int y, m, d;
+    civil_from_days(days, &y, &m, &d);
+    snprintf(buf, n, "%s %04d-%02d-%02d %02d:%02d:%02d UTC",
+             dow[days % 7], y, m, d,
+             (int)(rem / 3600u), (int)((rem / 60u) % 60u), (int)(rem % 60u));
+    return buf;
 }
 
 /*
