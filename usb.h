@@ -20,6 +20,7 @@
 #define USB_TYPE_CLASS         0x20
 #define USB_RECIP_DEVICE       0x00
 #define USB_RECIP_INTERFACE    0x01
+#define USB_RECIP_OTHER        0x03  /**< A port on a hub. */
 ///@}
 
 /** @name Standard request codes (bRequest) */
@@ -46,6 +47,26 @@
 /** @name Class codes */
 ///@{
 #define USB_CLASS_HID       0x03
+#define USB_CLASS_HUB       0x09
+///@}
+
+/** @name Hub port feature selectors (SET_FEATURE / CLEAR_FEATURE wValue) */
+///@{
+#define HUB_PORT_CONNECTION    0
+#define HUB_PORT_ENABLE        1
+#define HUB_PORT_RESET         4
+#define HUB_PORT_POWER         8
+#define HUB_C_PORT_CONNECTION  16
+#define HUB_C_PORT_RESET       20
+///@}
+
+/** @name Hub port status bits (wPortStatus, low word of GET_STATUS) */
+///@{
+#define HUB_PS_CONNECTION   0x0001
+#define HUB_PS_ENABLE       0x0002
+#define HUB_PS_RESET        0x0010
+#define HUB_PS_POWER        0x0100
+#define HUB_PS_LOWSPEED     0x0200
 ///@}
 
 /** @name HID class requests */
@@ -154,6 +175,20 @@ int usb_set_address(usb_device_t *dev, uint8_t addr);
 
 /** @brief SET_CONFIGURATION helper. */
 int usb_set_configuration(usb_device_t *dev, uint8_t cfg);
+
+/**
+ * @brief Enumerate the single device currently in the default (address-0)
+ *        state: read descriptors, assign an address, select a configuration
+ *        and hand it to a class driver.
+ *
+ * The caller (a root port or a hub port) must have just completed a port reset
+ * so exactly one device on the bus answers at address 0.
+ *
+ * @param speed The device's link speed.
+ * @param depth Hub nesting depth (0 = on a root port); used as a recursion cap.
+ * @param where Short description for log lines, e.g. "root port 1".
+ */
+void usb_enumerate(usb_speed_t speed, int depth, const char *where);
 
 /**
  * @brief Probe the root ports, enumerate any attached device and offer its

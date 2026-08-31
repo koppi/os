@@ -49,7 +49,8 @@ QEMUFLAGS += -drive file=hda.img,format=raw,if=ide,index=0,media=disk
 QEMUFLAGS += -drive file=os.iso,if=ide,index=1,media=cdrom
 QEMUFLAGS += -display sdl
 QEMUFLAGS += -usb
-QEMUFLAGS += -device usb-kbd,port=1 -device usb-mouse,port=2
+QEMUFLAGS += -device usb-kbd,port=1
+QEMUFLAGS += -device usb-hub,port=2 -device usb-mouse,port=2.1
 
 all: lib apps $(KERNEL)
 

@@ -51,17 +51,25 @@ A small USB 1.1 stack, driven from a kernel thread (no USB interrupts):
   reset and started; its 1024-entry frame list, queue heads, transfer
   descriptors and data buffers are static and live in the identity-mapped low
   memory so `&x == phys(x)`.
-* **USB core** — [`usb.c`](usb.c). Synchronous EP0 control transfers, root-port
+* **USB core** — [`usb.c`](usb.c). Synchronous EP0 control transfers, port
   reset, and single-device-per-port enumeration (device descriptor →
-  `SET_ADDRESS` → configuration → `SET_CONFIGURATION`).
+  `SET_ADDRESS` → configuration → `SET_CONFIGURATION`). The same routine
+  enumerates devices on a root port and behind a hub.
+* **Hub driver** — [`usb_hub.c`](usb_hub.c). A device that enumerates as class 9
+  is handed here: it reads the hub descriptor, powers every downstream port, and
+  for each port with something connected drives a port reset and recursively
+  enumerates the device (up to three hubs deep). The topology is scanned once at
+  boot; the hub's status-change interrupt is not used, so hot-plug behind a hub
+  is not detected.
 * **HID boot driver** — [`usb_hid.c`](usb_hid.c). Forces the HID *boot*
   protocol (no report-descriptor parsing): a keyboard's fixed 8-byte report is
   translated from HID usage codes to ASCII and pushed into the same ring buffer
   the console reads, and a mouse's `[buttons, dx, dy]` report updates the shared
   pointer state — so real USB keyboards and mice work alongside the PS/2 ones.
 
-USB hubs are not supported yet, so attach devices to the two UHCI root ports
-directly (the QEMU flags do this with `port=1` / `port=2`).
+Devices may hang off either UHCI root port or a hub plugged into one; the QEMU
+flags exercise both (`usb-kbd` on root port 1, a `usb-hub` on root port 2 with a
+`usb-mouse` behind it).
 
 ### Storage & block devices
 `main_proc` ([`sched.c`](sched.c)) probes both channels at boot:
@@ -85,6 +93,7 @@ hard disk. The QEMU setup attaches `floppy.img` (floppy A), `hda.img`
 | PS/2 mouse | [`mouse.c`](mouse.c), [`mouse_asm.asm`](mouse_asm.asm) |
 | USB 1.1 host controller (UHCI, polled) | [`uhci.c`](uhci.c) |
 | USB core (enumeration, control/interrupt transfers) | [`usb.c`](usb.c) |
+| USB hub (recursive downstream-port enumeration) | [`usb_hub.c`](usb_hub.c) |
 | USB HID boot devices (keyboard, mouse) | [`usb_hid.c`](usb_hid.c) |
 | PCI bus | [`pci.c`](pci.c) |
 | AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sound.c`](sound.c) |
@@ -211,9 +220,9 @@ make qemu-kernel  # boot kernel.elf directly with -kernel
 
 QEMU is launched with 256 MB RAM, `-vga std`, the floppy + IDE hard disk +
 CD-ROM images, AC97 / SB16 / PC-speaker audio, a UHCI controller with a
-`usb-kbd` on root port 1 and a `usb-mouse` on root port 2, an `isa-debug-exit`
-device (the kernel uses it to exit QEMU with a status code), and KVM
-acceleration.
+`usb-kbd` on root port 1 and a `usb-hub` on root port 2 carrying a `usb-mouse`,
+an `isa-debug-exit` device (the kernel uses it to exit QEMU with a status code),
+and KVM acceleration.
 
 Once the `>` prompt appears, try:
 

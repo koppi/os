@@ -10,11 +10,13 @@
 #include <usb.h>
 #include <uhci.h>
 #include <usb_hid.h>
+#include <usb_hub.h>
 #include <log.h>
 #include <lib/string.h>
 #include <io.h>
 
-#define MAX_DEVICES 4
+#define MAX_DEVICES 8
+#define MAX_HUB_DEPTH 3
 
 static usb_device_t devices[MAX_DEVICES];
 static uint8_t next_address = 1;
@@ -89,14 +91,9 @@ static void parse_config(usb_device_t *dev, uint8_t *cfg, int total) {
     }
 }
 
-/** @brief Bring up whatever is attached to root @p port. */
-static void enumerate_port(int port) {
-    usb_speed_t speed;
-    if(!uhci_port_reset(port, &speed))
-        return;
-
-    klogf(LOG_INFO, "USB: port %d: device attached (%s speed)\n",
-          port + 1, speed == USB_SPEED_LOW ? "low" : "full");
+void usb_enumerate(usb_speed_t speed, int depth, const char *where) {
+    klogf(LOG_INFO, "USB: %s: device attached (%s speed)\n",
+          where, speed == USB_SPEED_LOW ? "low" : "full");
 
     /* Address 0, minimum EP0 packet size until we know better. */
     usb_device_t probe = { .address = 0, .speed = speed, .max_packet0 = 8 };
@@ -104,7 +101,7 @@ static void enumerate_port(int port) {
     usb_device_desc_t dd;
     memset(&dd, 0, sizeof(dd));
     if(usb_get_descriptor(&probe, USB_DT_DEVICE, 0, &dd, 8) < 8) {
-        klogf(LOG_ERR, "USB: port %d: no response to GET_DESCRIPTOR\n", port + 1);
+        klogf(LOG_ERR, "USB: %s: no response to GET_DESCRIPTOR\n", where);
         return;
     }
     probe.max_packet0 = dd.bMaxPacketSize0 ? dd.bMaxPacketSize0 : 8;
@@ -118,7 +115,7 @@ static void enumerate_port(int port) {
 
     uint8_t addr = next_address++;
     if(usb_set_address(dev, addr) < 0) {
-        klogf(LOG_ERR, "USB: SET_ADDRESS failed on port %d\n", port + 1);
+        klogf(LOG_ERR, "USB: SET_ADDRESS failed for %s\n", where);
         dev->in_use = 0;
         return;
     }
@@ -155,7 +152,26 @@ static void enumerate_port(int port) {
         return;
     }
 
+    if(dd.bDeviceClass == USB_CLASS_HUB) {
+        if(depth < MAX_HUB_DEPTH)
+            usb_hub_init(dev, depth);
+        else
+            klogf(LOG_ERR, "USB: hub nesting too deep, ignoring\n");
+        return;
+    }
+
     parse_config(dev, cfgbuf, total);
+}
+
+/** @brief Reset root @p port and, if a device is present, enumerate it. */
+static void enumerate_root_port(int port) {
+    usb_speed_t speed;
+    if(!uhci_port_reset(port, &speed))
+        return;
+
+    char where[16] = "root port 0";
+    where[10] = (char)('1' + port);
+    usb_enumerate(speed, 0, where);
 }
 
 /* --- tiny device-table helpers (kept out of the header) --- */
@@ -184,7 +200,7 @@ void usb_init(void) {
     if(!uhci_init())
         return;
     for(int p = 0; p < uhci_port_count(); p++)
-        enumerate_port(p);
+        enumerate_root_port(p);
 }
 
 void usb_poll(void) {

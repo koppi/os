@@ -2,12 +2,12 @@
  * @file uhci.c
  * @brief Intel UHCI (USB 1.1) host-controller driver.
  *
- * Schedule layout: every entry of the 1024-slot frame list points at one queue
- * head, @c qh_int[0], which is head-linked to @c qh_int[1] then @c qh_ctrl then
- * a terminating entry. Control transfers run by pointing @c qh_ctrl's element
- * link at a chain of transfer descriptors and polling until it retires;
- * interrupt endpoints get one of the two @c qh_int slots and a single
- * persistent TD that is re-armed after each poll.
+ * Schedule layout: every entry of the 1024-slot frame list points at the first
+ * of @c NUM_INT_SLOTS interrupt queue heads, head-linked in turn to the control
+ * queue head and a terminating entry. Control transfers run by pointing the
+ * control QH's element link at a chain of transfer descriptors and polling
+ * until it retires; each claimed interrupt endpoint gets one @c qh_int slot and
+ * a single persistent TD that is re-armed after each poll.
  *
  * All descriptors and buffers are 16-byte-aligned statics in .bss, which is
  * identity-mapped, so &x can be handed to the controller as a physical address.
@@ -61,7 +61,7 @@ typedef struct __attribute__((aligned(16))) {
  *  Static schedule / buffers                                          *
  * ------------------------------------------------------------------ */
 
-#define NUM_INT_SLOTS 2
+#define NUM_INT_SLOTS 4
 
 static volatile uint32_t frame_list[1024] __attribute__((aligned(4096))); /**< The 1024-entry frame list. */
 static uhci_qh_t qh_int[NUM_INT_SLOTS];  /**< Periodic (interrupt) queue heads. */
@@ -173,12 +173,14 @@ int uhci_init(void) {
     wr16(UHCI_FRNUM, 0);
     outportb(io_base + UHCI_SOFMOD, 64);
 
-    /* Build the skeleton: qh_int[0] -> qh_int[1] -> qh_ctrl -> terminate. */
+    /* Skeleton: qh_int[0] -> qh_int[1] -> ... -> qh_ctrl -> terminate. */
     memset((void *)qh_int, 0, sizeof(qh_int));
-    qh_int[0].head = (uint32_t)&qh_int[1] | TD_Q;
-    qh_int[0].element = TD_T;
-    qh_int[1].head = (uint32_t)&qh_ctrl | TD_Q;
-    qh_int[1].element = TD_T;
+    for(int i = 0; i < NUM_INT_SLOTS; i++) {
+        qh_int[i].head = (i + 1 < NUM_INT_SLOTS)
+            ? ((uint32_t)&qh_int[i + 1] | TD_Q)
+            : ((uint32_t)&qh_ctrl | TD_Q);
+        qh_int[i].element = TD_T;
+    }
     qh_ctrl.head = TD_T;
     qh_ctrl.element = TD_T;
 
