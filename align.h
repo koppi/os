@@ -1,3 +1,7 @@
+/**
+ * @file align.h
+ * @brief Power-of-two alignment helper macros.
+ */
 #pragma once
 
 /** Align to the nearest lower address.

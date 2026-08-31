@@ -1,3 +1,8 @@
+/**
+ * @file log.h
+ * @brief Kernel logging macro. @ref klogf prints "file:line [PRIO] " then the
+ *        formatted message; severities follow RFC 5424.
+ */
 #pragma once
 
 #include <printf.h>
@@ -26,6 +31,13 @@
 #define LOG_INFO	6
 #define LOG_DEBUG	7
 
+/**
+ * @brief Log a printf-style message tagged with source location and severity.
+ * @param prio One of the @c LOG_* levels (the "LOG_" prefix is stripped for
+ *             display).
+ * @param str  printf format string.
+ * @param ...  Format arguments.
+ */
 #define klogf(prio, str, ...) \
 do { \
 	printf("%s:%d [%s] ", __FILE__, __LINE__, #prio + 4); \

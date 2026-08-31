@@ -1,9 +1,15 @@
+/**
+ * @file bmp.c
+ * @brief Minimal BMP loader — reads the header, validates it, and copies the
+ *        whole file into a kmalloc'd buffer with @c data pointing at the pixels.
+ */
 #include <bmp.h>
 #include <vfs.h>
 #include <kheap.h>
 #include <printf.h>
 #include <lib/string.h>
 
+/** @brief Load @p filename via the VFS. @return The image, or NULL on error. */
 bmp_image_t* bmp_image_from_file(char* filename) {
     char buff[512];
     struct bmp_image hdr;

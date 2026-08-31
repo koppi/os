@@ -1,8 +1,12 @@
+/**
+ * @file commands.h
+ * @brief The kernel debug shell — command dispatch and the input loop.
+ */
 #pragma once
 
-/** Parse and execute a single console command line. */
+/** @brief Parse and execute a single console command line. */
 void console_exec(char *buf);
 
-/** Interactive read-eval-print loop for the kernel debug console. Never returns. */
+/** @brief Interactive read-eval-print loop for the debug console; never returns. */
 void kmain_console(void);
 

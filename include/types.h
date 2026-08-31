@@ -1,3 +1,8 @@
+/**
+ * @file types.h
+ * @brief Freestanding fixed-width integer types, @c size_t / @c NULL, a
+ *        real-mode register frame and the varargs macros.
+ */
 #pragma once
 
 #include <stdint.h>

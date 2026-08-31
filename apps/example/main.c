@@ -1,7 +1,13 @@
+/**
+ * @file apps/example/main.c
+ * @brief Interactive demo: reads a number, a character and a string with
+ *        `scanf` (the gets syscall) and echoes each back.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
+/** @brief Prompt for and echo an int, a char and a string; return 0. */
 int main() {
     int n = 0;
     printf("Inserisci un numero: ");
