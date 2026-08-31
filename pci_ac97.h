@@ -6,6 +6,10 @@
 
 #include <stdint.h>
 
+struct pci_device;
+
+/** @brief PCI probe entry: bring up the AC'97 codec found during enumeration. */
+void ac97_probe(struct pci_device *d);
 /** @brief Find the AC'97 device on the PCI bus and program its BARs. */
 void ac97_init(void);
 /** @return Non-zero if an AC'97 codec was found by @ref ac97_init. */

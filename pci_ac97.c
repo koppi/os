@@ -122,3 +122,9 @@ void ac97_play_buffer(uint8_t* buf, uint32_t len) {
 
 int ac97_present(void) { return ac97_found; }
 uint32_t ac97_get_base(void) { return ac97_base_addr; }
+
+/** PCI enumeration entry point; ac97_init() re-locates the codec itself. */
+void ac97_probe(pci_device_t *d) {
+    (void)d;
+    ac97_init();
+}

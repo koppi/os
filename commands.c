@@ -13,7 +13,11 @@
 #include <printf.h>
 #include <sched.h>
 #include <vfs.h>
+#include <io.h>
+#include <pci.h>
+#include <pci_acpi.h>
 #include <pci_ac97.h>
+#include <e1000.h>
 #include <keyboard.h>
 #include <commands.h>
 
@@ -249,23 +253,60 @@ static void console_beep(void) {
 }
 
 /**
+ * @brief Print the enumerated PCI device table ("pci").
+ */
+static void console_pci(void) {
+    pci_dump();
+}
+
+/**
+ * @brief Print the network interface's MAC, link state and frame counters ("net").
+ */
+static void console_net(void) {
+    if(!e1000_present()) {
+        printf("net: no network interface\n");
+        return;
+    }
+    uint8_t m[6];
+    e1000_mac(m);
+    printf("e1000: %02x:%02x:%02x:%02x:%02x:%02x  link %s  rx %u  tx %u\n",
+           m[0], m[1], m[2], m[3], m[4], m[5],
+           e1000_link_up() ? "up" : "down",
+           e1000_rx_count(), e1000_tx_count());
+}
+
+/**
  * @brief Parse and execute one console command line.
  *
- * Recognised commands: help, mem, ps, ls, cd, start, read, beep. Unknown input
- * produces a "not found" message.
+ * Recognised commands: help, mem, ps, ls, cd, start, read, beep, pci, net,
+ * poweroff, reboot. Unknown input produces a "not found" message.
  *
  * @param buf NUL-terminated command line (without the trailing newline).
  */
 void console_exec(char *buf) {
     if(strcmp(buf, "help") == 0) {
-        printf("help  - shows help\n"
-               "mem   - prints RAM info\n"
-               "ps    - prints process information\n"
-               "ls    - lists the current directory\n"
-               "cd    - changes directory\n"
-               "start - runs a program\n"
-               "read  - prints a file\n"
-               "beep  - plays a tone\n");
+        printf("help     - shows help\n"
+               "mem      - prints RAM info\n"
+               "ps       - prints process information\n"
+               "ls       - lists the current directory\n"
+               "cd       - changes directory\n"
+               "start    - runs a program\n"
+               "read     - prints a file\n"
+               "beep     - plays a tone\n"
+               "pci      - lists PCI devices\n"
+               "net      - network interface status\n"
+               "poweroff - powers the machine off (ACPI)\n"
+               "reboot   - reboots the machine\n");
+    } else if(strcmp(buf, "pci") == 0) {
+        console_pci();
+    } else if(strcmp(buf, "net") == 0) {
+        console_net();
+    } else if(strcmp(buf, "poweroff") == 0) {
+        printf("Powering off.\n");
+        exit_qemu(0);
+    } else if(strcmp(buf, "reboot") == 0) {
+        printf("Rebooting.\n");
+        acpi_reboot();
     } else if(strcmp(buf, "mem") == 0) {
         print_meminfo();
     } else if(strcmp(buf, "ps") == 0) {

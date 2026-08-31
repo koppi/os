@@ -93,6 +93,42 @@ files are loaded from whichever device the path names — `start hda/hello`,
 hard disk. The QEMU setup attaches `floppy.img` (floppy A), `hda.img`
 (primary master) and `os.iso` (the boot CD).
 
+### PCI
+[`pci.c`](pci.c) walks every bus/slot/function once at boot into a device table
+(honouring the multifunction bit), names each one from a small class-code and
+vendor/device table ([`pci_ids.c`](pci_ids.c)), decodes its BARs and IRQ line,
+then hands each record to the first matching entry of a driver table. Every PCI
+function the QEMU `pc` machine exposes has a handler, so nothing logs as
+"unknown":
+
+| Device | Driver | What it does |
+| --- | --- | --- |
+| 82441FX host bridge | [`pci_piix.c`](pci_piix.c) | identify |
+| 82371SB PIIX3 ISA bridge | [`pci_piix.c`](pci_piix.c) | log PIRQ[A-D] routing + ELCR |
+| 82371SB PIIX3 IDE | [`pci_piix.c`](pci_piix.c) | enable I/O + bus master, log IDETIM (transfers stay in [`ata.c`](ata.c)) |
+| 82371SB PIIX3 USB (UHCI) | [`uhci.c`](uhci.c) | brought up later from the `usb` kernel thread |
+| 82371AB PIIX4 ACPI | [`pci_acpi.c`](pci_acpi.c) | latch the PM I/O base; back `poweroff` / `reboot` |
+| QEMU/Bochs standard VGA | [`pci_vga.c`](pci_vga.c) | record the framebuffer BAR, report the DISPI mode |
+| 82540EM gigabit Ethernet | [`e1000.c`](e1000.c) | full polled NIC — see below |
+| 82801AA AC'97 audio | [`pci_ac97.c`](pci_ac97.c) | codec bring-up + BDL playback |
+
+An unrecognised device (e.g. `-device rtl8139`) is still enumerated and named;
+it just logs "has no driver". `pci` at the console reprints the table.
+
+The **e1000** driver ([`e1000.c`](e1000.c)) maps the MMIO register BAR 1:1 into
+the kernel (it sits above the low-4 MiB identity map), resets the card, brings
+the link up, reads the MAC from the EEPROM and sets up static RX/TX descriptor
+rings in the identity-mapped `.bss`. A boot-time self-test transmits an ARP
+request and checks the descriptor-done writeback; the `net` kernel thread then
+polls the RX ring — under QEMU's user networking the gateway's ARP reply comes
+back, so `net` shows a live `rx`/`tx` count. There is no IP stack yet;
+`e1000_send()` / `e1000_rx_poll()` are the hooks for one.
+
+**ACPI power** ([`pci_acpi.c`](pci_acpi.c)): the PIIX4 PM register block has a
+fixed layout, so no AML is needed — `poweroff` enters S5 with a single word
+write to `PM1_CNT` (`exit_qemu(0)` uses this for a clean guest-initiated
+shutdown), and `reboot` pulses the 0xCF9 reset-control port.
+
 ### Drivers
 | Area | Files |
 | --- | --- |
@@ -104,7 +140,11 @@ hard disk. The QEMU setup attaches `floppy.img` (floppy A), `hda.img`
 | USB core (enumeration, control/interrupt transfers) | [`usb.c`](usb.c) |
 | USB hub (recursive enumeration + hot-plug polling) | [`usb_hub.c`](usb_hub.c) |
 | USB HID boot devices (keyboard, mouse) | [`usb_hid.c`](usb_hid.c) |
-| PCI bus | [`pci.c`](pci.c) |
+| PCI bus (enumeration, naming, driver binding) | [`pci.c`](pci.c), [`pci_ids.c`](pci_ids.c) |
+| i440FX / PIIX3 chipset (host bridge, ISA bridge, IDE) | [`pci_piix.c`](pci_piix.c) |
+| PIIX4 ACPI power management (poweroff / reboot) | [`pci_acpi.c`](pci_acpi.c) |
+| Intel 82540EM gigabit NIC ("e1000", polled) | [`e1000.c`](e1000.c) |
+| QEMU / Bochs standard VGA (DISPI mode control) | [`pci_vga.c`](pci_vga.c) |
 | AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sound.c`](sound.c) |
 | PC speaker | [`pcspk.c`](pcspk.c) |
 | VGA / VBE framebuffer | [`vga.c`](vga.c), [`video.c`](video.c), [`graphics.c`](graphics.c) |
@@ -161,6 +201,10 @@ keyboard driver, echoes them, supports backspace, and executes a line on Enter.
 | `start <prog> [args]` | load an ELF, run it in ring 3, block until it exits, then reap it |
 | `read <file>` | print a file |
 | `beep` | play a tone through the AC97 codec |
+| `pci` | list the enumerated PCI devices |
+| `net` | network interface MAC, link state and frame counters |
+| `poweroff` | power the machine off (ACPI S5) |
+| `reboot` | reset the machine (0xCF9) |
 
 Paths are resolved against the working directory. A name that contains `/` is
 taken as device-qualified (`start hda/hello`); a bare name resolves against the
@@ -261,11 +305,12 @@ make clean        # remove build artifacts
 
 UART/log → parse multiboot → physical MM (e820) → VMM → kernel heap →
 VGA or VBE → GDT → IDT → FPU → PIC → PIT (1 kHz) → VFS → floppy detect →
-keyboard → mouse → UART RX IRQ → sound → syscalls → TSS → RTC → PCI probe →
-scheduler.
+keyboard → mouse → UART RX IRQ → sound → syscalls → TSS → RTC →
+PCI (enumerate + bind drivers) → scheduler.
 
 `sched_init()` does not return: it `iret`s into the scheduler's first process
 (`main_proc` in [`sched.c`](sched.c)), which brings up the floppy and IDE
-block devices, mounts their FAT volumes, starts the framebuffer redraw thread
-and the USB thread (`usb_thread` — enumerate, then poll HID endpoints and
-hub ports), and then runs the interactive console (`kmain_console`).
+block devices, mounts their FAT volumes, starts the framebuffer redraw thread,
+the USB thread (`usb_thread` — enumerate, then poll HID endpoints and hub
+ports) and, if an e1000 was found, the `net` thread, and then runs the
+interactive console (`kmain_console`).

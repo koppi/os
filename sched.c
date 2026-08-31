@@ -35,6 +35,7 @@
 #include <floppy.h>
 #include <ata.h>
 #include <usb.h>
+#include <e1000.h>
 
 process_t *list;
 static int n_proc = 1;
@@ -84,6 +85,8 @@ void main_proc() {
 
     start_kernel_proc("draw_thread", &refresh_screen);
     start_kernel_proc("usb", &usb_thread);
+    if (e1000_present())
+        start_kernel_proc("net", &e1000_thread);
     //start_kernel_proc("demo_thread", &demo_thread);
     //start_kernel_proc("uart_read", &uart_read_proc);
 

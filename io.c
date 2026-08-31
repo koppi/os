@@ -6,6 +6,7 @@
 #include <pit.h> // for get_tick_count()
 #include <printf.h>
 #include <log.h>
+#include <pci_acpi.h>
 
 /** @brief Execute one @c hlt instruction. */
 void halt() {
@@ -15,13 +16,19 @@ void halt() {
 /**
  * @brief Power the machine off (under QEMU) or reset it; does not return.
  *
- * Writes @p status_code to QEMU's `isa-debug-exit` port (0xF4) so the emulator
- * exits with that status (0 skips the write), then issues a keyboard-controller
- * CPU reset as a fallback for real hardware, and finally spins forever.
+ * A non-zero @p status_code is written to QEMU's `isa-debug-exit` port (0xF4) so
+ * the emulator exits with that status; @p status_code 0 is a clean shutdown and
+ * goes through @ref acpi_poweroff (guest-initiated ACPI S5). Either way it then
+ * issues a keyboard-controller CPU reset as a fallback for real hardware, and
+ * finally spins forever.
  */
 void __attribute__((noreturn)) exit_qemu(const int status_code) {
   if (status_code) {
     outportb(0xf4, status_code); // qemu isa-debug-exit port
+  } else {
+    // Clean shutdown: prefer a real guest-initiated ACPI S5 power-off; falls
+    // through if there is no PIIX4 ACPI (e.g. non-QEMU hardware).
+    acpi_poweroff();
   }
   disable_int();
   while ((inportb(0x64) & 2) != 0);

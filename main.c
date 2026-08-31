@@ -126,7 +126,7 @@ void kernel_main(unsigned long magic, unsigned long addr)
     syscall_init();
     install_tss();
     rtc_init();
-    pci_test();
+    pci_init();
 
     klogf(LOG_INFO, "Initialization took: %llu\n", rdtsc() - tsc);
 
