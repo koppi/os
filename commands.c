@@ -18,6 +18,8 @@
 #include <pci_acpi.h>
 #include <pci_ac97.h>
 #include <e1000.h>
+#include <net.h>
+#include <dhcp.h>
 #include <keyboard.h>
 #include <commands.h>
 
@@ -273,6 +275,17 @@ static void console_net(void) {
            m[0], m[1], m[2], m[3], m[4], m[5],
            e1000_link_up() ? "up" : "down",
            e1000_rx_count(), e1000_tx_count());
+
+    if(net_is_up()) {
+        const net_ipv4_t *c = net_config();
+        char ip[16], mask[16], gw[16], dns[16];
+        printf("  ip %s  mask %s\n", net_ip_str(c->ip, ip), net_ip_str(c->mask, mask));
+        printf("  gw %s  dns %s\n", net_ip_str(c->gw, gw), net_ip_str(c->dns, dns));
+        printf("  dhcp %s (server %s, lease %us)\n",
+               dhcp_state_name(), net_ip_str(c->server, ip), c->lease_secs);
+    } else {
+        printf("  dhcp %s (no lease yet)\n", dhcp_state_name());
+    }
 }
 
 /**

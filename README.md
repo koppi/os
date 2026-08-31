@@ -109,25 +109,44 @@ function the QEMU `pc` machine exposes has a handler, so nothing logs as
 | 82371SB PIIX3 USB (UHCI) | [`uhci.c`](uhci.c) | brought up later from the `usb` kernel thread |
 | 82371AB PIIX4 ACPI | [`pci_acpi.c`](pci_acpi.c) | latch the PM I/O base; back `poweroff` / `reboot` |
 | QEMU/Bochs standard VGA | [`pci_vga.c`](pci_vga.c) | record the framebuffer BAR, report the DISPI mode |
-| 82540EM gigabit Ethernet | [`e1000.c`](e1000.c) | full polled NIC — see below |
+| 82540EM gigabit Ethernet | [`e1000.c`](e1000.c) | polled link layer; IPv4/DHCP on top — see below |
 | 82801AA AC'97 audio | [`pci_ac97.c`](pci_ac97.c) | codec bring-up + BDL playback |
 
 An unrecognised device (e.g. `-device rtl8139`) is still enumerated and named;
 it just logs "has no driver". `pci` at the console reprints the table.
 
-The **e1000** driver ([`e1000.c`](e1000.c)) maps the MMIO register BAR 1:1 into
-the kernel (it sits above the low-4 MiB identity map), resets the card, brings
-the link up, reads the MAC from the EEPROM and sets up static RX/TX descriptor
-rings in the identity-mapped `.bss`. A boot-time self-test transmits an ARP
-request and checks the descriptor-done writeback; the `net` kernel thread then
-polls the RX ring — under QEMU's user networking the gateway's ARP reply comes
-back, so `net` shows a live `rx`/`tx` count. There is no IP stack yet;
-`e1000_send()` / `e1000_rx_poll()` are the hooks for one.
-
 **ACPI power** ([`pci_acpi.c`](pci_acpi.c)): the PIIX4 PM register block has a
 fixed layout, so no AML is needed — `poweroff` enters S5 with a single word
 write to `PM1_CNT` (`exit_qemu(0)` uses this for a clean guest-initiated
 shutdown), and `reboot` pulses the 0xCF9 reset-control port.
+
+### Networking
+
+The **e1000** driver ([`e1000.c`](e1000.c)) is the link layer only: it maps the
+MMIO register BAR 1:1 into the kernel (it sits above the low-4 MiB identity map),
+resets the card, brings the link up, reads the MAC from the EEPROM and sets up
+static RX/TX descriptor rings in the identity-mapped `.bss`. It exposes
+`e1000_send()` / `e1000_rx_poll()`.
+
+On top of that, [`net.c`](net.c) is a very small IPv4 stack — Ethernet framing,
+an 8-entry **ARP** cache (replies to who-has for our address, resolves next
+hops), **IPv4** (20-byte header, checksum, on-link vs. gateway routing) and
+**UDP** (checksum omitted, a tiny port→handler table). No fragmentation, no
+options, no TCP. Everything runs on the `net` kernel thread, so there is no
+locking.
+
+[`dhcp.c`](dhcp.c) is a **DHCP client**: on boot the `net` thread runs
+`DISCOVER → OFFER → REQUEST → ACK` against QEMU's SLIRP server and the machine
+comes up with an address (`10.0.2.15/24 via 10.0.2.2` by default), logged as
+
+```
+net: 10.0.2.15/24 via 10.0.2.2, dns 10.0.2.3, lease 86400s
+```
+
+The lease is renewed at T1 (half the lease time). `net` at the console shows the
+MAC, link, frame counters and — once bound — the address, gateway, DNS and the
+DHCP state. `udp_send()` / `ipv4_send()` are the hooks for anything higher
+(there is no ICMP, DNS resolver or TCP yet).
 
 ### Drivers
 | Area | Files |
@@ -144,6 +163,8 @@ shutdown), and `reboot` pulses the 0xCF9 reset-control port.
 | i440FX / PIIX3 chipset (host bridge, ISA bridge, IDE) | [`pci_piix.c`](pci_piix.c) |
 | PIIX4 ACPI power management (poweroff / reboot) | [`pci_acpi.c`](pci_acpi.c) |
 | Intel 82540EM gigabit NIC ("e1000", polled) | [`e1000.c`](e1000.c) |
+| IPv4 stack (Ethernet, ARP, IPv4, UDP) | [`net.c`](net.c) |
+| DHCP client | [`dhcp.c`](dhcp.c) |
 | QEMU / Bochs standard VGA (DISPI mode control) | [`pci_vga.c`](pci_vga.c) |
 | AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sound.c`](sound.c) |
 | PC speaker | [`pcspk.c`](pcspk.c) |
@@ -202,7 +223,7 @@ keyboard driver, echoes them, supports backspace, and executes a line on Enter.
 | `read <file>` | print a file |
 | `beep` | play a tone through the AC97 codec |
 | `pci` | list the enumerated PCI devices |
-| `net` | network interface MAC, link state and frame counters |
+| `net` | interface MAC, link, counters and the DHCP-assigned address |
 | `poweroff` | power the machine off (ACPI S5) |
 | `reboot` | reset the machine (0xCF9) |
 
@@ -312,5 +333,6 @@ PCI (enumerate + bind drivers) → scheduler.
 (`main_proc` in [`sched.c`](sched.c)), which brings up the floppy and IDE
 block devices, mounts their FAT volumes, starts the framebuffer redraw thread,
 the USB thread (`usb_thread` — enumerate, then poll HID endpoints and hub
-ports) and, if an e1000 was found, the `net` thread, and then runs the
-interactive console (`kmain_console`).
+ports) and, if an e1000 was found, the `net` thread (`net_thread` — run the
+DHCP client, then service the RX ring), and then runs the interactive console
+(`kmain_console`).

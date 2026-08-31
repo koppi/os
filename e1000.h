@@ -7,9 +7,9 @@
  * 16-byte-aligned statics in `.bss`, which is identity-mapped, so `&x` is the
  * physical address handed to the card (same approach as [uhci.c](uhci.c)).
  *
- * There is no network stack yet: this brings the link up, reads the MAC, runs a
- * MAC-loopback TX/RX self-test at boot and then services the RX ring from the
- * `net` kernel thread, counting frames. @ref e1000_send is here for later use.
+ * This is just the link layer: reset, link up, read the MAC, and raw frame
+ * TX/RX. The IPv4 stack and the `net` kernel thread live in [net.c](net.c),
+ * which drives this through @ref e1000_send / @ref e1000_rx_poll.
  */
 #pragma once
 
@@ -44,6 +44,3 @@ int e1000_send(const void *frame, uint16_t len);
  * @return Number of frames processed.
  */
 int e1000_rx_poll(void (*cb)(const uint8_t *frame, uint16_t len));
-
-/** @brief `net` kernel-thread entry: poll RX forever on a slow cadence. */
-void e1000_thread(void);

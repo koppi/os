@@ -176,10 +176,9 @@ static void rx_init(void) {
     reg_wr(E1000_RDH, 0);
     reg_wr(E1000_RDT, NRX - 1);
     rx_cur = 0;
-    /* Promiscuous: with no network stack we want every frame the link carries,
-     * and it sidesteps the receive-address filter entirely. */
-    reg_wr(E1000_RCTL, RCTL_EN | RCTL_SBP | RCTL_UPE | RCTL_MPE |
-                       RCTL_BAM | RCTL_SECRC | RCTL_BSIZE_2048);
+    /* Accept unicast (matched against RAL0), broadcast (ARP, DHCP offers) and
+     * strip the CRC. Not promiscuous — the stack only wants its own traffic. */
+    reg_wr(E1000_RCTL, RCTL_EN | RCTL_BAM | RCTL_SECRC | RCTL_BSIZE_2048);
 }
 
 static void tx_init(void) {
@@ -241,44 +240,6 @@ int e1000_rx_poll(void (*cb)(const uint8_t *frame, uint16_t len)) {
 /* ------------------------------------------------------------------ *
  *  Self-test                                                          *
  * ------------------------------------------------------------------ */
-/**
- * @brief Fill @p f (>= 60 bytes) with a broadcast ARP "who-has 10.0.2.2"
- *        request from our MAC / 10.0.2.15 — the QEMU user-net gateway and first
- *        DHCP address. SLIRP always answers it, so it doubles as a link test.
- * @return Frame length (60).
- */
-static int build_arp(uint8_t *f) {
-    memset(f, 0, 60);
-    for (int i = 0; i < 6; i++) {
-        f[i]      = 0xFF;              /* dest: broadcast */
-        f[6 + i]  = mac[i];            /* src */
-        f[22 + i] = mac[i];            /* ARP sender MAC */
-    }
-    f[12] = 0x08; f[13] = 0x06;        /* ethertype ARP */
-    f[14] = 0x00; f[15] = 0x01;        /* HTYPE ethernet */
-    f[16] = 0x08; f[17] = 0x00;        /* PTYPE IPv4 */
-    f[18] = 6; f[19] = 4;              /* HLEN / PLEN */
-    f[20] = 0x00; f[21] = 0x01;        /* OPER request */
-    f[28] = 10; f[29] = 0; f[30] = 2; f[31] = 15;  /* sender IP */
-    f[38] = 10; f[39] = 0; f[40] = 2; f[41] = 2;   /* target IP (gateway) */
-    return 60;
-}
-
-/**
- * @brief Boot-time TX self-test: transmit an ARP request and confirm the card
- *        wrote back the descriptor-done bit.
- *
- * Only TX is checked here: the reply is asynchronous and there is no scheduler
- * yet to yield to QEMU's event loop, so RX is left to @ref e1000_thread, which
- * re-sends the request and polls between @ref sleep calls.
- */
-static void selftest(void) {
-    uint8_t f[60];
-    int n = build_arp(f);
-    int tx = e1000_send(f, n);
-    klogf(LOG_INFO, "e1000: TX self-test %s\n", tx > 0 ? "ok (ARP request sent)" : "FAILED");
-}
-
 /* ------------------------------------------------------------------ *
  *  Probe                                                              *
  * ------------------------------------------------------------------ */
@@ -339,12 +300,10 @@ void e1000_probe(pci_device_t *d) {
     klogf(LOG_INFO, "e1000: MAC %02x:%02x:%02x:%02x:%02x:%02x, mmio 0x%x, link %s\n",
           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (uint32_t)base,
           link ? "up" : "down");
-
-    selftest();
 }
 
 /* ------------------------------------------------------------------ *
- *  Accessors + poll thread                                            *
+ *  Accessors                                                          *
  * ------------------------------------------------------------------ */
 int      e1000_present(void)  { return have_nic; }
 int      e1000_link_up(void)  {
@@ -355,38 +314,3 @@ uint32_t e1000_rx_count(void) { return rx_frames; }
 uint32_t e1000_tx_count(void) { return tx_frames; }
 
 void e1000_mac(uint8_t out[6]) { memcpy(out, mac, 6); }
-
-/** @brief Log the first few received frames, then fall silent. */
-static void rx_log(const uint8_t *f, uint16_t len) {
-    if (rx_frames > 4)
-        return;
-    klogf(LOG_DEBUG,
-          "e1000: rx %u  %02x:%02x:%02x:%02x:%02x:%02x <- %02x:%02x:%02x:%02x:%02x:%02x  type %02x%02x\n",
-          len, f[0], f[1], f[2], f[3], f[4], f[5],
-          f[6], f[7], f[8], f[9], f[10], f[11], f[12], f[13]);
-}
-
-void e1000_thread(void) {
-    if (!have_nic)
-        return;
-
-    /* Kick off an exchange so RX has something to show even on an otherwise
-     * idle link: SLIRP answers this ARP and the reply lands in the ring, which
-     * the poll below picks up now that sleep() lets QEMU's event loop run. */
-    uint8_t arp[60];
-    int n = build_arp(arp);
-    e1000_send(arp, n);
-
-    int announced = 0;
-    int tick = 0;
-    while (1) {
-        e1000_rx_poll(rx_log);
-        if (!announced && rx_frames) {
-            klogf(LOG_INFO, "e1000: RX path confirmed\n");
-            announced = 1;
-        }
-        sleep(50);
-        if (++tick % 100 == 0)          /* ~every 5 s */
-            e1000_send(arp, n);         /* keep the ARP cache warm */
-    }
-}
