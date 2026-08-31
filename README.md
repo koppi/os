@@ -2,8 +2,8 @@
 
 A small hobby operating system for the **i386** architecture: a 32-bit
 multiboot kernel written in C with a handful of drivers, a FAT filesystem, a
-cooperative process/thread model, a minimal C library and a few userspace
-programs.
+preemptive priority-scheduled process/thread model, a minimal C library and a
+few userspace programs.
 
 Current version: **0.0.0** (see [`ver.h`](ver.h)).
 
@@ -30,7 +30,10 @@ Current version: **0.0.0** (see [`ver.h`](ver.h)).
 * x87 FPU init — [`fpu.c`](fpu.c)
 
 ### Scheduling & processes
-* Cooperative scheduler — [`sched.c`](sched.c)
+* Preemptive fixed-priority round-robin scheduler with real-time policies
+  (`SCHED_OTHER` / `SCHED_RR` / `SCHED_FIFO`) — [`sched.c`](sched.c). Timer-IRQ
+  driven: each tick it runs the highest-priority ready thread, round-robins
+  equal priorities by quantum, and lets a higher priority preempt within a tick.
 * Processes (flat binaries loaded from the filesystem) — [`proc.c`](proc.c)
 * Threads — [`thread.c`](thread.c)
 * `int 0x72` syscall gate — [`syscall.c`](syscall.c). Implemented calls:

@@ -10,7 +10,10 @@
 /** One thread of execution within a @ref process_t. */
 typedef struct thread {
     pid_t pid;                      /**< Thread id. */
-    int time;                       /**< Time-slice length in ticks. */
+    int time;                       /**< Round-robin quantum, in PIT ticks. */
+    int priority;                   /**< Scheduling priority, higher = more urgent (@c SCHED_PRIO_* in sched.h). */
+    int policy;                     /**< @c SCHED_OTHER / @c SCHED_RR / @c SCHED_FIFO (see sched.h). */
+    int yield;                      /**< Set by @ref sched_yield to drop the CPU on the next tick. */
     int main;                       /**< Non-zero for a process's main thread. */
     int state;                      /**< @c PROC_NEW / @c PROC_ACTIVE / @c PROC_STOPPED. */
     void *parent;                   /**< Owning @ref process_t. */

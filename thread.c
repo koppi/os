@@ -28,6 +28,9 @@ thread_t *create_thread() {
     thread->pid = pid++;
     thread->main = 0;
     thread->time = 10;
+    thread->priority = SCHED_PRIO_DEFAULT;
+    thread->policy = SCHED_OTHER;
+    thread->yield = 0;
     thread->state = PROC_NEW;
     thread->next = thread;
     thread->prec = thread;

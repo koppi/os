@@ -1,11 +1,18 @@
 /**
  * @file sched.c
- * @brief Cooperative round-robin scheduler and the first process.
+ * @brief Preemptive fixed-priority round-robin scheduler with real-time
+ *        policies, and the first process.
  *
  * @ref sched_init builds process 1 by hand and `iret`s into @ref main_proc,
  * which brings up the block devices, starts the framebuffer redraw thread and
- * runs the console. The timer IRQ calls @ref schedule to rotate the process /
- * thread rings while @ref sched_on is set.
+ * runs the console. The timer IRQ calls @ref schedule on every tick while
+ * @ref sched_on is set.
+ *
+ * @ref schedule keeps the process ring but no longer just rotates it: it runs
+ * the highest-priority ready thread, round-robins threads that share that
+ * priority (each for its @ref thread_t::time quantum), and lets a newly-ready
+ * higher-priority thread preempt a running lower-priority one on the next tick.
+ * See sched.h for the policy / priority model.
  */
 #include <sched.h>
 
@@ -120,6 +127,9 @@ void sched_init() {
     proc->thread_list = main_thread;
     proc->threads = 1;
     main_thread->time = 10;
+    main_thread->priority = SCHED_PRIO_DEFAULT;
+    main_thread->policy = SCHED_OTHER;
+    main_thread->yield = 0;
     main_thread->next = main_thread;
     main_thread->prec = main_thread;
     main_thread->pid = 1;
@@ -181,42 +191,167 @@ void sched_init() {
 }
 
 
+/** @return Non-zero if @p proc's current head thread can run right now. */
+static inline int proc_runnable(process_t *proc) {
+    return proc->state == PROC_ACTIVE &&
+           proc->thread_list->state == PROC_ACTIVE;
+}
+
+/**
+ * @brief Highest priority among all ready threads (their process head thread).
+ * @return A priority in [@c SCHED_PRIO_MIN, @c SCHED_PRIO_MAX], or
+ *         @c SCHED_PRIO_MIN-1 when nothing is ready.
+ */
+static int top_priority(void) {
+    int top = SCHED_PRIO_MIN - 1;
+    process_t *p = list;
+    for (int i = 0; i < n_proc; i++, p = p->next) {
+        if (proc_runnable(p) && p->thread_list->priority > top)
+            top = p->thread_list->priority;
+    }
+    return top;
+}
+
+/**
+ * @brief Pick the next process to run: highest priority wins, and threads that
+ *        share the top priority are taken in round-robin order.
+ *
+ * The scan starts one past the current process so equal-priority peers rotate
+ * fairly; the current process is considered last, so a lone top-priority thread
+ * simply keeps running.
+ *
+ * @param top Target priority (from @ref top_priority).
+ * @return The chosen process (never NULL; falls back to the current one).
+ */
+static process_t *pick_next(int top) {
+    process_t *p = list;
+    for (int i = 0; i < n_proc; i++) {
+        p = p->next;
+        if (proc_runnable(p) && p->thread_list->priority >= top)
+            return p;
+    }
+    return list;
+}
+
 uint32_t schedule(uint32_t esp) {
-    // Check if the time slice ended
-    if (get_tick_count() <= list->thread_list->time)
+    if (list == 0)
+        return esp;
+
+    thread_t *cur = list->thread_list;
+
+    /* A voluntary yield counts for one scheduling decision only. */
+    int yielding = cur->yield;
+    cur->yield = 0;
+
+    /* SCHED_FIFO ignores the timer; the others are rotated once their quantum
+     * is spent. get_tick_count() counts ticks since the last switch. */
+    int quantum_expired = cur->policy != SCHED_FIFO &&
+                          cur->time > 0 &&
+                          get_tick_count() >= cur->time;
+
+    int top = top_priority();
+
+    /* Keep the current thread when it is still the most eligible one:
+     * runnable, not yielding, no higher-priority thread is waiting (real-time
+     * preemption) and it still has quantum left. This is the fast path. */
+    if (proc_runnable(list) && !yielding &&
+        cur->priority >= top && !quantum_expired)
         return esp;
 
     reset_tick_count();
+    cur->esp_kernel = esp;
 
-    // Save the stack pointer
-    list->thread_list->esp_kernel = esp;
-
-    // Change thread for the next run
-    list->thread_list = list->thread_list->next;
-
+    /* Round-robin this process's own thread ring, skipping any dead threads.
+     * Falls back to the current thread when it is the only one left. */
+    thread_t *t = cur;
     do {
-        // Change process, make sure it's not a finished one
-        list = list->next;
-    } while(list->state == PROC_STOPPED);
+        t = t->next;
+    } while (t != cur && t->state != PROC_ACTIVE);
+    list->thread_list = t;
+
+    /* Move to the next process by priority / round-robin. */
+    list = pick_next(top);
+
     set_esp0(list->thread_list->stack_kernel_limit);
     change_page_directory(list->pdir);
 
     return list->thread_list->esp_kernel;
 }
 
+void sched_yield(void) {
+    if (list == 0 || !get_sched_state())
+        return;
+    list->thread_list->yield = 1;
+    /* Wait for the next tick to run schedule(); we resume here once picked. */
+    halt();
+}
+
+/** @return The thread with id @p pid anywhere in the ring, or NULL. */
+static thread_t *thread_by_id(int pid) {
+    process_t *p = list;
+    for (int i = 0; i < n_proc; i++, p = p->next) {
+        thread_t *t = p->thread_list;
+        for (int j = 0; j < p->threads; j++, t = t->next) {
+            if (t->pid == pid)
+                return t;
+        }
+    }
+    return 0;
+}
+
+int sched_set_priority(int pid, int priority) {
+    if (priority < SCHED_PRIO_MIN)
+        priority = SCHED_PRIO_MIN;
+    if (priority > SCHED_PRIO_MAX)
+        priority = SCHED_PRIO_MAX;
+
+    int prev = get_sched_state();
+    sched_state(0);
+    thread_t *t = thread_by_id(pid);
+    if (t != 0)
+        t->priority = priority;
+    sched_state(prev);
+    return t != 0 ? 0 : -1;
+}
+
+int sched_set_policy(int pid, int policy) {
+    if (policy != SCHED_OTHER && policy != SCHED_RR && policy != SCHED_FIFO)
+        return -1;
+
+    int prev = get_sched_state();
+    sched_state(0);
+    thread_t *t = thread_by_id(pid);
+    if (t != 0)
+        t->policy = policy;
+    sched_state(prev);
+    return t != 0 ? 0 : -1;
+}
+
 int get_nproc() {
     return n_proc;
+}
+
+/** @return A short name for scheduling policy @p policy. */
+static const char *policy_name(int policy) {
+    switch (policy) {
+    case SCHED_FIFO: return "FIFO";
+    case SCHED_RR:   return "RR";
+    default:         return "OTHER";
+    }
 }
 
 void print_procs() {
     process_t *app = list;
     printf("n_proc = %d\n", n_proc);
     for(int i = 0; i < n_proc; i++) {
-        printf("%s id: %d page directory: 0x%x state: %d\n",
-               app->name, app->thread_list->pid, (uint32_t)app->pdir, app->state);
+        thread_t *th = app->thread_list;
+        printf("%s id: %d page directory: 0x%x state: %d prio: %d/%s%s\n",
+               app->name, th->pid, (uint32_t)app->pdir, app->state,
+               th->priority, policy_name(th->policy),
+               SCHED_IS_RT(th->priority) ? " [rt]" : "");
         printf("    eip: 0x%x esp: 0x%x stack limit: 0x%x\nimage base: 0x%x image size: %x\n\n",
-               app->thread_list->eip, app->thread_list->esp, app->thread_list->stack_limit,
-               app->thread_list->image_base, app->thread_list->image_size);
+               th->eip, th->esp, th->stack_limit,
+               th->image_base, th->image_size);
         app = app->next;
     }
 }
