@@ -54,14 +54,10 @@ static void multiboot_memmap(uint32_t length, multiboot_memmap_t *memmap)
 	}
 }
 
-/** Parse multiboot information structure.
- *
- * If @a signature does not contain a valid multiboot signature,
- * assumes no multiboot information is available.
- *
- * @param signature Should contain the multiboot signature.
- * @param info      Multiboot information structure.
- *
+/**
+ * @brief Parse the Multiboot 1 information block: record the memory sizes and
+ *        walk the E820 map into @ref e820table.
+ * @param info Multiboot information structure passed by the loader.
  */
 void multiboot_info_parse(const multiboot_info_t *info) {
 	/* Copy command line. */

@@ -14,9 +14,7 @@ struct idt_info idt[NUM_INTERRUPTS];    /**< The table itself. */
 /**
  * @brief Point every vector at @ref default_ir_handler, then override the
  *        CPU-exception vectors (0-19) with their dedicated handlers, and load
- *        the table.
- *
- * @param code Kernel code selector for every gate.
+ *        the table. @p code is the kernel code selector for every gate.
  */
 void idt_init(uint16_t code) {
     int i;
@@ -71,11 +69,7 @@ static void irq_clear_mask(size_t i) {
 
 /**
  * @brief Write handler @p irq into IDT slot @p i and unmask the PIC line.
- *
- * @param i     Vector number.
- * @param flags Gate flags byte.
- * @param sel   Code selector.
- * @param irq   Handler entry point.
+ *        See @ref idt.h for the argument meanings.
  */
 void install_ir(uint32_t i, uint16_t flags, uint16_t sel, void *irq) {
     uint32_t ir_addr = (uint32_t) irq;

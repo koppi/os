@@ -16,10 +16,8 @@ void halt() {
  * @brief Power the machine off (under QEMU) or reset it; does not return.
  *
  * Writes @p status_code to QEMU's `isa-debug-exit` port (0xF4) so the emulator
- * exits with that status, then issues a keyboard-controller CPU reset as a
- * fallback for real hardware, and finally spins forever.
- *
- * @param status_code Exit code for QEMU; 0 skips the debug-exit write.
+ * exits with that status (0 skips the write), then issues a keyboard-controller
+ * CPU reset as a fallback for real hardware, and finally spins forever.
  */
 void __attribute__((noreturn)) exit_qemu(const int status_code) {
   if (status_code) {
@@ -48,12 +46,10 @@ void disable_int() {
 }
 
 /**
- * @brief Coarse busy sleep measured in PIT ticks.
+ * @brief Coarse busy sleep of @p s PIT ticks (~ms at 1 kHz).
  *
  * Halts between polls so the CPU is not spun at full speed. The tick source is
  * reset elsewhere, so the granularity is approximate.
- *
- * @param s Number of ticks (~milliseconds at the 1 kHz PIT rate) to wait.
  */
 void sleep(int s) {
     //for (int i = 0; i < s * 1000000; i++) { } return;

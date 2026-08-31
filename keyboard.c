@@ -155,13 +155,11 @@ char getchar() {
 }
 
 /**
- * @brief Read an echoed line into @p str (backs the scanf syscall).
+ * @brief Read an echoed line of at most @p size-1 bytes into @p str (backs the
+ *        scanf syscall).
  *
  * Disables preemption while reading. Accepts printable ASCII (32-122), handles
  * backspace, and terminates on newline.
- *
- * @param str  Destination buffer.
- * @param size Buffer size in bytes.
  */
 void gets(char *str, size_t size) {
     int count = 0;

@@ -25,11 +25,7 @@ static float notes[7][12] = {
         12543.84, 13289.76, 14080.0, 14547.84, 15805.44 }
 };
 
-/**
- * @brief Sound the note (@p octave, @p note) on the PC speaker.
- * @param octave 0-6.
- * @param note   0-11 (C..B).
- */
+/** @brief Sound the note (@p octave 0-6, @p note 0-11) on the PC speaker. */
 void beep_note(uint8_t octave, uint8_t note) {
     beep((int) notes[octave][note]);
 }

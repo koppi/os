@@ -11,11 +11,9 @@
 chardev_t *kconsole;
 
 /**
- * @brief Write one character to all kernel output surfaces.
+ * @brief Write character @p c to all kernel output surfaces.
  *
  * This is the single-character primitive the printf implementation calls.
- *
- * @param c Character to output.
  */
 void putchar_(char c) {
     kconsole->write(kconsole, &c, 1);

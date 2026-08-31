@@ -36,13 +36,13 @@ void default_ir_handler() {
     panic("");
 }
 
-/** @brief #DE — divide error. Fatal. */
+/** @brief \#DE — divide error. Fatal. */
 void ex_divide_by_zero() {
     printf("Division by zero\n");
     panic("");
 }
 
-/** @brief #DB — debug / single step. Fatal. */
+/** @brief \#DB — debug / single step. Fatal. */
 void ex_single_step() {
     printf("Single step\n");
     panic("");
@@ -54,26 +54,26 @@ void ex_nmi() {
     panic("");
 }
 
-/** @brief #BP — breakpoint. Fatal. */
+/** @brief \#BP — breakpoint. Fatal. */
 void ex_breakpoint() {
     printf("Breakpoint\n");
     panic("");
 }
 
-/** @brief #OF — overflow. Fatal. */
+/** @brief \#OF — overflow. Fatal. */
 void ex_overflow() {
     printf("Overflow\n");
     panic("");
 }
 
-/** @brief #BR — bound range exceeded. Fatal. */
+/** @brief \#BR — bound range exceeded. Fatal. */
 void ex_bounds_check() {
     printf("Bounds check\n");
     panic("");
 }
 
 /**
- * @brief #UD — invalid opcode. Dumps the saved register frame.
+ * @brief \#UD — invalid opcode. Dumps the saved register frame.
  * @param re Saved registers; a kernel-mode fault panics, a user-mode fault
  *           unwinds the process.
  */
@@ -89,38 +89,38 @@ void ex_invalid_opcode(struct regs *re) {
     }
 }
 
-/** @brief #NM — device (FPU) not available. Fatal. */
+/** @brief \#NM — device (FPU) not available. Fatal. */
 void ex_device_not_available() {
     printf("Device not available\n");
     panic("");
 }
 
-/** @brief #DF — double fault. Fatal. */
+/** @brief \#DF — double fault. Fatal. */
 void ex_double_fault() {
     printf("Double fault\n");
     panic("");
 }
 
-/** @brief #TS — invalid TSS. Fatal. */
+/** @brief \#TS — invalid TSS. Fatal. */
 void ex_invalid_tss() {
     printf("Invalid TSS\n");
     panic("");
 }
 
-/** @brief #NP — segment not present. Fatal. */
+/** @brief \#NP — segment not present. Fatal. */
 void ex_segment_not_present() {
     printf("Segment not present\n");
     panic("");
 }
 
-/** @brief #SS — stack-segment fault. Fatal. */
+/** @brief \#SS — stack-segment fault. Fatal. */
 void ex_stack_fault() {
     printf("Stack fault\n");
     panic("");
 }
 
 /**
- * @brief #GP — general protection fault. Dumps the register frame plus
+ * @brief \#GP — general protection fault. Dumps the register frame plus
  *        CR2/CR3; kernel-mode is fatal, user-mode unwinds the process.
  * @param re Saved register/error-code frame.
  */
@@ -139,7 +139,7 @@ void ex_gpf(struct regs_error *re) {
 }
 
 /**
- * @brief #PF — page fault. Decodes CR2 and the error code, then panics
+ * @brief \#PF — page fault. Decodes CR2 and the error code, then panics
  *        (kernel-mode fault) or unwinds the process (user-mode fault).
  * @param re Saved register/error-code frame.
  */
@@ -173,25 +173,25 @@ void ex_page_fault(struct regs_error *re) {
     }
 }
 
-/** @brief #MF — x87 FPU error. Fatal. */
+/** @brief \#MF — x87 FPU error. Fatal. */
 void ex_fpu_error() {
     printf("FPU error\n");
     panic("");
 }
 
-/** @brief #AC — alignment check. Fatal. */
+/** @brief \#AC — alignment check. Fatal. */
 void ex_alignment_check() {
     printf("Alignment check\n");
     panic("");
 }
 
-/** @brief #MC — machine check. Fatal. */
+/** @brief \#MC — machine check. Fatal. */
 void ex_machine_check() {
     printf("Machine check\n");
     panic("");
 }
 
-/** @brief #XM — SIMD floating-point exception. Fatal. */
+/** @brief \#XM — SIMD floating-point exception. Fatal. */
 void ex_simd_fpu() {
     printf("SIMD FPU error\n");
     panic("");

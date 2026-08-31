@@ -101,11 +101,14 @@ kernel.lst: $(KERNEL)
 cloc::
 	cloc . --exclude-ext=md,txt,toml,json
 
+docs::
+	doxygen Doxyfile
+
 clean::
 	@$(MAKE) -C lib clean
 	@$(MAKE) -C apps clean
-	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) *.d lib/*.d *~ os.iso iso
+	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) *.d lib/*.d *~ os.iso iso docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox cloc clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox cloc docs clean
 
 -include $(OBJS:.o=.d)

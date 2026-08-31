@@ -92,7 +92,7 @@ int* vga_cursor_pos(int* p) {
 // -----------------------------------------------------------------------------
 /**
  * Returns a uint16_t for internal usage in generating framebuffer entries
- * @param  uc    Unsigned char for character to write
+ * @param  c     Character to write
  * @param  color Internal usage color from vga_entry_color()
  * @return       A uint16_t to write to the framebuffer to display a character
  */

@@ -3,8 +3,8 @@
  * @brief 8254 PIT programming and the free-running tick counter.
  *
  * Counter 0 is programmed for a 1 kHz square wave in main.c; its IRQ (vector
- * 32, handled by pit_int in pit_asm.asm) bumps @ref pit_ticks and, when
- * @ref sched_on is set, calls schedule().
+ * 32, handled by pit_int in pit_asm.asm) bumps @c pit_ticks and, when
+ * @c sched_on is set, calls schedule().
  */
 #include <pit.h>
 #include <io.h>
@@ -22,7 +22,7 @@ uint32_t pit_ticks __attribute__ ((aligned (4)));
 
 extern void pit_int();
 
-/** @brief Set the scheduler-enable flag. @param on Non-zero to enable. */
+/** @brief Set the scheduler-enable flag (non-zero enables preemption). */
 void sched_state(int on) {
     sched_on = on;
 }
@@ -37,11 +37,7 @@ void pit_send_command(uint8_t cmd) {
     outportb(PIT_REG_COMMAND, cmd);
 }
 
-/**
- * @brief Write a reload byte to counter 0, 1 or 2.
- * @param data    Byte to write.
- * @param counter @c PIT_COUNTER_0, @c PIT_COUNTER_1 or @c PIT_COUNTER_2.
- */
+/** @brief Write reload byte @p data to the counter selected by @p counter. */
 void pit_send_data(uint16_t data, uint8_t counter) {
     if(counter == PIT_COUNTER_0)
         outportb(PIT_REG_COUNTER0, data);
@@ -73,13 +69,10 @@ void pit_init() {
 }
 
 /**
- * @brief Program counter 0 for a periodic interrupt.
+ * @brief Program counter 0 for a periodic interrupt (see @ref pit.h).
  *
- * The reload value is 1193180 / @p frequency (the PIT input clock).
- *
- * @param frequency Interrupts per second; 0 is ignored.
- * @param counter   Counter select bits for the command word.
- * @param mode      One of the @c PIT_MODE_* values.
+ * The reload value is 1193180 / @p frequency (the PIT input clock); a
+ * @p frequency of 0 is ignored.
  */
 void pit_start_counter(uint32_t frequency, uint8_t counter, uint8_t mode) {
     if(frequency == 0)

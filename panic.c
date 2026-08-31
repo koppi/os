@@ -6,13 +6,10 @@
 #include <printf.h>
 
 /**
- * @brief Report a fatal kernel error and stop the machine.
+ * @brief Report a fatal kernel error and stop the machine (see @ref panic.h).
  *
  * Disables interrupts, prints "Kernel panic: " followed by the formatted
  * message, then halts the CPU. Never returns.
- *
- * @param format printf-style format string.
- * @param ...    Arguments for @p format.
  */
 void panic(const char *format, ...) {
     disable_int();

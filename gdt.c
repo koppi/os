@@ -31,14 +31,8 @@ void gdt_init() {
 }
 
 /**
- * @brief Encode a base/limit/access triple into GDT slot @p index.
- *
- * The granularity nibble is fixed at 0xC (4 KiB granularity, 32-bit).
- *
- * @param index  GDT slot.
- * @param base   Segment base linear address.
- * @param limit  Segment limit (20 bits significant).
- * @param access Access byte (type/DPL/present).
+ * @brief Encode a base/limit/access triple into GDT slot @p index
+ *        (see @ref gdt.h). The granularity nibble is fixed at 0xC.
  */
 void gdt_set_entry(int index, uint32_t base, uint32_t limit, uint8_t access) {
     gdt_tab[index].base_low = base & 0xFFFF;

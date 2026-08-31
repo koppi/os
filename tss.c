@@ -40,9 +40,8 @@ void install_tss() {
 }
 
 /**
- * @brief Record the kernel stack the CPU should switch to on the next
+ * @brief Record the kernel stack (@p esp) the CPU switches to on the next
  *        ring-3 → ring-0 transition.
- * @param esp Kernel stack top of the process being scheduled.
  */
 void set_esp0(uint32_t esp) {
     tss.esp0 = esp;

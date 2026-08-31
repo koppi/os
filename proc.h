@@ -66,7 +66,7 @@ typedef struct proc {
     struct proc *prec;        /**< Previous process in the scheduler ring. */
 } process_t;
 
-/** asm stub at @ref RETURN_ADDR: turns `main`'s return into an exit syscall. */
+/** asm stub at @ref RETURN_ADDR — turns `main`'s return into an exit syscall. */
 extern void end_process();
 
 /** @brief Load an ELF, build its stack/heap and add it to the scheduler. */
