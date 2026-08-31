@@ -9,6 +9,7 @@
 
 #include <io.h>
 #include <idt.h>
+#include <keyboard.h>
 #include <lib/string.h>
 #include <log.h>
 
@@ -48,8 +49,10 @@ void uart_init(void) {
   outportb(UART_PORT + 3, MODE_8N1); // Lock divisor, 8 data bits.
   outportb(UART_PORT + 4, 0x0B);     // Interrupt enable and DTR,RTS high
 
-  // Turn off the FIFO.
-  outportb(UART_PORT + 2, 0);
+  // Enable and clear the 16550 FIFOs, RX trigger level 14 bytes (FCR).
+  // A receive FIFO lets the console survive a burst of pasted/scripted input
+  // that arrives faster than the RX IRQ can drain it one byte at a time.
+  outportb(UART_PORT + 2, 0xC7);
 
   // If status is 0xFF, no serial port.
   if (inportb(UART_PORT + 5) == 0xFF)
@@ -77,15 +80,28 @@ int uart_getc(void) {
 }
 
 void uart_handler(void) {
-    char c = uart_getc();
+    /* Drain the whole RX FIFO: one IRQ can cover several buffered bytes. */
+    while (inportb(UART_PORT + 5) & 1) {
+        char c = (char) inportb(UART_PORT + 0);
 
-    if (rbpos < RECVBUF_LEN)
-        recvbuf[rbpos++] = c;
-    else
-        klogf(LOG_EMERG, "uart overrun\n");
-    
-    if (c == 27) {
-        exit_qemu(0);
+        /* Legacy line buffer (drained by uart_read); silently drop on overflow
+         * - logging here would recurse through the console on an input flood. */
+        if (rbpos < RECVBUF_LEN)
+            recvbuf[rbpos++] = c;
+
+        if (c == 27) {
+            exit_qemu(0);
+        }
+
+        /* Feed the byte into the shared console input ring (the same hook the
+         * USB keyboard uses) so the kernel console can be driven over a bare
+         * serial link with no keyboard attached. A terminal sends CR for Enter
+         * and DEL for Backspace; the console wants LF and BS. */
+        if (c == '\r')
+            c = '\n';
+        else if (c == 0x7f)
+            c = '\b';
+        keyboard_push_char(c);
     }
 }
 

@@ -9,6 +9,7 @@
 #include <sched.h>
 #include <proc.h>
 #include <printf.h>
+#include <lib/string.h>
 
 /** Round an allocation size up so headers stay 4-byte aligned. */
 static size_t heap_align(size_t len) {
@@ -23,10 +24,10 @@ static size_t heap_align(size_t len) {
  *
  * @param addr Page-aligned base of the 4-page (PAGE_SIZE * 4) heap region.
  */
-void heap_init(vmm_addr_t *addr) {
+void heap_init(vmm_addr_t *addr, size_t bytes) {
     heap_info_t *heap_info = (heap_info_t *) addr;
     uint8_t *base = (uint8_t *) addr + sizeof(heap_info_t);
-    size_t total = (PAGE_SIZE * 4) - sizeof(heap_info_t);
+    size_t total = bytes - sizeof(heap_info_t);
 
     heap_info->start = (vmm_addr_t *) base;
     heap_info->size = total;
@@ -77,8 +78,7 @@ void *umalloc(size_t len, vmm_addr_t *heap) {
         }
         head = head->next;
     }
-    printf("\nOut of memory\n");
-    return 0;
+    return 0;   /* exhausted - umalloc_sys decides whether to grow and retry */
 }
 
 /**
@@ -110,17 +110,98 @@ void ufree(void *ptr, vmm_addr_t *heap) {
     }
 }
 
+/** Ceiling on one process's heap arena. */
+#define PROC_HEAP_MAX (64u * 1024u * 1024u)
+
+/**
+ * @brief Grow the current process's heap by enough (zeroed) pages to satisfy a
+ *        @p need byte allocation, at least 16, and splice a free block onto the
+ *        end of the block list.
+ *
+ * New pages are contiguous with the old arena, so the appended block coalesces
+ * with the previous one when that was free. @return non-zero if it grew.
+ */
+static int heap_grow(thread_t *t, page_dir_t *pdir, size_t need) {
+    heap_info_t *hi = (heap_info_t *) t->heap;
+
+    size_t want = need + sizeof(heap_header_t) + PAGE_SIZE;
+    size_t pages = (want + PAGE_SIZE - 1) / PAGE_SIZE;
+    if(pages < 16)
+        pages = 16;
+    if((t->heap_limit - t->heap) + pages * PAGE_SIZE > PROC_HEAP_MAX)
+        return 0;
+
+    vmm_addr_t base = t->heap_limit;
+    for(size_t i = 0; i < pages; i++) {
+        vmm_addr_t va = base + i * PAGE_SIZE;
+        if(!vmm_map(pdir, va, PAGE_PRESENT | PAGE_RW | PAGE_USER)) {
+            while(i-- > 0)
+                vmm_unmap(pdir, base + i * PAGE_SIZE);
+            return 0;
+        }
+        flush_tlb(va);
+        memset((void *) va, 0, PAGE_SIZE);
+    }
+
+    heap_header_t *last = hi->first_header;
+    while(last->next)
+        last = last->next;
+
+    heap_header_t *nb = (heap_header_t *) base;   /* == old arena end */
+    nb->magic = HEAP_MAGIC;
+    nb->size = pages * PAGE_SIZE - sizeof(heap_header_t);
+    nb->is_free = 1;
+    nb->next = 0;
+    last->next = nb;
+
+    hi->size += pages * PAGE_SIZE;
+    t->heap_limit = base + pages * PAGE_SIZE;
+
+    if(last->is_free) {   /* coalesce with the old trailing free block */
+        last->size += sizeof(heap_header_t) + nb->size;
+        last->next = 0;
+    }
+    return 1;
+}
+
 void *umalloc_sys(size_t len) {
     process_t *cur = get_cur_proc();
-    if(cur && cur->thread_list) {
-        return umalloc(len, (vmm_addr_t *) cur->thread_list->heap);
-    }
-    return 0;
+    if(!cur || !cur->thread_list)
+        return 0;
+
+    thread_t *t = cur->thread_list;
+    void *p = umalloc(len, (vmm_addr_t *) t->heap);
+    if(!p && heap_grow(t, cur->pdir, len))
+        p = umalloc(len, (vmm_addr_t *) t->heap);
+    return p;
 }
 
 void ufree_sys(void *ptr) {
     process_t *cur = get_cur_proc();
-    if(cur && cur->thread_list) {
+    if(cur && cur->thread_list)
         ufree(ptr, (vmm_addr_t *) cur->thread_list->heap);
+}
+
+void *urealloc_sys(void *ptr, size_t nsize) {
+    process_t *cur = get_cur_proc();
+    if(!cur || !cur->thread_list)
+        return 0;
+    if(!ptr)
+        return umalloc_sys(nsize);
+    if(nsize == 0) {
+        ufree_sys(ptr);
+        return 0;
     }
+
+    heap_header_t *h = (heap_header_t *) ((uint8_t *) ptr - sizeof(heap_header_t));
+    if(h->magic != HEAP_MAGIC)
+        return 0;
+    size_t old = h->size;
+
+    void *np = umalloc_sys(nsize);
+    if(!np)
+        return 0;
+    memcpy(np, ptr, old < nsize ? old : nsize);
+    ufree_sys(ptr);
+    return np;
 }

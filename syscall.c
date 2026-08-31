@@ -13,15 +13,57 @@
 //#include <proc/proc.h>
 //#include <proc/thread.h>
 #include <printf.h>
+#include <kconsole.h>
 #include <keyboard.h>
 #include <vfs.h>
 #include <heap.h>
+#include <rtc.h>
+#include <pit.h>
 
 /** One past the highest valid call number. */
-#define MAX_SYSCALL 11
+#define MAX_SYSCALL 16
+
+/** Set to 1 to log every syscall on the console (default 0: off). */
+#define SYSCALL_TRACE 0
 
 /** Generic syscall implementation signature. */
 typedef uint32_t (*syscall_call_func)(uint32_t, ...);
+
+/**
+ * @brief `write` syscall (#12): emit @p len bytes of @p buf to the console.
+ *
+ * Unlike the `printf` syscall this takes an explicit length (no NUL scan, no
+ * format interpretation), which is what a real stdio `fwrite` needs.
+ */
+static uint32_t sys_write(const char *buf, uint32_t len) {
+    for(uint32_t i = 0; i < len; i++)
+        putchar_(buf[i]);
+    return len;
+}
+
+/**
+ * @brief `fread` syscall (#13): read the next 512-byte block of @p f into
+ *        @p buf (which must be at least 512 bytes) and report EOF via @c f->eof.
+ *
+ * @return The block size (512); the caller trims the final block using
+ *         @c f->len.
+ */
+static uint32_t sys_fread(file *f, char *buf) {
+    if(!f || !buf)
+        return 0;
+    vfs_file_read(f, buf);
+    return 512;
+}
+
+/** @brief `time` syscall (#14): seconds since the Unix epoch (from the RTC). */
+static uint32_t sys_time(void) {
+    return rtc_now_unix();
+}
+
+/** @brief `clock` syscall (#15): milliseconds of uptime (from the PIT). */
+static uint32_t sys_clock(void) {
+    return pit_ms();
+}
 
 /** Call number → implementation. NULL entries are unimplemented. */
 static void *syscalls[] = {
@@ -35,7 +77,12 @@ static void *syscalls[] = {
     &vfs_file_close_user,       // fclose   7
     NULL,                       // PWD      8
     &umalloc_sys,               // malloc   9
-    &ufree_sys                  // free     10
+    &ufree_sys,                 // free     10
+    &urealloc_sys,              // realloc  11
+    &sys_write,                 // write    12
+    &sys_fread,                 // fread    13
+    &sys_time,                  // time     14
+    &sys_clock                  // clock    15
 };
 
 /**
@@ -55,7 +102,9 @@ void syscall_init() {
  * @param re Saved register frame from the asm stub.
  */
 void syscall_disp(struct regs *re) {
+#if SYSCALL_TRACE
     printf("syscall_disp() eax %u ebx %u ecx %u\n", re->eax, re->ebx, re->ecx);
+#endif
     if(re->eax >= MAX_SYSCALL) {
         re->eax = -1;
         return;

@@ -94,6 +94,14 @@ int load_elf_file(char *name) {
     uint32_t j = 0;
     int file_size = 0;
     while(f->eof != 1) {
+        // The staging window is [MEMORY_LOAD_ADDRESS, 0x800000) - the programs'
+        // own address space starts at 0x800000. Refuse a file that would spill
+        // past it rather than corrupting memory.
+        if((uint32_t) (j * 512) >= (0x800000u - MEMORY_LOAD_ADDRESS)) {
+            printf("elf: file too large for the load window\n");
+            vfs_file_close(f);
+            return 0;
+        }
         // The executable needs more memory, so reserve it
         if(((j + 8) % 8) == 0) {
             if(!vmm_map(get_kern_directory(), (uint32_t) MEMORY_LOAD_ADDRESS + (j * 512), PAGE_PRESENT | PAGE_RW)) {
@@ -115,46 +123,56 @@ int load_elf_file(char *name) {
  * Moves the executable parts to the correct virtual address for execution
  */
 int load_elf_relocate(thread_t *thread, page_dir_t *pdir, elf_header_t *eh) {
-    // Get the program header
     elf_program_header_t *ph = (elf_program_header_t *) ((uint32_t) eh + eh->program_header);
-    // Get the entry point of the program
     thread->eip = eh->entry;
-    // Get the base image virtual address
-    thread->image_base = ph[0].p_vaddr;
-    
-    // Relocate the executable program parts into the correct memory locations
-    uint32_t i, last = 0;
-    for(i = 0; i < eh->entry_number_prog_header; i++) {
-        // If the part is executable
-        if(ph[i].p_type == 1) {
-            if(ph[i].p_mem_size == 0)
-                continue;
-            
-            // Allocate pages for the program executable
-            for(uint32_t j = 0; j <= ph[i].p_file_size / PAGE_SIZE; j++) {
-                // Map executable in kernel and proc page directory
-                if(!vmm_map(get_kern_directory(), ph[i].p_vaddr + (j * PAGE_SIZE), PAGE_PRESENT | PAGE_RW) ||
-                   !vmm_map_phys(pdir, ph[i].p_vaddr + (j * PAGE_SIZE), (uint32_t) get_phys_addr(get_kern_directory(), ph[i].p_vaddr), PAGE_PRESENT | PAGE_RW | PAGE_USER)) {
-                    printf("Error mapping memory");
-                    return 0;
-                }
+
+    uint32_t img_lo = 0xFFFFFFFF, img_hi = 0;
+
+    for(uint32_t i = 0; i < eh->entry_number_prog_header; i++) {
+        if(ph[i].p_type != 1 || ph[i].p_mem_size == 0)   /* PT_LOAD only */
+            continue;
+
+        /* The span the segment occupies in memory: from its page-aligned base
+         * up to p_vaddr + p_mem_size (p_mem_size, not p_file_size, so the .bss
+         * tail past the file bytes is mapped too). */
+        uint32_t seg_lo = ph[i].p_vaddr & ~(PAGE_SIZE - 1);
+        uint32_t seg_hi = ph[i].p_vaddr + ph[i].p_mem_size;
+
+        if(seg_lo < img_lo) img_lo = seg_lo;
+        if(seg_hi > img_hi) img_hi = seg_hi;
+
+        /* Map every page of the span - each to its OWN fresh frame - in the
+         * kernel directory (so we can fill it now, while that directory is
+         * active) and in the target process directory. The old code mapped
+         * every page of a segment onto the single frame backing its first
+         * page, so any program larger than one page per segment was corrupt. */
+        for(uint32_t va = seg_lo; va < seg_hi; va += PAGE_SIZE) {
+            if(!vmm_map(get_kern_directory(), va, PAGE_PRESENT | PAGE_RW) ||
+               !vmm_map_phys(pdir, va,
+                             (uint32_t) get_phys_addr(get_kern_directory(), va),
+                             PAGE_PRESENT | PAGE_RW | PAGE_USER)) {
+                printf("elf: out of memory mapping segment at %x\n", va);
+                return 0;
             }
-            // Copy the executable into the correct memory location
-            memcpy((uint32_t *) ph[i].p_vaddr, (uint32_t *) ((uint32_t) MEMORY_LOAD_ADDRESS + ph[i].p_offset), ph[i].p_file_size);
-            memset((void *) ph[i].p_vaddr + ph[i].p_file_size, 0, ph[i].p_mem_size - ph[i].p_file_size);
-            // Unmap from kernel directory
-            for(uint32_t j = 0; j <= ph[i].p_file_size / PAGE_SIZE; j++) {
-                vmm_unmap_phys(get_kern_directory(), ph[i].p_vaddr + (j * PAGE_SIZE));
-            }
-            last = i;
         }
+
+        memcpy((void *) ph[i].p_vaddr,
+               (void *) ((uint32_t) MEMORY_LOAD_ADDRESS + ph[i].p_offset),
+               ph[i].p_file_size);
+        /* Zero the partial last page of .data and all of .bss. */
+        memset((void *) (ph[i].p_vaddr + ph[i].p_file_size), 0,
+               seg_hi - (ph[i].p_vaddr + ph[i].p_file_size));
+
+        for(uint32_t va = seg_lo; va < seg_hi; va += PAGE_SIZE)
+            vmm_unmap_phys(get_kern_directory(), va);
     }
-    // The size of the executable in memory is equal to the virtual address
-    // of the last section + the offset - the start
-    thread->image_size = ph[last].p_vaddr + ph[last].p_mem_size - thread->eip;
-    // Round up the image size
-    while((thread->image_size % PAGE_SIZE) != 0) {
-        thread->image_size++;
+
+    if(img_lo == 0xFFFFFFFF) {
+        printf("elf: no loadable segments\n");
+        return 0;
     }
+
+    thread->image_base = img_lo;
+    thread->image_size = (img_hi - img_lo + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1);
     return 1;
 }

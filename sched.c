@@ -128,6 +128,7 @@ void sched_init() {
     process_t *proc = (process_t *) kmalloc(sizeof(process_t));
     strcpy(proc->name, "console");
     thread_t *main_thread = (thread_t *) kmalloc(sizeof(thread_t));
+    thread_alloc_fpu_state(main_thread);
     proc->thread_list = main_thread;
     proc->threads = 1;
     main_thread->time = 10;
@@ -276,10 +277,20 @@ uint32_t schedule(uint32_t esp) {
     /* Move to the next process by priority / round-robin. */
     list = pick_next(top);
 
-    set_esp0(list->thread_list->stack_kernel_limit);
+    thread_t *nxt = list->thread_list;
+    if (nxt != cur) {
+        /* The kernel never lazily switches the FPU (CR0.EM stays clear, #NM is
+         * fatal), so preserve each thread's x87/SSE state across the switch -
+         * otherwise a float-using userspace thread (e.g. the Lua interpreter)
+         * has its register stack clobbered by any other thread on every tick. */
+        asm volatile("fxsave (%0)" :: "r"(cur->fpu_state) : "memory");
+        asm volatile("fxrstor (%0)" :: "r"(nxt->fpu_state) : "memory");
+    }
+
+    set_esp0(nxt->stack_kernel_limit);
     change_page_directory(list->pdir);
 
-    return list->thread_list->esp_kernel;
+    return nxt->esp_kernel;
 }
 
 void sched_yield(void) {

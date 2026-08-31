@@ -10,12 +10,29 @@
 #include <kheap.h>
 #include <pit.h>
 #include <printf.h>
+#include <fpu.h>
 
 /** asm helper (thread_asm) that returns twice, once in each thread. */
 extern void fork_eip();
 
 /** Next thread id to hand out (1 is the console's main thread). */
 static int pid = 2;
+
+/**
+ * @brief Attach a fresh, 16-byte-aligned FXSAVE area seeded with a clean FPU
+ *        state to @p thread. @return non-zero on success.
+ *
+ * Also used by @ref sched_init, which builds the console thread by hand.
+ */
+int thread_alloc_fpu_state(thread_t *thread) {
+    thread->fpu_state_raw = kmalloc(FPU_STATE_SIZE + FPU_STATE_ALIGN);
+    if(thread->fpu_state_raw == 0)
+        return 0;
+    thread->fpu_state = (uint8_t *) (((uintptr_t) thread->fpu_state_raw +
+                                     (FPU_STATE_ALIGN - 1)) & ~(uintptr_t) (FPU_STATE_ALIGN - 1));
+    fpu_default_state(thread->fpu_state);
+    return 1;
+}
 
 /**
  * @brief Allocate a zeroed thread control block, self-linked into a ring.
@@ -25,6 +42,10 @@ thread_t *create_thread() {
     thread_t *thread = (thread_t *) kmalloc(sizeof(thread_t));
     if(thread == 0)
         return 0;
+    if(!thread_alloc_fpu_state(thread)) {
+        kfree(thread);
+        return 0;
+    }
     thread->pid = pid++;
     thread->main = 0;
     thread->time = 10;
@@ -133,12 +154,13 @@ void stop_thread(int code) {
     cur->thread_list->next->prec = cur->thread_list->prec;
     cur->thread_list->prec->next = cur->thread_list->next;
     
-    vmm_unmap(cur->pdir, cur->thread_list->stack_limit - PAGE_SIZE);
-    vmm_unmap(cur->pdir, cur->thread_list->stack_kernel_limit - PAGE_SIZE);
-    for(int i = 0; i < 4; i++) {
-        vmm_unmap(cur->pdir, cur->thread_list->heap + (i * PAGE_SIZE));
-    }
-    
+    for(int p = 0; p < PROC_USER_STACK_PAGES; p++)
+        vmm_unmap(cur->pdir, thread->stack_limit - (p + 1) * PAGE_SIZE);
+    for(vmm_addr_t va = thread->heap; va < thread->heap_limit; va += PAGE_SIZE)
+        vmm_unmap(cur->pdir, va);
+    /* Kernel-stack frames are intentionally leaked - see remove_proc(). */
+
+    kfree(thread->fpu_state_raw);
     kfree(thread);
     
     sched_state(1);

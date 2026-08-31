@@ -12,3 +12,9 @@ void free(void *ptr) {
     asm volatile("lea (%0), %%ebx" : : "b" (ptr));
     syscall_call(10);
 }
+
+void *realloc(void *ptr, size_t nsize) {
+    asm volatile("lea (%0), %%ebx" : : "b" (ptr));
+    asm volatile("mov %0, %%ecx" : : "c" (nsize));
+    return syscall_call(11);
+}

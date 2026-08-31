@@ -27,14 +27,16 @@ typedef struct {
     heap_header_t *first_header;    /**< Head of the block list. */
 } heap_info_t;
 
-/** @brief Initialise a per-process heap over the 4 pages at @p addr. */
-void heap_init(vmm_addr_t *addr);
+/** @brief Initialise a per-process heap of @p bytes at @p addr. */
+void heap_init(vmm_addr_t *addr, size_t bytes);
 /** @brief Allocate @p len bytes from the process heap at @p heap. */
 void *umalloc(size_t len, vmm_addr_t *heap);
 /** @brief Free a block from the process heap at @p heap. */
 void ufree(void *ptr, vmm_addr_t *heap);
 
-/** @brief `malloc` syscall: allocate from the current process's heap. */
+/** @brief `malloc` syscall: allocate from the current process's heap, growing it if needed. */
 void *umalloc_sys(size_t len);
 /** @brief `free` syscall: release into the current process's heap. */
 void ufree_sys(void *ptr);
+/** @brief `realloc` syscall: resize a block in the current process's heap. */
+void *urealloc_sys(void *ptr, size_t nsize);

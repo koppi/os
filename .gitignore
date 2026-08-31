@@ -9,5 +9,7 @@ floppy.img
 apps/01/01
 apps/hello/hello
 apps/example/example
+apps/mem/mem
+apps/lua/lua
 os.sublime-workspace
 docs/

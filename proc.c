@@ -93,23 +93,43 @@ int start_proc(char *name, char *arguments) {
 /**
  *Builds the stack for a thread
  */
+/**
+ * Map @p pages consecutive pages from @p base into both the kernel directory
+ * (so start_proc, running on the kernel directory, can seed them) and the
+ * target process directory, zeroing each. Frames are then unmapped from the
+ * kernel directory once seeding is done (stack_fill / heap_fill).
+ */
+static int map_user_range(page_dir_t *pdir, vmm_addr_t base, int pages) {
+    for(int i = 0; i < pages; i++) {
+        vmm_addr_t va = base + (uint32_t) i * PAGE_SIZE;
+        if(!vmm_map(get_kern_directory(), va, PAGE_PRESENT | PAGE_RW) ||
+           !vmm_map_phys(pdir, va,
+                         (uint32_t) get_phys_addr(get_kern_directory(), va),
+                         PAGE_PRESENT | PAGE_RW | PAGE_USER))
+            return 0;
+        memset((void *) va, 0, PAGE_SIZE);
+    }
+    return 1;
+}
+
 int build_stack(thread_t *thread, page_dir_t *pdir, int nthreads) {
-    // Build the user stack
-    thread->esp = (uint32_t) (thread->image_base + thread->image_size + (PAGE_SIZE * 6 * nthreads));
-    thread->stack_limit = ((uint32_t) thread->esp + PAGE_SIZE);
-    
-    if(!vmm_map(get_kern_directory(), thread->esp, PAGE_PRESENT | PAGE_RW) ||
-        !vmm_map_phys(pdir, thread->esp, (uint32_t) get_phys_addr(get_kern_directory(), thread->esp), PAGE_PRESENT | PAGE_RW | PAGE_USER))
+    /* Per-thread footprint: user stack + kernel stack + heap, plus slack. Only
+     * the main thread (nthreads == 0) is laid out exactly; forked threads are
+     * offset by this much so they miss the image and each other. */
+    uint32_t span = (uint32_t) nthreads * PAGE_SIZE *
+                    (PROC_USER_STACK_PAGES + PROC_KERNEL_STACK_PAGES + PROC_HEAP_PAGES + 8);
+
+    uint32_t ustack_base = thread->image_base + thread->image_size + span;
+    if(!map_user_range(pdir, ustack_base, PROC_USER_STACK_PAGES))
         return 0;
-    
-    // Build the kernel stack
+    thread->esp = ustack_base;   /* real SP set by stack_fill() */
+    thread->stack_limit = ustack_base + PROC_USER_STACK_PAGES * PAGE_SIZE;
+
     thread->esp_kernel = thread->stack_limit;
-    thread->stack_kernel_limit = thread->esp_kernel + PAGE_SIZE;
-    
-    if(!vmm_map(get_kern_directory(), thread->esp_kernel, PAGE_PRESENT | PAGE_RW) ||
-        !vmm_map_phys(pdir, thread->esp_kernel, (uint32_t) get_phys_addr(get_kern_directory(), thread->esp_kernel), PAGE_PRESENT | PAGE_RW | PAGE_USER))
+    thread->stack_kernel_limit = thread->esp_kernel + PROC_KERNEL_STACK_PAGES * PAGE_SIZE;
+    if(!map_user_range(pdir, thread->esp_kernel, PROC_KERNEL_STACK_PAGES))
         return 0;
-    
+
     return 1;
 }
 
@@ -117,18 +137,17 @@ int build_stack(thread_t *thread, page_dir_t *pdir, int nthreads) {
  * Builds the heap for a userspace thread
  */
 int build_heap(thread_t *thread, page_dir_t *pdir, int nthreads) {
-    vmm_addr_t heap = thread->stack_kernel_limit + (PAGE_SIZE * 6 * nthreads);
-    
-    for(int i = 0; i < 4; i++) {
-        if(!vmm_map(get_kern_directory(), heap + (i * PAGE_SIZE), PAGE_PRESENT | PAGE_RW) ||
-           !vmm_map_phys(pdir, heap + (i * PAGE_SIZE), (uint32_t) get_phys_addr(get_kern_directory(), heap + (i * PAGE_SIZE)), PAGE_PRESENT | PAGE_RW | PAGE_USER))
-            return 0;
-    }
-    
+    uint32_t span = (uint32_t) nthreads * PAGE_SIZE *
+                    (PROC_USER_STACK_PAGES + PROC_KERNEL_STACK_PAGES + PROC_HEAP_PAGES + 8);
+    vmm_addr_t heap = thread->stack_kernel_limit + span;
+
+    if(!map_user_range(pdir, heap, PROC_HEAP_PAGES))
+        return 0;
+
     thread->heap = heap;
-    thread->heap_limit = heap + (PAGE_SIZE * 4);
-    
-    heap_init((vmm_addr_t *) heap);
+    thread->heap_limit = heap + PROC_HEAP_PAGES * PAGE_SIZE;
+
+    heap_init((vmm_addr_t *) heap, PROC_HEAP_PAGES * PAGE_SIZE);
 
     return 1;
 }
@@ -136,13 +155,16 @@ int build_heap(thread_t *thread, page_dir_t *pdir, int nthreads) {
 /**
  * Fills the heap with arguments
  */
+#define PROC_MAX_ARGV 15
+
 int heap_fill(thread_t *thread, char *name, char *arguments, uint32_t *argc, uint32_t *argv1) {
     *argc = 1;
-    char **argv = (char **) umalloc(10 * sizeof(char *), (vmm_addr_t *) thread->heap);
+    char **argv = (char **) umalloc((PROC_MAX_ARGV + 1) * sizeof(char *),
+                                    (vmm_addr_t *) thread->heap);
     argv[0] = (char *) umalloc(strlen(name) + 1, (vmm_addr_t *) thread->heap);
     strcpy(argv[0], name);
-    
-    while(*arguments) {
+
+    while(*arguments && *argc < PROC_MAX_ARGV) {
         char *p = strchr(arguments, ' ');
         if(p == 0) {
             argv[*argc] = (char *) umalloc(strlen(arguments) + 1, (vmm_addr_t *) thread->heap);
@@ -159,9 +181,12 @@ int heap_fill(thread_t *thread, char *name, char *arguments, uint32_t *argc, uin
         }
         arguments++;
     }
+    argv[*argc] = 0;   /* C requires argv[argc] == NULL */
+
     *argv1 = (uint32_t) argv;
-    vmm_unmap_phys(get_kern_directory(), (uint32_t) thread->heap);
-    
+    for(int i = 0; i < PROC_HEAP_PAGES; i++)
+        vmm_unmap_phys(get_kern_directory(), thread->heap + (uint32_t) i * PAGE_SIZE);
+
     return 1;
 }
 

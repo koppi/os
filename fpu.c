@@ -28,3 +28,22 @@ void fpu_init() {
     asm("mov %0, %%cr4" :: "r"(t));
     asm("fninit");
 }
+
+/**
+ * @brief Fill @p dst with the FXSAVE image of a freshly initialised FPU.
+ *
+ * Saves and restores the caller's own FPU state around the probe so it is safe
+ * to call at any time (the scheduler calls it once per thread creation).
+ *
+ * @p dst must be @ref FPU_STATE_ALIGN aligned. The scratch area is @c static and
+ * aligned by the linker: @c fxsave / @c fxrstor #GP on an unaligned operand and
+ * the kernel does not keep its stacks 16-byte aligned.
+ */
+void fpu_default_state(void *dst) {
+    static uint8_t saved[FPU_STATE_SIZE] __attribute__((aligned(FPU_STATE_ALIGN)));
+
+    asm volatile("fxsave (%0)" :: "r"(saved) : "memory");
+    asm volatile("fninit");
+    asm volatile("fxsave (%0)" :: "r"((uint8_t *) dst) : "memory");
+    asm volatile("fxrstor (%0)" :: "r"(saved) : "memory");
+}

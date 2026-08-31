@@ -91,3 +91,18 @@ void fclose(FILE *f) {
     asm volatile("lea (%0), %%ebx" : : "b" (f));
     syscall_call(7);
 }
+
+/* *INDENT-OFF* */
+size_t _write(const void *buf, size_t len) {
+    asm volatile("lea (%0), %%ebx" : : "b" (buf));
+    asm volatile("mov %0, %%ecx" : : "c" (len));
+    return (size_t) syscall_call(12);
+}
+
+int fread(void *ptr, size_t size, FILE *f) {
+    (void) size;
+    asm volatile("lea (%0), %%ebx" : : "b" (f));
+    asm volatile("lea (%0), %%ecx" : : "c" (ptr));
+    return (int) syscall_call(13);
+}
+/* *INDENT-ON* */

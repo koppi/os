@@ -61,6 +61,14 @@ void vbe_init() {
 }
 
 void refresh_screen() {
+    /* Console/text boot: there is no framebuffer to composite, and
+     * paint_desktop() polls the shared keyboard ring - running it here would
+     * race the console for every keystroke. Park the thread instead. */
+    if (!bfb_addr) {
+        for (;;)
+            halt();
+    }
+
     for (;;) {
         paint_desktop();
         memcpy(vbemem.mem, vbemem.buffer, vbemem.buffer_size);

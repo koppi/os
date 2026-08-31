@@ -21,6 +21,7 @@
 
 void *malloc(size_t len);
 void free(void *ptr);
+void *realloc(void *ptr, size_t nsize);
 
 #endif
 

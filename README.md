@@ -209,16 +209,60 @@ for anything more (there is no TLS or resolver cache).
   `system_calls`); headers in [`include/lib/`](include/lib). Programs are
   built position-dependent (`-fno-pic -fno-pie`): the `int 0x72` ABI passes the
   first argument in `%ebx`, which PIC code reserves for the GOT.
-* Per-process user heap ([`heap.c`](heap.c)) backing the `malloc`/`free`
-  syscalls; a first-fit free list over 4 pages.
+* Per-process user heap ([`heap.c`](heap.c)) backing the `malloc`/`free`/
+  `realloc` syscalls: a first-fit free list that starts at 4 pages and
+  [grows on demand](heap.c) (`heap_grow`) up to 64 MiB. Each process also gets
+  a **256 KiB** user stack and a 16 KiB ring-0 stack ([`proc.c`](proc.c)).
+* `int 0x72` calls: `printf`(0), `gets`(1), `fork`(3), `exit`(4), return(5),
+  `fopen`(6), `fclose`(7), `malloc`(9), `free`(10), `realloc`(11),
+  `write`(12, length-delimited), `fread`(13, 512-byte block),
+  `time`(14, RTC), `clock`(15, PIT) — see [`syscall.c`](syscall.c).
+* The ELF loader ([`elf.c`](elf.c)) maps every page of a `PT_LOAD` segment to
+  its own frame and covers the `.bss` tail, so multi-page ring-3 binaries load.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
-  its own linker script and no crt0 (entry point is `main`). All three are
-  copied onto both disk images:
+  its own linker script and no crt0 (entry point is `main`), copied onto both
+  disk images:
   * [`apps/hello`](apps/hello) — prints a line via the `printf` syscall and
     returns
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — reads a number, a char and a string with
     `scanf` and echoes them back
+  * [`apps/mem`](apps/mem) — exercises heap growth, `realloc` and deep
+    recursion (staged as `mem`)
+  * [`apps/lua`](apps/lua) — **Lua 5.4.8**, ported to run as a ring-3 program
+    (staged as `lua`); see below
+
+### Lua
+[`apps/lua`](apps/lua) is a full port of the reference **Lua 5.4.8**
+interpreter. The vendored `src/` tree is unmodified bar a two-line
+[`luaconf.h`](apps/lua/src/luaconf.h) note; everything platform-specific lives
+in [`apps/lua/shim/`](apps/lua/shim):
+
+* **libm** — `sin`/`cos`/`tan`/`atan2`/`exp`/`log`/`pow`/`sqrt`/`floor`/`ceil`/
+  `fmod`/`frexp`/`ldexp` implemented directly on the **x87 FPU**
+  ([`libm.S`](apps/lua/shim/libm.S)). The scheduler now saves per-thread FPU
+  state ([`fpu.c`](fpu.c), [`sched.c`](sched.c)) so this is safe under preemption.
+* **setjmp/longjmp** — 6-word i386 buffer ([`port_asm.S`](apps/lua/shim/port_asm.S)),
+  used for Lua's error handling.
+* **stdio** — `stdout`/`stderr` go to the console via the `write` syscall,
+  `stdin` reads a line at a time via `gets`, and files on the FAT volume are
+  read through `fopen`/`fread`/`fclose` ([`stdio.c`](apps/lua/shim/stdio.c)).
+* `strtod`, a standard-signature `string.c`, ascii `ctype.h`, a civil-time
+  `time.c` (for `os.time`/`os.date`), and the in-tree
+  [`printf.c`](printf.c)/[`arith64.c`](arith64.c) round it out.
+
+`lua_Number` is `double` and `lua_Integer` is 64-bit. Libraries: `base`,
+`package`, `coroutine`, `table`, `string`, `math`, `utf8`, and a trimmed `os`
+(`time`/`date`/`clock`/`getenv`/`exit`; `execute`/`remove`/`rename` fail). No
+`io` or `debug`. `require` searches `/hda/?.lua` and `/fda/?.lua`.
+
+```
+start hda/lua                 -- REPL (exit with os.exit() or Ctrl-D)
+start hda/lua /hda/t.lua      -- run a script; t.lua is the port's self-test
+```
+
+There is no Ctrl-C, so a non-terminating script needs a `reboot`. See
+[`apps/lua/PORTING.md`](apps/lua/PORTING.md) for the full build and shim notes.
 
 ### Console shell
 The kernel debug console ([`commands.c`](commands.c), `kmain_console`) runs as
@@ -299,7 +343,8 @@ FAT volume with the compiled apps copied in.
 ```
 
 Both scripts use mtools (no root / loop device) and stage `hello`, `tst`,
-`example` and the `mouse.bmp` cursor bitmap. The in-kernel FAT driver only
+`example`, `mem`, the `lua` interpreter (with `t.lua` and `mod.lua`), and the
+`mouse.bmp` cursor bitmap. The in-kernel FAT driver only
 handles one sector per cluster, so the images are made with
 `mkfs.fat -C … 1440` / `mkfs.fat -s 1`.
 

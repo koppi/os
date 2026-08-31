@@ -33,6 +33,8 @@ void printf(char *buffer, ...);
 void scanf(char *format, ...);
 FILE *fopen(char *filename, char *mode);
 void fclose(FILE *f);
+size_t _write(const void *buf, size_t len);
+int fread(void *ptr, size_t size, FILE *f);
 
 #endif
 

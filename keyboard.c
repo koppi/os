@@ -183,6 +183,11 @@ void gets(char *str, size_t size) {
         if(c == 0)
             continue;
         keyboard_invalidate_lastkey();
+        if(c == 4 && count == 0) {   /* Ctrl-D on an empty line: end-of-input */
+            str[0] = 4;
+            str[1] = '\0';
+            break;
+        }
         if(((int) c >= 32) && ((int) c <= 122) && count < (int)size - 1)
             str[count++] = c;
         else if(c == '\b')

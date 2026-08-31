@@ -18,6 +18,13 @@
 /** Virtual address of the userspace return stub (see sched.c). */
 #define RETURN_ADDR 0x400000
 
+/** Per-process userspace stack, in 4 KiB pages (256 KiB). */
+#define PROC_USER_STACK_PAGES   64
+/** Per-process ring-0 stack for syscalls / IRQs, in pages (16 KiB). */
+#define PROC_KERNEL_STACK_PAGES 4
+/** Initial userspace heap arena, in pages. Grows on demand (see heap.c). */
+#define PROC_HEAP_PAGES         4
+
 /** Register frame pushed by an interrupt stub with no error code. */
 struct regs {
     uint32_t ds;

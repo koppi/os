@@ -26,12 +26,16 @@ typedef struct thread {
     uint32_t heap_limit;            /**< Top of the user heap arena. */
     uint32_t image_base;            /**< Lowest vaddr of the loaded image. */
     uint32_t image_size;            /**< Image span, page-rounded. */
+    uint8_t *fpu_state;            /**< 16-byte-aligned FXSAVE area (@ref FPU_STATE_SIZE). */
+    void *fpu_state_raw;          /**< Unaligned base of @c fpu_state (for @c kfree). */
     struct thread *next;            /**< Next thread in the ring. */
     struct thread *prec;            /**< Previous thread in the ring. */
 } thread_t;
 
 /** @brief Allocate a zeroed thread control block with a fresh pid. */
 thread_t *create_thread();
+/** @brief Attach a clean, aligned FXSAVE area to @p thread. @return non-zero on success. */
+int thread_alloc_fpu_state(thread_t *thread);
 /** @brief `fork` syscall — add a thread to the current process. */
 int start_thread();
 /** @brief `exit` syscall — stop the current thread with status @p code. */
