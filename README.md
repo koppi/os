@@ -208,6 +208,7 @@ disk. Programs can be run back to back in one session.
 
 ```bash
 make kernel.lst   # full objdump disassembly
+make docs         # Doxygen API docs -> docs/html/index.html (needs doxygen)
 make cloc         # source line count (needs cloc)
 make clean        # remove build artifacts
 ```
