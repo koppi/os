@@ -1,3 +1,10 @@
+/**
+ * @file vfs.c
+ * @brief Virtual filesystem layer: routes device-qualified paths ("fda/x",
+ *        "hda/y") to the right mounted filesystem and serialises every
+ *        operation against the cooperative scheduler (the block drivers and
+ *        fat.c share non-reentrant buffers).
+ */
 //#include <console.h>
 //#include <hal/hal.h>
 #include <lib/string.h>

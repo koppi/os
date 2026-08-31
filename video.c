@@ -1,3 +1,9 @@
+/**
+ * @file video.c
+ * @brief Linear-framebuffer graphics: maps the boot framebuffer, keeps a
+ *        software back buffer, and provides pixel/line/rect/text/blit
+ *        primitives plus the per-frame @ref refresh_screen swap.
+ */
 #include <video.h>
 
 #include <stdlib.h>

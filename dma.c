@@ -1,3 +1,8 @@
+/**
+ * @file dma.c
+ * @brief 8237 ISA DMA channel programming (address/count/page/mode registers).
+ *        Every function is a direct register poke; see @ref dma.h for the API.
+ */
 #include <dma.h>
 #include <io.h>
 

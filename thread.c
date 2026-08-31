@@ -1,3 +1,7 @@
+/**
+ * @file thread.c
+ * @brief Threads within a process: allocation, `fork` and `exit`.
+ */
 #include <proc.h>
 #include <thread.h>
 #include <io.h>
@@ -7,11 +11,16 @@
 #include <pit.h>
 #include <printf.h>
 
+/** asm helper (thread_asm) that returns twice, once in each thread. */
 extern void fork_eip();
 
+/** Next thread id to hand out (1 is the console's main thread). */
 static int pid = 2;
 
-/* Allocates space for a new thread */
+/**
+ * @brief Allocate a zeroed thread control block, self-linked into a ring.
+ * @return The new thread, or 0 on allocation failure.
+ */
 thread_t *create_thread() {
     thread_t *thread = (thread_t *) kmalloc(sizeof(thread_t));
     if(thread == 0)
@@ -25,7 +34,15 @@ thread_t *create_thread() {
     return thread;
 }
 
-/* Starts a new thread (fork) */
+/**
+ * @brief `fork` syscall — clone the current thread within its process.
+ *
+ * Builds a fresh stack and heap for the child, copies the parent's stack and
+ * first heap page, links the child into the thread ring, then forks the EIP:
+ * the parent returns the child's pid, the child returns 0.
+ *
+ * @return Child pid in the parent, 0 in the child, -1 on failure.
+ */
 int start_thread() {
     sched_state(0);
     disable_int();
@@ -84,7 +101,15 @@ int start_thread() {
     }
 }
 
-/* Terminates the calling thread */
+/**
+ * @brief `exit` syscall — terminate the calling thread.
+ *
+ * Stopping a process's main thread stops the whole process (@ref end_proc);
+ * otherwise the thread is unlinked, its stack/heap unmapped and its control
+ * block freed. Spins until the scheduler switches away.
+ *
+ * @param code Exit status (passed to @ref end_proc for the main thread).
+ */
 void stop_thread(int code) {
     sched_state(0);
 

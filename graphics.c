@@ -1,3 +1,8 @@
+/**
+ * @file graphics.c
+ * @brief The microui desktop: mouse/keyboard input feeding, the log window and
+ *        cursor blit, run once per frame by the "draw_thread" kernel process.
+ */
 #include <graphics.h>
 
 #include <video.h>

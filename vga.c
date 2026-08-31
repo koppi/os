@@ -1,3 +1,9 @@
+/**
+ * @file vga.c
+ * @brief VGA text-mode console: the 80x25 character buffer at 0xB8000, cursor
+ *        control through the CRTC registers, scrolling and colour handling.
+ *        Used as the console when the loader provides no framebuffer.
+ */
 #include <io.h>
 #include <lib/string.h>
 #include <log.h>

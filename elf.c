@@ -1,3 +1,9 @@
+/**
+ * @file elf.c
+ * @brief 32-bit ELF loader: stages the file at a fixed load address, validates
+ *        the header and copies each PT_LOAD segment to its virtual address in
+ *        the target process's page directory.
+ */
 #include <proc.h>
 #include <memory.h>
 #include <vfs.h>

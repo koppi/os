@@ -1,3 +1,8 @@
+/**
+ * @file ata.c
+ * @brief PIO-mode ATA/IDE disk driver: IDENTIFY-based drive detection and
+ *        polled 512-byte sector reads, registered with the VFS as "hd{a,b,..}".
+ */
 #include <ata.h>
 
 #include <device.h>

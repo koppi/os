@@ -1,3 +1,9 @@
+/**
+ * @file floppy.c
+ * @brief 82077AA floppy-controller driver: FDC command sequencing, ISA-DMA
+ *        sector transfers, motor/seek control and LBA↔CHS conversion for
+ *        1.44 MB media. Registered with the VFS as "fd{a,b}".
+ */
 #include <floppy.h>
 #include <device.h>
 #include <lib/string.h>

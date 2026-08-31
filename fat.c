@@ -1,3 +1,11 @@
+/**
+ * @file fat.c
+ * @brief FAT12/16 filesystem driver.
+ *
+ * Mounts a volume by parsing its BPB into @c device_t::minfo, then implements
+ * the VFS operation vector (open, read, ls, cd, touch, delete) over the raw
+ * sector reads provided by the block driver. One sector per cluster is assumed.
+ */
 #include <assert.h>
 #include <lib/string.h>
 #include <fat.h>

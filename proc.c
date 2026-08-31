@@ -1,3 +1,8 @@
+/**
+ * @file proc.c
+ * @brief Process lifecycle: address-space creation, ELF load, stack/heap/argv
+ *        setup, the initial iret frame, exit and teardown.
+ */
 #include <proc.h>
 #include <io.h>
 #include <tss.h>

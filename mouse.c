@@ -1,3 +1,8 @@
+/**
+ * @file mouse.c
+ * @brief PS/2 mouse driver: 3-byte packet assembly in the IRQ handler,
+ *        position/button tracking and press/release edge helpers.
+ */
 #include <mouse.h>
 #include <io.h>
 #include <idt.h>

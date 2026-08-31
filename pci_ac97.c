@@ -1,3 +1,8 @@
+/**
+ * @file pci_ac97.c
+ * @brief Minimal AC'97 audio driver: locates the codec on PCI, sets up a
+ *        buffer-descriptor list and plays PCM buffers via bus-master DMA.
+ */
 #include <pci.h>
 #include <log.h>
 #include <io.h>

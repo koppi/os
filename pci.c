@@ -1,3 +1,8 @@
+/**
+ * @file pci.c
+ * @brief PCI configuration-space access via the 0xCF8/0xCFC I/O ports, and a
+ *        bus enumeration used at boot to log the devices present.
+ */
 #include <pci.h>
 
 #include <io.h>

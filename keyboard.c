@@ -1,3 +1,12 @@
+/**
+ * @file keyboard.c
+ * @brief PS/2 keyboard driver.
+ *
+ * The IRQ handler (@ref keyboard_read_key) decodes scancode set 1 into ASCII
+ * and pushes it onto a small ring buffer; consumers drain it with
+ * @ref keyboard_get_lastkey / @ref keyboard_invalidate_lastkey. The ring avoids
+ * losing keys whose make+break pair arrives between two polls.
+ */
 #include <keyboard.h>
 #include <io.h>
 #include <idt.h>
@@ -63,8 +72,10 @@ static volatile uint32_t kbd_tail = 0; // next read slot   (consumer only)
 /* bit 0: left shift held, bit 1: right shift held */
 static volatile uint8_t shift_state = 0;
 
+/** asm IRQ stub (keyboard_asm) that calls @ref keyboard_read_key. */
 extern void keyboard_int();
 
+/** @brief Push one decoded character onto the ring (drops it if full). */
 static void kbd_buf_push(char c) {
     uint32_t next = (kbd_head + 1) & KBD_BUF_MASK;
     if(next == kbd_tail)
@@ -73,6 +84,7 @@ static void kbd_buf_push(char c) {
     kbd_head = next;
 }
 
+/** @brief Reset the ring, install IRQ 1 and enable the PS/2 first port. */
 void keyboard_init() {
     kbd_head = kbd_tail = 0;
     shift_state = 0;
@@ -80,6 +92,10 @@ void keyboard_init() {
     outportb(KBD_CHECK, 0xAE);
 }
 
+/**
+ * @brief IRQ-context: read one scancode, track shift, and buffer the ASCII
+ *        value of make codes that map to a printable character.
+ */
 void keyboard_read_key() {
     if(!(inportb(KBD_CHECK) & 1))
         return;
@@ -113,19 +129,20 @@ void keyboard_read_key() {
         kbd_buf_push(c);
 }
 
-/* Peek at the next buffered keystroke without consuming it (0 if none). */
+/** @brief Peek the oldest buffered keystroke without consuming it (0 if none). */
 char keyboard_get_lastkey() {
     if(kbd_head == kbd_tail)
         return 0;
     return kbd_buf[kbd_tail];
 }
 
-/* Consume the keystroke last returned by keyboard_get_lastkey(). */
+/** @brief Consume the keystroke last returned by @ref keyboard_get_lastkey. */
 void keyboard_invalidate_lastkey() {
     if(kbd_head != kbd_tail)
         kbd_tail = (kbd_tail + 1) & KBD_BUF_MASK;
 }
 
+/** @brief Spin until a key is buffered, then return and consume it. */
 char getchar() {
     enable_int();
     while(1) {
@@ -137,6 +154,15 @@ char getchar() {
     }
 }
 
+/**
+ * @brief Read an echoed line into @p str (backs the scanf syscall).
+ *
+ * Disables preemption while reading. Accepts printable ASCII (32-122), handles
+ * backspace, and terminates on newline.
+ *
+ * @param str  Destination buffer.
+ * @param size Buffer size in bytes.
+ */
 void gets(char *str, size_t size) {
     int count = 0;
     char c;

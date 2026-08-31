@@ -1,3 +1,8 @@
+/**
+ * @file sound.c
+ * @brief Sound Blaster 16 driver plus the glue that feeds the hxcmod MOD
+ *        player's output to the card over auto-init DMA.
+ */
 #include <sound.h>
 #include <io.h>
 #include <lib/string.h>

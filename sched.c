@@ -1,3 +1,12 @@
+/**
+ * @file sched.c
+ * @brief Cooperative round-robin scheduler and the first process.
+ *
+ * @ref sched_init builds process 1 by hand and `iret`s into @ref main_proc,
+ * which brings up the block devices, starts the framebuffer redraw thread and
+ * runs the console. The timer IRQ calls @ref schedule to rotate the process /
+ * thread rings while @ref sched_on is set.
+ */
 #include <sched.h>
 
 #include <io.h>

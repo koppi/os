@@ -1,3 +1,8 @@
+/**
+ * @file rtc.c
+ * @brief MC146818 RTC / CMOS access: read & write the wall-clock date/time
+ *        (handling BCD vs binary and 12/24-hour mode) and derive the weekday.
+ */
 #include <rtc.h>
 #include <lib/string.h>
 #include <kheap.h>

@@ -1,7 +1,13 @@
+/**
+ * @file pcspk.c
+ * @brief PC-speaker tones: PIT channel 2 in square-wave mode gated to the
+ *        speaker via port 0x61.
+ */
 #include <pcspk.h>
 
 #include <io.h>
 
+/** Equal-tempered note frequencies (Hz), [octave 0-6][semitone 0-11]. */
 static float notes[7][12] = {
     { 130.81, 138.59, 146.83, 155.56, 164.81, 174.61, 185.0,
         196.0, 207.65, 220.0, 227.31, 246.96 },
@@ -19,10 +25,20 @@ static float notes[7][12] = {
         12543.84, 13289.76, 14080.0, 14547.84, 15805.44 }
 };
 
+/**
+ * @brief Sound the note (@p octave, @p note) on the PC speaker.
+ * @param octave 0-6.
+ * @param note   0-11 (C..B).
+ */
 void beep_note(uint8_t octave, uint8_t note) {
     beep((int) notes[octave][note]);
 }
 
+/**
+ * @brief Start a continuous tone.
+ * @param value Frequency in Hz; out-of-range values leave the speaker silent
+ *              but still gated on.
+ */
 void beep(int value) {
   unsigned int count = 0;
 
@@ -38,6 +54,7 @@ void beep(int value) {
   outportb(0x61, inportb(0x61) | 3);
 }
 
+/** @brief Silence the speaker (clear the port 0x61 gate bits). */
 void beep_off(void) {
   outportb(0x61, inportb(0x61) & 0xFC);
 }

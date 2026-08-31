@@ -1,3 +1,8 @@
+/**
+ * @file uart.c
+ * @brief 16550 UART (COM1) driver and the @ref chardev_t wrapper that makes it
+ *        the kernel console / log sink during boot.
+ */
 #include <types.h>
 
 #include <uart.h>
