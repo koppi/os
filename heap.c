@@ -1,3 +1,8 @@
+/**
+ * @file heap.c
+ * @brief Per-process userspace heap (first-fit) backing the `malloc`/`free`
+ *        system calls; each process gets a 4-page arena.
+ */
 #include <heap.h>
 #include <mm.h>
 #include <paging.h>

@@ -1,3 +1,8 @@
+/**
+ * @file multiboot.c
+ * @brief Multiboot 1 information parsing: memory sizes, the E820 map and
+ *        module command-line helpers.
+ */
 #include <multiboot.h>
 #include <bfb.h>
 #include <stddef.h>

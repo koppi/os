@@ -1,3 +1,9 @@
+/**
+ * @file vmm.c
+ * @brief Virtual memory manager — page-directory/table maps and per-process
+ *        address spaces, layered on the physical frame allocator (mm.c) and
+ *        the page-table storage allocator (paging.c).
+ */
 #include <io.h>
 #include <memory.h>
 #include <lib/string.h>

@@ -1,3 +1,9 @@
+/**
+ * @file multiboot2.h
+ * @brief Multiboot 2 header magic, tag identifiers and the tag structures the
+ *        parser walks (basic meminfo, memory map, framebuffer, cmdline, ...).
+ * @see https://www.gnu.org/software/grub/manual/multiboot2/
+ */
 #pragma once
 
 #define MULTIBOOT2_HEADER_MAGIC      0xe85250d6

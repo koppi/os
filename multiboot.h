@@ -1,3 +1,8 @@
+/**
+ * @file multiboot.h
+ * @brief Multiboot 1 header magic/flags and the boot information structures.
+ * @see https://www.gnu.org/software/grub/manual/multiboot/
+ */
 #pragma once
 
 #include <multiboot_memmap_struct.h>

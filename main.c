@@ -1,3 +1,7 @@
+/**
+ * @file main.c
+ * @brief Kernel entry point and boot-time bring-up sequence.
+ */
 #include <ver.h>
 #include <log.h>
 #include <uart.h>
@@ -29,9 +33,15 @@
 
 #include "cpu.h"
 
+/** The running OS version, printed at boot. */
 struct version_tuplet os_ver = {.maj = 0, .min = 0, .rev = 0};
+
+/** Total memory (KiB) reported by the multiboot2 basic-meminfo tag. */
 extern uint32_t multiboot2_mem_size;
 
+/**
+ * @brief Read the CMOS floppy-drive type byte and log both drives.
+ */
 static void floppy_detect() {
     outportb(0x70, 0x10);
     unsigned char c = inportb(0x71);
@@ -43,6 +53,16 @@ static void floppy_detect() {
     klogf(LOG_INFO, "Floppy drive B: %s\n", drive_type[c & 0xF]);
 }
 
+/**
+ * @brief C entry point, called from boot.S once a stack is set up.
+ *
+ * Parses the multiboot info, initialises physical memory and paging, brings up
+ * every subsystem (console, GDT/IDT, PIC/PIT, drivers, VFS, syscalls, TSS,
+ * RTC, PCI) and finally calls @ref sched_init, which does not return.
+ *
+ * @param magic Multiboot loader magic in EAX (identifies MB1 vs MB2).
+ * @param addr  Physical address of the multiboot information structure.
+ */
 void kernel_main(unsigned long magic, unsigned long addr)
 {
     unsigned size = *(unsigned*)addr;

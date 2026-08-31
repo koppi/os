@@ -1,3 +1,8 @@
+/**
+ * @file multiboot2.c
+ * @brief Multiboot 2 tag walker: extracts basic memory info, the E820 memory
+ *        map and the framebuffer parameters handed over by GRUB.
+ */
 #include <types.h>
 #include <stddef.h>
 #include <multiboot.h>
@@ -9,6 +14,7 @@
 
 #include <bfb.h>
 
+/** Multiboot 2 tags are padded to an 8-byte boundary. */
 #define MULTIBOOT2_TAG_ALIGN  8
 
 const char * tag_names[] = {

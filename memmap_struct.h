@@ -1,3 +1,11 @@
+/**
+ * @file memmap_struct.h
+ * @brief The normalised E820 memory-map entry type plus the range-type enum
+ *        and a helper to stringify it for boot logging.
+ *
+ * The `#define` offsets mirror the raw on-wire E820 layout for the assembly
+ * boot code.
+ */
 #pragma once
 
 #define E820MEMMAP_OFFSET_BASE_ADDRESS  0x00

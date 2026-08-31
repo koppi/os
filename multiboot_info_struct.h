@@ -1,3 +1,8 @@
+/**
+ * @file multiboot_info_struct.h
+ * @brief The Multiboot 1 information block passed by the loader in EBX, and
+ *        the field offsets used by the assembly boot stub.
+ */
 #pragma once
 
 #define MULTIBOOT_INFO_OFFSET_FLAGS        0x00

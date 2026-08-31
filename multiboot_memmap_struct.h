@@ -1,3 +1,7 @@
+/**
+ * @file multiboot_memmap_struct.h
+ * @brief One entry of the Multiboot 1 memory map (a size-prefixed E820 record).
+ */
 #pragma once
 
 #include <memmap_struct.h>

@@ -1,3 +1,8 @@
+/**
+ * @file kheap.c
+ * @brief Kernel heap — one first-fit free list spanning from the end of the
+ *        kernel image to the top of the identity-mapped low 4 MiB.
+ */
 #include <kheap.h>
 #include <mm.h>
 #include <paging.h>
