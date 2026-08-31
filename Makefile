@@ -32,6 +32,11 @@ CFLAGS += -fno-omit-frame-pointer -ffreestanding -fno-builtin
 CFLAGS += -nodefaultlibs
 #CFLAGS += -nostdlib -nostdinc -fno-builtin
 CFLAGS += -I. -Iinclude
+
+GIT_COUNT := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
+GIT_HASH_TAIL := $(shell git rev-parse HEAD 2>/dev/null | sed 's/^.\{32\}//')
+GIT_REV := $(shell printf '%u' 0x$(GIT_HASH_TAIL) 2>/dev/null || echo 0)
+CFLAGS += -DOS_VER_MAJ=0 -DOS_VER_MIN=$(GIT_COUNT) -DOS_VER_REV=$(GIT_REV)
 #CFLAGS += -Wno-unused-parameter -Wno-unused-variable -Wno-unused-function
 #CFLAGS += -Wno-type-limits -Wno-array-bounds -Wno-discarded-qualifiers
 #CFLAGS += -Wno-int-conversion -Wno-sign-compare -Wno-maybe-uninitialized

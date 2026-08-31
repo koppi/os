@@ -5,7 +5,8 @@ multiboot kernel written in C with a handful of drivers, a FAT filesystem, a
 preemptive priority-scheduled process/thread model, a minimal C library and a
 few userspace programs.
 
-Current version: **0.0.0** (see [`ver.h`](ver.h)).
+Current version: **git-derived** at build time — `(major, minor, revision)` is
+computed from the last commit (`ver.h`, `main.c`, `Makefile`).
 
 ## Features
 

@@ -37,8 +37,24 @@
 
 #include "cpu.h"
 
-/** The running OS version, printed at boot. */
-struct version_tuplet os_ver = {.maj = 0, .min = 0, .rev = 0};
+/** The running OS version, printed at boot. Derived from git at build time. */
+struct version_tuplet os_ver = {
+#ifdef OS_VER_MAJ
+    .maj = OS_VER_MAJ,
+#else
+    .maj = 0,
+#endif
+#ifdef OS_VER_MIN
+    .min = OS_VER_MIN,
+#else
+    .min = 0,
+#endif
+#ifdef OS_VER_REV
+    .rev = OS_VER_REV,
+#else
+    .rev = 0,
+#endif
+};
 
 /** Total memory (KiB) reported by the multiboot2 basic-meminfo tag. */
 extern uint32_t multiboot2_mem_size;
