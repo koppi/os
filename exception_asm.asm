@@ -66,7 +66,7 @@ pf_handle:
     mov gs, ax
     push esp
     call ex_page_fault
-    add esp, $4
+    add esp, 4
     iretd
 
 extern syscall_disp
@@ -85,7 +85,7 @@ syscall_handle:
     mov gs, ax
     push esp
     call syscall_disp
-    add esp, $4
+    add esp, 4
     pop gs
     pop fs
     pop es
