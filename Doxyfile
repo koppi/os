@@ -30,7 +30,7 @@ EXCLUDE_PATTERNS       = */iso/* */docs/* */lib/*
 
 # Preprocessing: the kernel builds with -DDEBUG and these include roots.
 INCLUDE_PATH           = . include
-PREDEFINED             = DEBUG __ASSEMBLER__=0
+PREDEFINED             = DEBUG __ASSEMBLER__=0 "__attribute__(x)=" "volatile="
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = YES
 

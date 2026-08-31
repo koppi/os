@@ -1,0 +1,200 @@
+/**
+ * @file usb.c
+ * @brief USB core: standard control-request helpers and root-port enumeration.
+ *
+ * Enumeration is single-device-per-port and synchronous: reset the port, read
+ * the device descriptor at address 0, assign an address, read the full
+ * configuration, select it, then walk the interface/endpoint descriptors and
+ * offer each HID interface to @ref usb_hid.c.
+ */
+#include <usb.h>
+#include <uhci.h>
+#include <usb_hid.h>
+#include <log.h>
+#include <lib/string.h>
+#include <io.h>
+
+#define MAX_DEVICES 4
+
+static usb_device_t devices[MAX_DEVICES];
+static uint8_t next_address = 1;
+
+static int devices_full(void);
+static usb_device_t *alloc_device(void);
+
+int usb_control(usb_device_t *dev, const usb_setup_t *setup, void *data, int len) {
+    return uhci_control(dev, setup, data, len);
+}
+
+int usb_get_descriptor(usb_device_t *dev, uint8_t type, uint8_t index,
+                       void *buf, int len) {
+    usb_setup_t s = {
+        .bmRequestType = USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_DEVICE,
+        .bRequest      = USB_REQ_GET_DESCRIPTOR,
+        .wValue        = (uint16_t)((type << 8) | index),
+        .wIndex        = 0,
+        .wLength       = (uint16_t)len,
+    };
+    return usb_control(dev, &s, buf, len);
+}
+
+int usb_set_address(usb_device_t *dev, uint8_t addr) {
+    usb_setup_t s = {
+        .bmRequestType = USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_DEVICE,
+        .bRequest      = USB_REQ_SET_ADDRESS,
+        .wValue        = addr,
+        .wIndex        = 0,
+        .wLength       = 0,
+    };
+    int r = usb_control(dev, &s, 0, 0);
+    if(r >= 0)
+        dev->address = addr;
+    return r;
+}
+
+int usb_set_configuration(usb_device_t *dev, uint8_t cfg) {
+    usb_setup_t s = {
+        .bmRequestType = USB_DIR_OUT | USB_TYPE_STANDARD | USB_RECIP_DEVICE,
+        .bRequest      = USB_REQ_SET_CONFIGURATION,
+        .wValue        = cfg,
+        .wIndex        = 0,
+        .wLength       = 0,
+    };
+    return usb_control(dev, &s, 0, 0);
+}
+
+/** @brief Walk a configuration blob and hand HID interfaces to the HID driver. */
+static void parse_config(usb_device_t *dev, uint8_t *cfg, int total) {
+    int off = 0;
+    usb_iface_desc_t *iface = 0;
+    while(off + 2 <= total) {
+        uint8_t blen = cfg[off];
+        uint8_t btype = cfg[off + 1];
+        if(blen < 2 || off + blen > total)
+            break;
+
+        if(btype == USB_DT_INTERFACE) {
+            iface = (usb_iface_desc_t *)(cfg + off);
+        } else if(btype == USB_DT_ENDPOINT && iface) {
+            usb_endpoint_desc_t *ep = (usb_endpoint_desc_t *)(cfg + off);
+            int is_int = (ep->bmAttributes & 0x03) == 0x03;
+            int is_in  = (ep->bEndpointAddress & 0x80) != 0;
+            if(iface->bInterfaceClass == USB_CLASS_HID && is_int && is_in) {
+                usb_hid_attach(dev, iface->bInterfaceNumber,
+                               iface->bInterfaceProtocol,
+                               ep->bEndpointAddress, ep->wMaxPacketSize);
+            }
+        }
+        off += blen;
+    }
+}
+
+/** @brief Bring up whatever is attached to root @p port. */
+static void enumerate_port(int port) {
+    usb_speed_t speed;
+    if(!uhci_port_reset(port, &speed))
+        return;
+
+    klogf(LOG_INFO, "USB: port %d: device attached (%s speed)\n",
+          port + 1, speed == USB_SPEED_LOW ? "low" : "full");
+
+    /* Address 0, minimum EP0 packet size until we know better. */
+    usb_device_t probe = { .address = 0, .speed = speed, .max_packet0 = 8 };
+
+    usb_device_desc_t dd;
+    memset(&dd, 0, sizeof(dd));
+    if(usb_get_descriptor(&probe, USB_DT_DEVICE, 0, &dd, 8) < 8) {
+        klogf(LOG_ERR, "USB: port %d: no response to GET_DESCRIPTOR\n", port + 1);
+        return;
+    }
+    probe.max_packet0 = dd.bMaxPacketSize0 ? dd.bMaxPacketSize0 : 8;
+
+    if(devices_full()) {
+        klogf(LOG_ERR, "USB: device table full\n");
+        return;
+    }
+    usb_device_t *dev = alloc_device();
+    *dev = probe;
+
+    uint8_t addr = next_address++;
+    if(usb_set_address(dev, addr) < 0) {
+        klogf(LOG_ERR, "USB: SET_ADDRESS failed on port %d\n", port + 1);
+        dev->in_use = 0;
+        return;
+    }
+
+    if(usb_get_descriptor(dev, USB_DT_DEVICE, 0, &dd, sizeof(dd)) < (int)sizeof(dd)) {
+        klogf(LOG_ERR, "USB: full device descriptor read failed\n");
+        dev->in_use = 0;
+        return;
+    }
+    dev->vendor  = dd.idVendor;
+    dev->product = dd.idProduct;
+    klogf(LOG_INFO, "USB: dev %u = %x:%x, class %u, %u config(s)\n",
+          addr, dd.idVendor, dd.idProduct, dd.bDeviceClass, dd.bNumConfigurations);
+
+    uint8_t cfgbuf[256];
+    usb_config_desc_t cd;
+    if(usb_get_descriptor(dev, USB_DT_CONFIG, 0, &cd, sizeof(cd)) < (int)sizeof(cd)) {
+        klogf(LOG_ERR, "USB: config descriptor read failed\n");
+        dev->in_use = 0;
+        return;
+    }
+    int total = cd.wTotalLength;
+    if(total > (int)sizeof(cfgbuf))
+        total = sizeof(cfgbuf);
+    if(usb_get_descriptor(dev, USB_DT_CONFIG, 0, cfgbuf, total) < total) {
+        klogf(LOG_ERR, "USB: config blob read failed\n");
+        dev->in_use = 0;
+        return;
+    }
+
+    if(usb_set_configuration(dev, cd.bConfigurationValue) < 0) {
+        klogf(LOG_ERR, "USB: SET_CONFIGURATION failed\n");
+        dev->in_use = 0;
+        return;
+    }
+
+    parse_config(dev, cfgbuf, total);
+}
+
+/* --- tiny device-table helpers (kept out of the header) --- */
+
+/** @return Non-zero if every device slot is claimed. */
+static int devices_full(void) {
+    for(int i = 0; i < MAX_DEVICES; i++)
+        if(!devices[i].in_use)
+            return 0;
+    return 1;
+}
+
+/** @return A free device slot, marked in use. */
+static usb_device_t *alloc_device(void) {
+    for(int i = 0; i < MAX_DEVICES; i++) {
+        if(!devices[i].in_use) {
+            memset(&devices[i], 0, sizeof(devices[i]));
+            devices[i].in_use = 1;
+            return &devices[i];
+        }
+    }
+    return &devices[0];
+}
+
+void usb_init(void) {
+    if(!uhci_init())
+        return;
+    for(int p = 0; p < uhci_port_count(); p++)
+        enumerate_port(p);
+}
+
+void usb_poll(void) {
+    usb_hid_poll();
+}
+
+void usb_thread(void) {
+    usb_init();
+    while(1) {
+        usb_poll();
+        sleep(2);
+    }
+}

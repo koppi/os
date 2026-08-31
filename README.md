@@ -44,6 +44,25 @@ Current version: **0.0.0** (see [`ver.h`](ver.h)).
   1.44M floppy geometry — but it still assumes one sector per cluster.
 * ELF loading helpers — [`elf.c`](elf.c)
 
+### USB
+A small USB 1.1 stack, driven from a kernel thread (no USB interrupts):
+
+* **UHCI** host-controller driver — [`uhci.c`](uhci.c). Found on the PCI bus,
+  reset and started; its 1024-entry frame list, queue heads, transfer
+  descriptors and data buffers are static and live in the identity-mapped low
+  memory so `&x == phys(x)`.
+* **USB core** — [`usb.c`](usb.c). Synchronous EP0 control transfers, root-port
+  reset, and single-device-per-port enumeration (device descriptor →
+  `SET_ADDRESS` → configuration → `SET_CONFIGURATION`).
+* **HID boot driver** — [`usb_hid.c`](usb_hid.c). Forces the HID *boot*
+  protocol (no report-descriptor parsing): a keyboard's fixed 8-byte report is
+  translated from HID usage codes to ASCII and pushed into the same ring buffer
+  the console reads, and a mouse's `[buttons, dx, dy]` report updates the shared
+  pointer state — so real USB keyboards and mice work alongside the PS/2 ones.
+
+USB hubs are not supported yet, so attach devices to the two UHCI root ports
+directly (the QEMU flags do this with `port=1` / `port=2`).
+
 ### Storage & block devices
 `main_proc` ([`sched.c`](sched.c)) probes both channels at boot:
 * **Floppy** — [`floppy.c`](floppy.c) + [`dma.c`](dma.c), mounted as `fda`
@@ -64,6 +83,9 @@ hard disk. The QEMU setup attaches `floppy.img` (floppy A), `hda.img`
 | Floppy disk (+ DMA) | [`floppy.c`](floppy.c), [`dma.c`](dma.c) |
 | PS/2 keyboard (IRQ-driven, ring-buffered) | [`keyboard.c`](keyboard.c), [`keyboard_asm.asm`](keyboard_asm.asm) |
 | PS/2 mouse | [`mouse.c`](mouse.c), [`mouse_asm.asm`](mouse_asm.asm) |
+| USB 1.1 host controller (UHCI, polled) | [`uhci.c`](uhci.c) |
+| USB core (enumeration, control/interrupt transfers) | [`usb.c`](usb.c) |
+| USB HID boot devices (keyboard, mouse) | [`usb_hid.c`](usb_hid.c) |
 | PCI bus | [`pci.c`](pci.c) |
 | AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sound.c`](sound.c) |
 | PC speaker | [`pcspk.c`](pcspk.c) |
@@ -188,8 +210,10 @@ make qemu-kernel  # boot kernel.elf directly with -kernel
 ```
 
 QEMU is launched with 256 MB RAM, `-vga std`, the floppy + IDE hard disk +
-CD-ROM images, AC97 / SB16 / PC-speaker audio, an `isa-debug-exit` device (the
-kernel uses it to exit QEMU with a status code), and KVM acceleration.
+CD-ROM images, AC97 / SB16 / PC-speaker audio, a UHCI controller with a
+`usb-kbd` on root port 1 and a `usb-mouse` on root port 2, an `isa-debug-exit`
+device (the kernel uses it to exit QEMU with a status code), and KVM
+acceleration.
 
 Once the `>` prompt appears, try:
 
@@ -224,5 +248,6 @@ scheduler.
 
 `sched_init()` does not return: it `iret`s into the scheduler's first process
 (`main_proc` in [`sched.c`](sched.c)), which brings up the floppy and IDE
-block devices, mounts their FAT volumes, starts the framebuffer redraw thread,
-and then runs the interactive console (`kmain_console`).
+block devices, mounts their FAT volumes, starts the framebuffer redraw thread
+and the USB thread (`usb_thread` — enumerate then poll HID endpoints), and then
+runs the interactive console (`kmain_console`).

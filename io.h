@@ -76,9 +76,9 @@ void halt();
 /**
  * @brief Shut the machine down through QEMU's isa-debug-exit device, then
  *        fall back to a keyboard-controller triple fault; never returns.
- * @param exit_status Non-zero value is written to port 0xF4 as the QEMU exit code.
+ * @param status_code Non-zero value is written to port 0xF4 as the QEMU exit code.
  */
-void exit_qemu(const int exit_status);
+void exit_qemu(const int status_code);
 
 /** @brief Set the interrupt flag (`sti`) and log it. */
 void enable_int();

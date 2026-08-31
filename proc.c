@@ -265,6 +265,11 @@ void remove_proc(int pid) {
  * Creates a kernel process from a function
  */
 int start_kernel_proc(char *name, void *addr) {
+    /* Each kernel process gets its own stack window above KERNEL_SPACE_END;
+     * bump the base so a second (third, ...) kernel thread does not land on
+     * the previous one's stack. */
+    static uint32_t kproc_stack_base = (uint32_t) KERNEL_SPACE_END + 0x5000;
+
     process_t *proc = (process_t *) kmalloc(sizeof(process_t));
     strncpy(proc->name, name, sizeof(proc->name) - 1);
     proc->state = PROC_NEW;
@@ -275,10 +280,13 @@ int start_kernel_proc(char *name, void *addr) {
     proc->thread_list->main = 1;
     proc->thread_list->parent = (void *) proc;
     proc->thread_list->eip = (uint32_t) addr;
-    
-    vmm_map(proc->pdir, (vmm_addr_t) KERNEL_SPACE_END + 0x5000, PAGE_PRESENT | PAGE_RW);
 
-    proc->thread_list->esp = (uint32_t) KERNEL_SPACE_END + 0x5000;
+    uint32_t stack = kproc_stack_base;
+    kproc_stack_base += 0x4000;   /* user page + kernel page + guard pages */
+
+    vmm_map(proc->pdir, (vmm_addr_t) stack, PAGE_PRESENT | PAGE_RW);
+
+    proc->thread_list->esp = stack;
     proc->thread_list->stack_limit = ((uint32_t) proc->thread_list->esp + PAGE_SIZE);
     
     proc->thread_list->esp_kernel = proc->thread_list->stack_limit;

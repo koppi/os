@@ -129,6 +129,17 @@ void keyboard_read_key() {
         kbd_buf_push(c);
 }
 
+/**
+ * @brief Inject a decoded character into the keyboard ring.
+ *
+ * Used by the USB HID keyboard driver, which does its own HID-usage → ASCII
+ * translation and feeds the result here so console input is source-agnostic.
+ */
+void keyboard_push_char(char c) {
+    if(c)
+        kbd_buf_push(c);
+}
+
 /** @brief Peek the oldest buffered keystroke without consuming it (0 if none). */
 char keyboard_get_lastkey() {
     if(kbd_head == kbd_tail)

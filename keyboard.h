@@ -13,6 +13,8 @@ void keyboard_init();
 uint8_t keyboard_enabled();
 /** @brief IRQ-context handler: decode one scancode into the ring buffer. */
 void keyboard_read_key();
+/** @brief Inject a decoded character (used by the USB HID keyboard driver). */
+void keyboard_push_char(char c);
 /** @brief Peek the oldest buffered key without consuming it (0 if empty). */
 char keyboard_get_lastkey();
 /** @brief Consume the key last returned by @ref keyboard_get_lastkey. */

@@ -27,6 +27,7 @@
 
 #include <floppy.h>
 #include <ata.h>
+#include <usb.h>
 
 process_t *list;
 static int n_proc = 1;
@@ -75,6 +76,7 @@ void main_proc() {
     mu();
 
     start_kernel_proc("draw_thread", &refresh_screen);
+    start_kernel_proc("usb", &usb_thread);
     //start_kernel_proc("demo_thread", &demo_thread);
     //start_kernel_proc("uart_read", &uart_read_proc);
 
