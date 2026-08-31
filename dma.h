@@ -1,3 +1,8 @@
+/**
+ * @file dma.h
+ * @brief 8237 ISA DMA controller register map and channel programming helpers
+ *        (used by the floppy driver for sector transfers).
+ */
 #pragma once
 
 //#include <hal/hal.h>
@@ -82,14 +87,25 @@
 #define DMA_MODE_TRANSFER_BLOCK     0x80
 #define DMA_MODE_TRANSFER_CASCADE   0xC0
 
+/** @brief Set a channel's transfer address (low/high bytes). */
 void dma_set_address(uint8_t channel, uint8_t low, uint8_t high);
+/** @brief Set a channel's transfer count (low/high bytes). */
 void dma_set_count(uint8_t channel, uint8_t low, uint8_t high);
+/** @brief Write a channel's external page (bits 16-23 of the address). */
 void dma_set_external_page_register(uint8_t reg, uint8_t val);
+/** @brief Write a channel's mode register. */
 void dma_set_mode(uint8_t channel, uint8_t mode);
+/** @brief Put a channel into read (memory → device) mode. */
 void dma_set_read(uint8_t channel);
+/** @brief Put a channel into write (device → memory) mode. */
 void dma_set_write(uint8_t channel);
+/** @brief Mask (disable) a channel. */
 void dma_mask_channel(uint8_t channel);
+/** @brief Unmask (enable) a channel. */
 void dma_unmask_channel(uint8_t channel);
+/** @brief Reset the low/high byte flip-flop of controller @p dma. */
 void dma_reset_flipflop(int dma);
+/** @brief Master-clear both controllers. */
 void dma_reset();
+/** @brief Unmask all channels on the slave controller. */
 void dma_unmask_all();

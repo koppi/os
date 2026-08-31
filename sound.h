@@ -1,3 +1,8 @@
+/**
+ * @file sound.h
+ * @brief Sound Blaster 16 bring-up and the MOD-music playback glue, plus the
+ *        musical-note / waveform constants used by the synth.
+ */
 #pragma once
 
 #include <types.h>
@@ -40,6 +45,9 @@
 #define WAVE_NOISE      2
 #define WAVE_TRIANGLE   3
 
+/** @brief Reset the SB16, start MOD playback and install its IRQ handler. */
 void sound_init();
+/** @brief Pause / resume MOD playback. */
 void sound_toggle();
+/** @brief SB16 DMA half/full-buffer interrupt handler. */
 void sb16_irq_handler();

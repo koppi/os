@@ -1,10 +1,14 @@
+/**
+ * @file elf.h
+ * @brief 32-bit ELF header/section/program-header structures and the loader
+ *        used by @ref start_proc.
+ * @see https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
+ */
 #pragma once
 
 #include <proc.h>
 //XXX#include <fs/vfs.h>
 #include <types.h>
-
-// See https://en.wikipedia.org/wiki/Executable_and_Linkable_Format
 
 // 0x7f followed by 'ELF' in ASCII. Little endian so in reverse.
 #define ELF_MAGIC_NUMBER (0x464c457fUL)
@@ -120,8 +124,12 @@ typedef struct elf_program_header {
 } __attribute__((__packed__)) elf_program_header_t;
 _Static_assert(sizeof(struct elf_program_header) == 32);
 
+/** @brief Sanity-check an ELF header (magic, 32-bit little-endian x86). */
 int elf_validate(elf_header_t *eh);
+/** @brief Load @p name, validate it, relocate its segments into @p pdir. */
 int load_elf(char *name, thread_t *thread, page_dir_t *pdir);
+/** @brief Read @p name into the staging area at @c MEMORY_LOAD_ADDRESS. */
 int load_elf_file(char *name);
+/** @brief Copy each PT_LOAD segment to its p_vaddr and record the image span. */
 int load_elf_relocate(thread_t *thread, page_dir_t *pdir, elf_header_t *eh);
 
