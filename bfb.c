@@ -1,3 +1,10 @@
+/**
+ * @file bfb.c
+ * @brief Storage for the boot-framebuffer parameters.
+ *
+ * All fields are zero until the multiboot2 parser fills them in from the
+ * framebuffer tag; @c bfb_addr == 0 means "no framebuffer, use VGA text".
+ */
 #include <bfb.h>
 
 uintptr_t bfb_addr = 0;

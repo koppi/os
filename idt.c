@@ -1,23 +1,34 @@
+/**
+ * @file idt.c
+ * @brief Interrupt Descriptor Table construction and per-vector gate install.
+ */
 #include <idt.h>
 #include <exception.h>
 #include <lib/string.h> // for memset
 #include <log.h>
 #include <io.h>
 
-struct idt_ptr idtr;
-struct idt_info idt[NUM_INTERRUPTS];
+struct idt_ptr idtr;                    /**< @c lidt operand. */
+struct idt_info idt[NUM_INTERRUPTS];    /**< The table itself. */
 
+/**
+ * @brief Point every vector at @ref default_ir_handler, then override the
+ *        CPU-exception vectors (0-19) with their dedicated handlers, and load
+ *        the table.
+ *
+ * @param code Kernel code selector for every gate.
+ */
 void idt_init(uint16_t code) {
     int i;
 
     idtr.limit = sizeof(struct idt_info) * NUM_INTERRUPTS - 1;
     idtr.base = (uint32_t) &idt;
-    
+
     memset(&idt, 0, idtr.limit);
 
     for(i = 0; i < NUM_INTERRUPTS; i++)
       install_ir(i, 0x80 | 0x0E, code, &default_ir_handler);
-    
+
     install_ir(0, 0x80 | 0x0E, code, &ex_divide_by_zero);
     install_ir(1, 0x80 | 0x0E, code, &ex_single_step);
     install_ir(2, 0x80 | 0x0E, code, &ex_nmi);
@@ -27,18 +38,18 @@ void idt_init(uint16_t code) {
     install_ir(6, 0x80 | 0x0E, code, &invop_handle);
     install_ir(7, 0x80 | 0x0E, code, &ex_device_not_available);
     install_ir(8, 0x80 | 0x0E, code, &ex_double_fault);
-    
+
     install_ir(10, 0x80 | 0x0E, code, &ex_invalid_tss);
     install_ir(11, 0x80 | 0x0E, code, &ex_segment_not_present);
     install_ir(12, 0x80 | 0x0E, code, &ex_stack_fault);
     install_ir(13, 0x80 | 0x0E, code, &gpf_handle);
     install_ir(14, 0x80 | 0x0E, code, &pf_handle);
-    
+
     install_ir(16, 0x80 | 0x0E, code, &ex_fpu_error);
     install_ir(17, 0x80 | 0x0E, code, &ex_alignment_check);
     install_ir(18, 0x80 | 0x0E, code, &ex_machine_check);
     install_ir(19, 0x80 | 0x0E, code, &ex_simd_fpu);
-    
+
     idt_set(&idtr);
 }
 
@@ -48,15 +59,27 @@ void idt_init(uint16_t code) {
 #define PIC2 0xA0
 #define PIC2_DATA (PIC2 + 1)
 
+/**
+ * @brief Clear the 8259 mask bit for line @p i so that IRQ can be delivered.
+ * @param i Vector number (only the low 4 bits pick the PIC line).
+ */
 static void irq_clear_mask(size_t i) {
     uint16_t port = i < 8 ? PIC1_DATA : PIC2_DATA;
     uint8_t value = inportb(port) & ~(1 << i);
     outportb(port, value);
 }
 
+/**
+ * @brief Write handler @p irq into IDT slot @p i and unmask the PIC line.
+ *
+ * @param i     Vector number.
+ * @param flags Gate flags byte.
+ * @param sel   Code selector.
+ * @param irq   Handler entry point.
+ */
 void install_ir(uint32_t i, uint16_t flags, uint16_t sel, void *irq) {
     uint32_t ir_addr = (uint32_t) irq;
-    
+
     idt[i].base_low = (uint16_t) ir_addr & 0xFFFF;
     idt[i].base_high = (uint16_t) (ir_addr >> 16) & 0xFFFF;
     idt[i].ist = 0;

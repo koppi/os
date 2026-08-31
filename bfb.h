@@ -1,18 +1,26 @@
+/**
+ * @file bfb.h
+ * @brief "Boot framebuffer" — the linear framebuffer handed over by the
+ *        bootloader (via the multiboot framebuffer tag).
+ *
+ * @c bfb_addr is 0 when the loader gave us no framebuffer, in which case the
+ * kernel falls back to VGA text mode.
+ */
 #pragma once
 
 #include <types.h>
 
-extern uintptr_t bfb_addr;
-extern uint32_t bfb_width;
-extern uint32_t bfb_height;
-extern uint16_t bfb_bpp;
-extern uint32_t bfb_scanline;
+extern uintptr_t bfb_addr;      /**< Physical address of the framebuffer, or 0. */
+extern uint32_t  bfb_width;     /**< Width in pixels. */
+extern uint32_t  bfb_height;    /**< Height in pixels. */
+extern uint16_t  bfb_bpp;       /**< Bits per pixel. */
+extern uint32_t  bfb_scanline;  /**< Bytes per scanline (pitch). */
 
-extern uint8_t bfb_red_pos;
-extern uint8_t bfb_red_size;
+extern uint8_t bfb_red_pos;     /**< Bit position of the red channel. */
+extern uint8_t bfb_red_size;    /**< Bit width of the red channel. */
 
-extern uint8_t bfb_green_pos;
-extern uint8_t bfb_green_size;
+extern uint8_t bfb_green_pos;   /**< Bit position of the green channel. */
+extern uint8_t bfb_green_size;  /**< Bit width of the green channel. */
 
-extern uint8_t bfb_blue_pos;
-extern uint8_t bfb_blue_size;
+extern uint8_t bfb_blue_pos;    /**< Bit position of the blue channel. */
+extern uint8_t bfb_blue_size;   /**< Bit width of the blue channel. */
