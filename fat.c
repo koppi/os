@@ -109,6 +109,7 @@ void to_normal_file_name(char *name, char *str) {
     str[j] = 0;
 }
 
+/** @brief Debug helper: print one directory entry. */
 void print_dir(directory_t *dir) {
     printf("%s %s %d %d %u\n",
            dir->filename, dir->extension,

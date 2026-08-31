@@ -67,11 +67,13 @@ static modcontext modctx;
 
 static uint8_t sound_muted = 1;
 
+/** @brief Render @p len samples of MOD audio into @p buf. */
 static void fill(short int *buf, size_t len) {
     //printf("sound: fill len: %d\n", len);
     hxcmod_fillbuffer(&modctx, buf, len, NULL);
 }
 
+/** @brief Toggle MOD playback on/off (a muted transfer sends silence). */
 void sound_toggle() {
     if (sound_muted) {
         sound_muted = 0;
@@ -80,6 +82,7 @@ void sound_toggle() {
     }
 }
 
+/** @brief Wait for the DSP write buffer to drain, then send command byte @p b. */
 static void dsp_write(uint8_t b) {
     while (inportb(DSP_WRITE) & 0x80);
     outportb(DSP_WRITE, b);
@@ -91,6 +94,11 @@ static void dsp_read(uint8_t b) {
     outportb(DSP_READ, b);
 }*/
 
+/**
+ * @brief Read one DSP byte, giving up after a bounded spin.
+ * @param b Out: the byte read.
+ * @return 1 on success, 0 on timeout.
+ */
 static uint8_t dsp_detect_timeout(uint8_t* b) {
     for (size_t i = 0; i < 1000000; i++) {
         if (inportb(DSP_READ_STATUS) & 0x80) {
@@ -102,9 +110,13 @@ static uint8_t dsp_detect_timeout(uint8_t* b) {
     return 0;
 }
 
+/**
+ * @brief Reset the SB16 DSP and check it reports version >= 4.
+ * @return 0 on success, 1 on failure (logged).
+ */
 static uint8_t reset() {
     uint8_t status = 0;
-    
+
     outportb(DSP_RESET, 1);
 
     // TODO: maybe not necessary
@@ -132,12 +144,18 @@ fail:
     return 1;
 }
 
+/** @brief Program the DSP output sample rate to @p hz. */
 static void set_sample_rate(uint16_t hz) {
     dsp_write(DSP_SET_RATE);
     dsp_write((uint8_t) ((hz >> 8) & 0xFF));
     dsp_write((uint8_t) (hz & 0xFF));
 }
 
+/**
+ * @brief Program the 16-bit DMA channel for an auto-init transfer of @p buf.
+ * @param buf Physical buffer address (must not cross a 64 KiB page).
+ * @param len Transfer length in bytes.
+ */
 static void transfer(void *buf, uint32_t len) {
     uint8_t mode = 0x48;
 
@@ -166,6 +184,10 @@ static void transfer(void *buf, uint32_t len) {
     outportb(DSP_ON_8, DMA_CHANNEL_16 % 4);
 }
 
+/**
+ * @brief DMA half/full-buffer interrupt: refill the half that just played
+ *        (or zero it while muted) and acknowledge the card.
+ */
 void sb16_irq_handler() {
     buffer_flip = !buffer_flip;
 
@@ -181,8 +203,10 @@ void sb16_irq_handler() {
     inportb(DSP_ACK_16);
 }
 
+/** asm IRQ stub (sound_asm) that calls @ref sb16_irq_handler. */
 extern void sound_int();
 
+/** @brief Install the SB16 IRQ handler and route the card's IRQ via the mixer. */
 static void configure() {
     install_ir(32 + MIXER_IRQ, 0x80 | 0x0E, 0x8, &sound_int);
 

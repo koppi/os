@@ -43,6 +43,7 @@ short mouse_icon[] =  {
 
 uint32_t mouse_color_mapping[] = {0, 0, 0xFFFFFFFF};
 
+/** @brief Draw the built-in 11x16 mouse cursor from @c mouse_icon (unused path). */
 void paint_mouse() {
     short* buf = mouse_icon;
     int mouse_x = get_mouse_info()->x;
@@ -61,6 +62,7 @@ void paint_mouse() {
     }
 }
 
+/** @brief Draw the mouse cursor, loading /fda/mouse.bmp once and caching it. */
 void paint_mouse2() {
     static bmp_image_t* mouse_cursor;
 
@@ -82,12 +84,14 @@ void paint_mouse2() {
 
 mu_Context ctx;
 
+/** @brief microui text-width callback (delegates to the renderer). */
 static int text_width(mu_Font font, const char *text, int len) {
     (void)font;
     if (len == -1) { len = strlen(text); }
     return r_get_text_width(text, len);
 }
 
+/** @brief microui text-height callback (delegates to the renderer). */
 static int text_height(mu_Font font) {
     (void)font;
     return r_get_text_height();
@@ -111,6 +115,10 @@ void write_log(char *text) {
     logbuf_updated = 1;
 }
 
+/**
+ * @brief Build the desktop's microui frame: a "system" window (sound toggle,
+ *        shutdown) and a "console" window (scrolling log + command textbox).
+ */
 void mu_2() {
     mu_begin(&ctx);
     if (mu_begin_window(&ctx, "system",
@@ -173,10 +181,12 @@ typedef struct {
 star_type stars[MAX_STARS];
 int stars_initialized = 0;
 
-unsigned long createRGB(int r, int g, int b) {   
+/** @brief Pack 8-bit r/g/b into a 0x00RRGGBB pixel value. */
+unsigned long createRGB(int r, int g, int b) {
     return ((r & 0xff) << 16) + ((g & 0xff) << 8) + (b & 0xff);
 }
 
+/** @brief Render one frame of the desktop: starfield background then the UI. */
 void paint_desktop() {
     draw_rect(0, 0, 1280, 1024, 0x2D);
     

@@ -174,6 +174,7 @@ void draw_data_with_alfa(uint32_t* data, uint32_t width, uint32_t height, uint32
                 draw_pixel(x+i, y+j, (uint32_t){data[(j*width+i)]});
 }
 
+/** @brief Integer absolute value (used by @ref draw_line). */
 int abs(int a) { return (a >= 0) ? a : -a; }
 
 void draw_line(int x0, int y0, int x1, int y1, uint32_t color) {
