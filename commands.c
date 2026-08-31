@@ -11,6 +11,7 @@
 #include <mm.h>
 #include <kheap.h>
 #include <printf.h>
+#include <log.h>
 #include <sched.h>
 #include <vfs.h>
 #include <io.h>
@@ -340,11 +341,11 @@ static int resolve_host(uint32_t *ip) {
         return 1;
     uint32_t a;
     if (dns_resolve(net_host, &a, 1) < 1) {
-        printf("%s: cannot resolve\n", net_host);
+        printk("%s: cannot resolve\n", net_host);
         return 0;
     }
     char s[16];
-    printf("%s is %s\n", net_host, net_ip_str(a, s));
+    printk("%s is %s\n", net_host, net_ip_str(a, s));
     *ip = a;
     return 1;
 }
@@ -360,12 +361,12 @@ static int do_dns(void) {
     uint32_t a[8];
     int n = dns_resolve(net_host, a, 8);
     if (n < 1) {
-        printf("dns: %s not found\n", net_host);
+        printk("dns: %s not found\n", net_host);
         return -1;
     }
     char s[16];
     for (int i = 0; i < n; i++)
-        printf("%s has address %s\n", net_host, net_ip_str(a[i], s));
+        printk("%s has address %s\n", net_host, net_ip_str(a[i], s));
     return n;
 }
 

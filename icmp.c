@@ -7,6 +7,7 @@
 #include <net.h>
 
 #include <io.h>
+#include <log.h>
 #include <pit.h>
 #include <printf.h>
 #include <lib/string.h>
@@ -55,10 +56,10 @@ int icmp_ping(uint32_t dst_ip, int count) {
     net_ip_str(dst_ip, a);
 
     if (!net_is_up()) {
-        printf("ping: no address (DHCP not done)\n");
+        printk("ping: no address (DHCP not done)\n");
         return 0;
     }
-    printf("PING %s (32 data bytes)\n", a);
+    printk("PING %s (32 data bytes)\n", a);
 
     uint16_t id = (uint16_t)(pit_ms() ^ 0x5150);
     int replies = 0;
@@ -89,7 +90,7 @@ int icmp_ping(uint32_t dst_ip, int count) {
             else            break;
         }
         if (!sent) {
-            printf("  seq=%d  send failed\n", seq);
+            printk("  seq=%d  send failed\n", seq);
             continue;
         }
 
@@ -99,14 +100,14 @@ int icmp_ping(uint32_t dst_ip, int count) {
         }
 
         if (got) {
-            printf("  seq=%d  time=%ums\n", seq, got_ms - t0);
+            printk("  seq=%d  time=%ums\n", seq, got_ms - t0);
             replies++;
         } else {
-            printf("  seq=%d  timeout\n", seq);
+            printk("  seq=%d  timeout\n", seq);
         }
         sleep(300);
     }
 
-    printf("--- %s ping: %d/%d received ---\n", a, replies, count);
+    printk("--- %s ping: %d/%d received ---\n", a, replies, count);
     return replies;
 }

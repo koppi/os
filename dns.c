@@ -9,6 +9,7 @@
 #include <net.h>
 
 #include <io.h>
+#include <log.h>
 #include <pit.h>
 #include <printf.h>
 #include <rand.h>
@@ -90,7 +91,7 @@ int dns_resolve(const char *name, uint32_t *out, int max) {
 
     uint32_t server = net_config()->dns;
     if (!server) {
-        printf("dns: no resolver configured\n");
+        printk("dns: no resolver configured\n");
         return 0;
     }
 
@@ -105,7 +106,7 @@ int dns_resolve(const char *name, uint32_t *out, int max) {
 
     int n = encode_name(q + sizeof *h, name);
     if (n < 0) {
-        printf("dns: bad name\n");
+        printk("dns: bad name\n");
         return 0;
     }
     int qlen = sizeof *h + n;
@@ -143,7 +144,7 @@ int dns_resolve(const char *name, uint32_t *out, int max) {
             continue;
         }
         if ((ntohs(rh->flags) & 0x000F) != 0) {           /* RCODE != 0 */
-            printf("dns: server returned error %d\n", ntohs(rh->flags) & 0xF);
+            printk("dns: server returned error %d\n", ntohs(rh->flags) & 0xF);
             return 0;
         }
 
@@ -173,7 +174,7 @@ int dns_resolve(const char *name, uint32_t *out, int max) {
         return found;
     }
 
-    printf("dns: no response from %u.%u.%u.%u\n",
+    printk("dns: no response from %u.%u.%u.%u\n",
            (server >> 24) & 0xFF, (server >> 16) & 0xFF,
            (server >> 8) & 0xFF, server & 0xFF);
     return 0;
