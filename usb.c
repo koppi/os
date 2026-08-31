@@ -19,9 +19,7 @@
 #define MAX_HUB_DEPTH 3
 
 static usb_device_t devices[MAX_DEVICES];
-static uint8_t next_address = 1;
 
-static int devices_full(void);
 static usb_device_t *alloc_device(void);
 
 int usb_control(usb_device_t *dev, const usb_setup_t *setup, void *data, int len) {
@@ -91,7 +89,12 @@ static void parse_config(usb_device_t *dev, uint8_t *cfg, int total) {
     }
 }
 
-void usb_enumerate(usb_speed_t speed, int depth, const char *where) {
+/* Configuration blob staging. Enumeration is synchronous and single-threaded,
+ * so one shared buffer is enough and it keeps recursion (hub behind hub) off
+ * the kernel-thread stack. */
+static uint8_t cfgbuf[256];
+
+int usb_enumerate(usb_speed_t speed, int depth, const char *where) {
     klogf(LOG_INFO, "USB: %s: device attached (%s speed)\n",
           where, speed == USB_SPEED_LOW ? "low" : "full");
 
@@ -102,40 +105,41 @@ void usb_enumerate(usb_speed_t speed, int depth, const char *where) {
     memset(&dd, 0, sizeof(dd));
     if(usb_get_descriptor(&probe, USB_DT_DEVICE, 0, &dd, 8) < 8) {
         klogf(LOG_ERR, "USB: %s: no response to GET_DESCRIPTOR\n", where);
-        return;
+        return 0;
     }
     probe.max_packet0 = dd.bMaxPacketSize0 ? dd.bMaxPacketSize0 : 8;
 
-    if(devices_full()) {
-        klogf(LOG_ERR, "USB: device table full\n");
-        return;
-    }
     usb_device_t *dev = alloc_device();
+    if(!dev) {
+        klogf(LOG_ERR, "USB: device table full\n");
+        return 0;
+    }
     *dev = probe;
+    dev->in_use = 1;
 
-    uint8_t addr = next_address++;
+    /* Address == slot index + 1, so a released slot's address is reused. */
+    uint8_t addr = (uint8_t)(dev - devices) + 1;
     if(usb_set_address(dev, addr) < 0) {
         klogf(LOG_ERR, "USB: SET_ADDRESS failed for %s\n", where);
         dev->in_use = 0;
-        return;
+        return 0;
     }
 
     if(usb_get_descriptor(dev, USB_DT_DEVICE, 0, &dd, sizeof(dd)) < (int)sizeof(dd)) {
         klogf(LOG_ERR, "USB: full device descriptor read failed\n");
         dev->in_use = 0;
-        return;
+        return 0;
     }
     dev->vendor  = dd.idVendor;
     dev->product = dd.idProduct;
     klogf(LOG_INFO, "USB: dev %u = %x:%x, class %u, %u config(s)\n",
           addr, dd.idVendor, dd.idProduct, dd.bDeviceClass, dd.bNumConfigurations);
 
-    uint8_t cfgbuf[256];
     usb_config_desc_t cd;
     if(usb_get_descriptor(dev, USB_DT_CONFIG, 0, &cd, sizeof(cd)) < (int)sizeof(cd)) {
         klogf(LOG_ERR, "USB: config descriptor read failed\n");
         dev->in_use = 0;
-        return;
+        return 0;
     }
     int total = cd.wTotalLength;
     if(total > (int)sizeof(cfgbuf))
@@ -143,13 +147,13 @@ void usb_enumerate(usb_speed_t speed, int depth, const char *where) {
     if(usb_get_descriptor(dev, USB_DT_CONFIG, 0, cfgbuf, total) < total) {
         klogf(LOG_ERR, "USB: config blob read failed\n");
         dev->in_use = 0;
-        return;
+        return 0;
     }
 
     if(usb_set_configuration(dev, cd.bConfigurationValue) < 0) {
         klogf(LOG_ERR, "USB: SET_CONFIGURATION failed\n");
         dev->in_use = 0;
-        return;
+        return 0;
     }
 
     if(dd.bDeviceClass == USB_CLASS_HUB) {
@@ -157,10 +161,24 @@ void usb_enumerate(usb_speed_t speed, int depth, const char *where) {
             usb_hub_init(dev, depth);
         else
             klogf(LOG_ERR, "USB: hub nesting too deep, ignoring\n");
-        return;
+        return addr;
     }
 
     parse_config(dev, cfgbuf, total);
+    return addr;
+}
+
+void usb_release_device(uint8_t addr) {
+    if(addr < 1 || addr > MAX_DEVICES)
+        return;
+    usb_device_t *dev = &devices[addr - 1];
+    if(!dev->in_use)
+        return;
+
+    usb_hub_removed(addr);    /* if a hub, release everything behind it first */
+    usb_hid_detach(addr);     /* drop any HID interfaces it owned */
+    klogf(LOG_INFO, "USB: dev %u released\n", addr);
+    memset(dev, 0, sizeof(*dev));
 }
 
 /** @brief Reset root @p port and, if a device is present, enumerate it. */
@@ -176,24 +194,15 @@ static void enumerate_root_port(int port) {
 
 /* --- tiny device-table helpers (kept out of the header) --- */
 
-/** @return Non-zero if every device slot is claimed. */
-static int devices_full(void) {
-    for(int i = 0; i < MAX_DEVICES; i++)
-        if(!devices[i].in_use)
-            return 0;
-    return 1;
-}
-
-/** @return A free device slot, marked in use. */
+/** @return A zeroed free device slot (not yet marked in use), or NULL. */
 static usb_device_t *alloc_device(void) {
     for(int i = 0; i < MAX_DEVICES; i++) {
         if(!devices[i].in_use) {
             memset(&devices[i], 0, sizeof(devices[i]));
-            devices[i].in_use = 1;
             return &devices[i];
         }
     }
-    return &devices[0];
+    return 0;
 }
 
 void usb_init(void) {
@@ -205,6 +214,7 @@ void usb_init(void) {
 
 void usb_poll(void) {
     usb_hid_poll();
+    usb_hub_poll();
 }
 
 void usb_thread(void) {

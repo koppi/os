@@ -15,6 +15,7 @@
 typedef struct {
     int      used;
     int      slot;          /**< UHCI interrupt-poll slot. */
+    uint8_t  addr;          /**< Owning device address (for detach). */
     uint8_t  protocol;      /**< 1 = keyboard, 2 = mouse. */
     uint8_t  prev[8];       /**< Previous keyboard report (for edge detection). */
 } hid_dev_t;
@@ -136,12 +137,25 @@ void usb_hid_attach(usb_device_t *dev, uint8_t iface, uint8_t protocol,
 
     hid[idx].used     = 1;
     hid[idx].slot     = slot;
+    hid[idx].addr     = dev->address;
     hid[idx].protocol = protocol;
     memset(hid[idx].prev, 0, sizeof(hid[idx].prev));
 
     klogf(LOG_INFO, "USB HID: %s ready (dev %u, ep 0x%x)\n",
           protocol == HID_PROTOCOL_KEYBOARD ? "keyboard" : "mouse",
           dev->address, ep_addr);
+}
+
+void usb_hid_detach(uint8_t addr) {
+    for(int i = 0; i < MAX_HID; i++) {
+        if(hid[i].used && hid[i].addr == addr) {
+            uhci_int_release(hid[i].slot);
+            klogf(LOG_INFO, "USB HID: %s gone (dev %u)\n",
+                  hid[i].protocol == HID_PROTOCOL_KEYBOARD ? "keyboard" : "mouse",
+                  addr);
+            memset(&hid[i], 0, sizeof(hid[i]));
+        }
+    }
 }
 
 void usb_hid_poll(void) {

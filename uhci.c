@@ -404,3 +404,11 @@ int uhci_int_poll(int slot, void *buf, int len) {
     int_arm(slot);
     return got;
 }
+
+void uhci_int_release(int slot) {
+    if(slot < 0 || slot >= NUM_INT_SLOTS)
+        return;
+    qh_int[slot].element = TD_T;   /* unlink the persistent TD */
+    memset(&int_slot[slot], 0, sizeof(int_slot[slot]));
+    memset(&int_td[slot], 0, sizeof(int_td[slot]));
+}

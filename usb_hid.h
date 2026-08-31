@@ -23,5 +23,11 @@
 void usb_hid_attach(usb_device_t *dev, uint8_t iface, uint8_t protocol,
                     uint8_t ep_addr, uint16_t maxlen);
 
+/**
+ * @brief Drop every HID interface owned by device @p addr and free its
+ *        interrupt slots. Called when the device is unplugged.
+ */
+void usb_hid_detach(uint8_t addr);
+
 /** @brief Poll every attached HID endpoint once and dispatch any new report. */
 void usb_hid_poll(void);

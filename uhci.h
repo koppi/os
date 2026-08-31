@@ -92,3 +92,13 @@ int uhci_int_claim(usb_device_t *dev, uint8_t endpoint, int maxlen);
  * @return Bytes received (0 if nothing new), or negative on a transfer error.
  */
 int uhci_int_poll(int slot, void *buf, int len);
+
+/**
+ * @brief Release an interrupt slot claimed with @ref uhci_int_claim.
+ *
+ * Unlinks the slot's persistent TD from the schedule and marks it free. Used
+ * when the owning device is unplugged. A no-op for an out-of-range slot.
+ *
+ * @param slot Handle from @ref uhci_int_claim.
+ */
+void uhci_int_release(int slot);

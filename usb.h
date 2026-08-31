@@ -69,6 +69,13 @@
 #define HUB_PS_LOWSPEED     0x0200
 ///@}
 
+/** @name Hub port change bits (wPortChange, high word of GET_STATUS) */
+///@{
+#define HUB_PC_CONNECTION   0x0001  /**< Connect status changed since last cleared. */
+#define HUB_PC_ENABLE       0x0002
+#define HUB_PC_RESET        0x0010
+///@}
+
 /** @name HID class requests */
 ///@{
 #define HID_REQ_GET_REPORT   0x01
@@ -187,8 +194,21 @@ int usb_set_configuration(usb_device_t *dev, uint8_t cfg);
  * @param speed The device's link speed.
  * @param depth Hub nesting depth (0 = on a root port); used as a recursion cap.
  * @param where Short description for log lines, e.g. "root port 1".
+ * @return The address assigned to the new device (1..), or 0 on failure / if no
+ *         device answered.
  */
-void usb_enumerate(usb_speed_t speed, int depth, const char *where);
+int usb_enumerate(usb_speed_t speed, int depth, const char *where);
+
+/**
+ * @brief Tear down a device that has gone away: drop any class-driver state,
+ *        release its interrupt endpoints and free its address.
+ *
+ * Safe to call for an address that is not in use. If @p addr is a hub, the
+ * devices behind it are released first (see @ref usb_hub_removed).
+ *
+ * @param addr The device's USB address.
+ */
+void usb_release_device(uint8_t addr);
 
 /**
  * @brief Probe the root ports, enumerate any attached device and offer its
@@ -196,7 +216,10 @@ void usb_enumerate(usb_speed_t speed, int depth, const char *where);
  */
 void usb_init(void);
 
-/** @brief Poll every claimed interrupt endpoint once (called from the thread). */
+/**
+ * @brief One service pass from the USB thread: poll every claimed interrupt
+ *        endpoint and, periodically, re-scan hub ports for hot-plug changes.
+ */
 void usb_poll(void);
 
 /** @brief Kernel-thread entry: @ref usb_init then a @ref usb_poll loop. */

@@ -54,22 +54,28 @@ A small USB 1.1 stack, driven from a kernel thread (no USB interrupts):
 * **USB core** — [`usb.c`](usb.c). Synchronous EP0 control transfers, port
   reset, and single-device-per-port enumeration (device descriptor →
   `SET_ADDRESS` → configuration → `SET_CONFIGURATION`). The same routine
-  enumerates devices on a root port and behind a hub.
+  enumerates devices on a root port and behind a hub; a device's USB address is
+  its slot index, so an address is reused once the device is unplugged.
 * **Hub driver** — [`usb_hub.c`](usb_hub.c). A device that enumerates as class 9
-  is handed here: it reads the hub descriptor, powers every downstream port, and
-  for each port with something connected drives a port reset and recursively
-  enumerates the device (up to three hubs deep). The topology is scanned once at
-  boot; the hub's status-change interrupt is not used, so hot-plug behind a hub
-  is not detected.
+  is registered here: the driver reads the hub descriptor, powers every
+  downstream port and recursively enumerates whatever is attached (up to three
+  hubs deep). On each USB service pass it re-reads every downstream port's
+  status on a slow cadence, so a device attached or removed while the system is
+  running is enumerated or torn down on the fly — **hot-plug behind a hub
+  works**. Detection is GET_STATUS polling; the hub's status-change interrupt
+  endpoint is not used.
 * **HID boot driver** — [`usb_hid.c`](usb_hid.c). Forces the HID *boot*
   protocol (no report-descriptor parsing): a keyboard's fixed 8-byte report is
   translated from HID usage codes to ASCII and pushed into the same ring buffer
   the console reads, and a mouse's `[buttons, dx, dy]` report updates the shared
   pointer state — so real USB keyboards and mice work alongside the PS/2 ones.
+  A HID device unplugged from a hub releases its interrupt endpoint.
 
 Devices may hang off either UHCI root port or a hub plugged into one; the QEMU
 flags exercise both (`usb-kbd` on root port 1, a `usb-hub` on root port 2 with a
-`usb-mouse` behind it).
+`usb-mouse` behind it). Hot-plug only works behind a hub — the two UHCI root
+ports are still probed just once at boot. Try it from the QEMU monitor:
+`device_add usb-kbd,bus=usb-bus.0,port=2.2` then `device_del <id>`.
 
 ### Storage & block devices
 `main_proc` ([`sched.c`](sched.c)) probes both channels at boot:
@@ -93,7 +99,7 @@ hard disk. The QEMU setup attaches `floppy.img` (floppy A), `hda.img`
 | PS/2 mouse | [`mouse.c`](mouse.c), [`mouse_asm.asm`](mouse_asm.asm) |
 | USB 1.1 host controller (UHCI, polled) | [`uhci.c`](uhci.c) |
 | USB core (enumeration, control/interrupt transfers) | [`usb.c`](usb.c) |
-| USB hub (recursive downstream-port enumeration) | [`usb_hub.c`](usb_hub.c) |
+| USB hub (recursive enumeration + hot-plug polling) | [`usb_hub.c`](usb_hub.c) |
 | USB HID boot devices (keyboard, mouse) | [`usb_hid.c`](usb_hid.c) |
 | PCI bus | [`pci.c`](pci.c) |
 | AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sound.c`](sound.c) |
@@ -258,5 +264,5 @@ scheduler.
 `sched_init()` does not return: it `iret`s into the scheduler's first process
 (`main_proc` in [`sched.c`](sched.c)), which brings up the floppy and IDE
 block devices, mounts their FAT volumes, starts the framebuffer redraw thread
-and the USB thread (`usb_thread` — enumerate then poll HID endpoints), and then
-runs the interactive console (`kmain_console`).
+and the USB thread (`usb_thread` — enumerate, then poll HID endpoints and
+hub ports), and then runs the interactive console (`kmain_console`).
