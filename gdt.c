@@ -3,9 +3,16 @@
  * @brief Builds and loads a flat Global Descriptor Table.
  */
 #include <gdt.h>
+#include <tss.h>
+#include <percpu.h>
 
-/** Number of GDT slots (0 null, 1-4 code/data rings, 5 TSS, 6-7 spare). */
-#define GDT_LEN 8
+/**
+ * Number of GDT slots: 0 null, 1-4 flat code/data rings, then one TSS
+ * descriptor per CPU (5..5+MAX_CPU-1), so every processor can ltr to its own
+ * TSS and the scheduler can load this single table on every core.
+ */
+#define GDT_TSS_BASE 5
+#define GDT_LEN (GDT_TSS_BASE + MAX_CPU)
 
 struct gdt_info gdt_tab[GDT_LEN];
 struct gdt_ptr ptr;
@@ -14,8 +21,8 @@ struct gdt_ptr ptr;
  * @brief Populate the GDT with the flat segment model and load it.
  *
  * Entries: 0 = null, 1 = ring-0 code (0x9A), 2 = ring-0 data (0x92),
- * 3 = ring-3 code (0xFA), 4 = ring-3 data (0xF2). The TSS descriptor (slot 5)
- * is added later by install_tss().
+ * 3 = ring-3 code (0xFA), 4 = ring-3 data (0xF2). The per-CPU TSS descriptors
+ * (slots 5+) are added later by tss_init_cpu().
  */
 void gdt_init() {
     gdt_set_entry(0, 0, 0, 0);
@@ -28,6 +35,23 @@ void gdt_init() {
     ptr.limit = (sizeof(struct gdt_info) * GDT_LEN) - 1;
 
     gdt_set(&ptr);
+}
+
+/** @brief Load the shared kernel GDT on an application processor (for APs). */
+void gdt_load_ap(void) {
+    gdt_set(&ptr);
+}
+
+/**
+ * @brief Fill @p cpu's TSS descriptor at GDT slot @ref GDT_TSS_BASE + index.
+ * @param index Index into @ref cpus[] (0 = BSP).
+ * @param base  Linear address of that CPU's TSS.
+ * @return The GDT slot holding the descriptor.
+ */
+int gdt_tss_entry(int index, uint32_t base) {
+    int slot = GDT_TSS_BASE + index;
+    gdt_set_entry(slot, base, base + sizeof(tss_t), 0xE9);
+    return slot;
 }
 
 /**

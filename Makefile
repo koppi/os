@@ -13,7 +13,11 @@ LD=ld
 OBJCOPY=objcopy
 
 SRCS = $(wildcard *.[cS] *.asm) $(wildcard lib/*.c)
-OBJS = $(addsuffix .o,$(basename $(SRCS))) font.o
+# ap_boot.asm is a flat binary (AP trampoline), not an ELF asm object, so it is
+# excluded from the generic *.[cS]/*.asm rule and built via ap_boot_bin.o.
+SRCS := $(filter-out ap_boot.asm,$(SRCS))
+AP_BOOT_BIN = ap_boot_bin.o
+OBJS = $(addsuffix .o,$(basename $(SRCS))) font.o $(AP_BOOT_BIN)
 KERNEL = kernel.elf
 
 ASFLAGS += -m32 -I.
@@ -94,6 +98,13 @@ $(KERNEL): $(OBJS)
 	@echo "NASM $<"
 	@nasm -f elf -o $@ $^
 
+# AP trampoline: assemble to a flat binary and wrap it as an ELF object so the
+# linker embeds it; C accesses it via _binary_ap_boot_bin_start/_end/_size.
+ap_boot_bin.o: ap_boot.asm
+	@echo "NASM -f bin ap_boot.asm"
+	@nasm -f bin -o ap_boot.bin ap_boot.asm
+	@$(OBJCOPY) -I binary -O elf32-i386 -B i386 ap_boot.bin $@
+
 font.o:
 	@$(OBJCOPY) -O elf32-i386 -B i386 -I binary unifont.sfn font.o
 
@@ -109,7 +120,7 @@ docs::
 clean::
 	@$(MAKE) -C lib clean
 	@$(MAKE) -C apps clean
-	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) *.d lib/*.d *~ os.iso iso docs
+	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin *.d lib/*.d *~ os.iso iso docs
 
 .PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox cloc docs clean
 

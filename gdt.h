@@ -28,6 +28,17 @@ struct gdt_ptr {
 /** @brief Build the flat GDT and load it. */
 void gdt_init();
 
+/** @brief Load the shared kernel GDT and reload segments (for APs). */
+void gdt_load_ap(void);
+
+/**
+ * @brief Install a CPU's TSS descriptor into the GDT.
+ * @param index Index into @ref cpus[] (0 = BSP).
+ * @param base  Linear address of that CPU's TSS.
+ * @return The GDT slot index holding the descriptor.
+ */
+int gdt_tss_entry(int index, uint32_t base);
+
 /**
  * @brief Fill one GDT entry.
  * @param index  Entry index.

@@ -33,6 +33,9 @@ struct idt_ptr {
  */
 void idt_init(uint16_t code);
 
+/** @brief Point this CPU's IDTR at the (shared) IDT. Safe for every CPU. */
+void idt_load();
+
 /** @brief Fallback handler for any vector without a specific one. */
 void default_ir_handler();
 

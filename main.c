@@ -30,6 +30,10 @@
 #include <printf.h>
 #include <commands.h>
 
+#include <acpi.h>
+#include <apic.h>
+#include <percpu.h>
+
 
 #include "cpu.h"
 
@@ -127,6 +131,17 @@ void kernel_main(unsigned long magic, unsigned long addr)
     install_tss();
     rtc_init();
     pci_init();
+
+    /* SMP bring-up for the boot CPU: parse ACPI/MADT, register the BSP,
+     * map + enable the local APIC, and calibrate its timer against the PIT.
+     * Application processors are started by smp_init() in Stage 2. */
+    /* SMP bring-up for the boot CPU: parse ACPI/MADT, register the BSP,
+     * map + enable the local APIC, and calibrate its timer against the PIT.
+     * Application processors are started by smp_init() in Stage 2. */
+    acpi_init();
+    smp_register_bsp(acpi_bsp_apicid());
+    apic_init();
+    smp_init();
 
     klogf(LOG_INFO, "Initialization took: %llu\n", rdtsc() - tsc);
 

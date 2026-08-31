@@ -14,11 +14,12 @@
 ;  limitations under the License.
 ;
 
+; The PIT keeps running for the free-running ms clock (pit_uptime) and the
+; legacy tick counter. Preemption is no longer driven from here: it moved to the
+; per-CPU LAPIC timer (see smp_asm.asm / lapic_timer_tick).
+
 extern pit_ticks
 extern pit_uptime
-extern sched_on
-
-extern schedule
 
 global pit_int
 pit_int:
@@ -35,36 +36,24 @@ pit_int:
     push es
     push fs
     push gs
-    
-    mov ebx, esp            ; save stack pointer
-    
+
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
-    
-    lock inc long [pit_ticks]    ; increment PIT ticks (reset by the scheduler)
-    lock inc long [pit_uptime]   ; free-running ms counter (never reset)
-    
-    mov eax, 0              ; check if scheduling is on
-    cmp [sched_on], eax
-    je .restore             ; scheduling off, end of interrupt
-    
-    push ebx
-    call schedule           ; switch task
-    
-    mov esp, eax            ; change stack pointer
 
-.restore:
-    mov al, 0x20            ; PIC acknowledge
+    lock inc long [pit_ticks]    ; legacy tick counter (get_tick_count used it)
+    lock inc long [pit_uptime]   ; free-running ms counter (never reset)
+
+    mov al, 0x20                ; PIC acknowledge (PIT is on master IRQ0)
     out 0x20, al
-    
+
     pop gs
     pop fs
     pop es
     pop ds
-    
+
     pop ebp
     pop edi
     pop esi

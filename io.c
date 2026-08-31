@@ -53,19 +53,17 @@ void disable_int() {
 }
 
 /**
- * @brief Coarse busy sleep of @p s PIT ticks (~ms at 1 kHz).
+ * @brief Coarse busy sleep of @p s milliseconds.
  *
- * Halts between polls so the CPU is not spun at full speed. The tick source is
- * reset elsewhere, so the granularity is approximate.
+ * Halts between polls so the CPU is not spun at full speed. Uses the
+ * free-running PIT ms clock (@ref pit_ms), which is unaffected by the
+ * scheduler's per-CPU tick counter.
  */
 void sleep(int s) {
     //for (int i = 0; i < s * 1000000; i++) { } return;
-    //XXX if (get_tick_count() == 0) return;
     // TODO better solution
-    int ticks = get_tick_count() + s;
-    int passed = 0;
-    while((passed += get_tick_count()) < ticks) {
+    uint32_t target = pit_ms() + (uint32_t) s;
+    while ((int32_t) (pit_ms() - target) < 0) {
         halt();
-        //printf("sleep %d ...\n", passed);
     }
 }

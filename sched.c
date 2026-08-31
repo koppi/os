@@ -24,6 +24,8 @@
 #include <tss.h>
 #include <lib/string.h>
 #include <lib/system_calls.h>
+#include <apic.h>
+#include <percpu.h>
 
 #include <commands.h>
 #include <graphics.h>
@@ -180,6 +182,17 @@ void sched_init() {
     sched_state(1);
     change_page_directory(proc->pdir);
     set_esp0(main_thread->stack_kernel_limit);
+
+    /* Arm this CPU's LAPIC preemption timer. Interrupts are still masked
+     * (disable_int above); they are re-enabled by the iret to main_proc, after
+     * which this CPU's LAPIC timer drives schedule() directly. */
+    this_cpu()->current = main_thread;
+    this_cpu()->current_proc = proc;
+    this_cpu()->current_dir = proc->pdir;
+    this_cpu()->idle = 0;
+    this_cpu()->preempt_disable = 0;
+    lapic_timer_start();
+
     asm volatile("mov %%eax, %%esp" : : "a" (main_thread->esp_kernel));
     asm volatile("pop %gs;          \
                   pop %fs;          \

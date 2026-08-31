@@ -7,6 +7,9 @@
 
 #include <types.h>
 
+/* Forward declaration to avoid pulling the whole per-CPU header in here. */
+struct cpu;
+
 /** The 32-bit hardware TSS layout (Intel SDM). Only esp0/ss0 are meaningful here. */
 typedef struct tss {
     uint32_t prev_tss;
@@ -39,6 +42,12 @@ typedef struct tss {
 
 /** @brief Load the task register with the TSS selector (@c ltr). */
 void flush_tss();
+
+/** @brief Load @p cpu's task register with its own TSS selector. */
+void flush_tss_for(struct cpu *c);
+
+/** @brief Initialise @p cpu's TSS and install its GDT descriptor. */
+void tss_init_cpu(struct cpu *c);
 
 /** @brief Add the TSS descriptor to the GDT, zero the TSS and load it. */
 void install_tss();

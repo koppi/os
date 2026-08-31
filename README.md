@@ -29,6 +29,25 @@ Current version: **0.0.0** (see [`ver.h`](ver.h)).
 * TSS for ring-3 → ring-0 transitions — [`tss.c`](tss.c)
 * x87 FPU init — [`fpu.c`](fpu.c)
 
+### SMP / multi-core
+* Per-CPU state (`cpu_t`) with its own current thread, page directory, TSS and
+  LAPIC timer — [`percpu.h`](percpu.h), [`smp.c`](smp.c).
+* Real test-and-set spinlocks with `pause` and IF save/restore — one per
+  subsystem (PMM, VMM, scheduler, VFS, console, TLB) — [`spinlock.c`](spinlock.c),
+  [`spinlock.h`](spinlock.h). The owning CPU is never switched away mid-critical
+  section.
+* BSP discovers APs via ACPI, copies a trampoline to 0x8000, publishes per-CPU
+  boot-info blocks and raises INIT-SIPI-SIPI — [`smp.c`](smp.c),
+  [`smp_asm.asm`](smp_asm.asm). Each AP claims an index, loads the kernel page
+  tables and enters `ap_main`.
+* Per-CPU preemption: each core's LAPIC timer fires vector `0xEF`, bumps
+  `sched_ticks` and calls the local `schedule()` — no global PIT tick. APs run
+  scheduled kernel threads and ring-3 processes in parallel.
+* TLB-shootdown IPIs (vector `0xFD`) broadcast via `lapic_ipi_allbutself`; the
+  shared request is gated by `tlb_lock` — [`apic.c`](apic.c), [`smp_asm.asm`](smp_asm.asm).
+* Reschedule IPIs (vector `0xFC`) kick a target CPU's scheduler out of its idle
+  thread so a newly-woken high-priority thread can run immediately.
+
 ### Scheduling & processes
 * Preemptive fixed-priority round-robin scheduler with real-time policies
   (`SCHED_OTHER` / `SCHED_RR` / `SCHED_FIFO`) — [`sched.c`](sched.c). Timer-IRQ

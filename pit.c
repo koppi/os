@@ -10,6 +10,7 @@
 #include <io.h>
 #include <idt.h>
 #include <printf.h>
+#include <percpu.h>
 
 /** Non-zero while preemptive scheduling from the timer IRQ is allowed. */
 uint8_t sched_on = 0;
@@ -94,14 +95,17 @@ void pit_start_counter(uint32_t frequency, uint8_t counter, uint8_t mode) {
     pit_ticks = 0;
 }
 
-/** @brief @return Ticks elapsed since the last @ref reset_tick_count. */
+/**
+ * @brief @return Ticks elapsed on the current CPU since the last
+ *        @ref reset_tick_count (driven by the local LAPIC timer).
+ */
 int get_tick_count() {
-    return pit_ticks;
+    return (int) this_cpu()->sched_ticks;
 }
 
-/** @brief Zero the tick counter. */
+/** @brief Zero the current CPU's tick counter. */
 void reset_tick_count() {
-    pit_ticks = 0;
+    this_cpu()->sched_ticks = 0;
 }
 
 /** @brief @return Milliseconds since boot (free-running, 1 kHz tick). */

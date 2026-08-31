@@ -4,6 +4,8 @@
  */
 #include <idt.h>
 #include <exception.h>
+#include <apic.h>
+#include <smp_asm.h>
 #include <lib/string.h> // for memset
 #include <log.h>
 #include <io.h>
@@ -48,6 +50,25 @@ void idt_init(uint16_t code) {
     install_ir(18, 0x80 | 0x0E, code, &ex_machine_check);
     install_ir(19, 0x80 | 0x0E, code, &ex_simd_fpu);
 
+    /* Local APIC vectors (0xEF timer, 0xFC resched-IPI, 0xFD TLB-IPI,
+     * 0xFE LAPIC error, 0xFF spurious). */
+    install_ir(0xEF, 0x80 | 0x0E, code, &lapic_timer_int);
+    install_ir(0xFC, 0x80 | 0x0E, code, &ipi_resched_int);
+    install_ir(0xFD, 0x80 | 0x0E, code, &ipi_tlb_int);
+    install_ir(0xFE, 0x80 | 0x0E, code, &lapic_error_int);
+    install_ir(0xFF, 0x80 | 0x0E, code, &lapic_spurious_int);
+
+    idt_set(&idtr);
+}
+
+/**
+ * @brief Load this CPU's IDT register.
+ *
+ * The table is global (built once by @ref idt_init); an application processor
+ * must simply point its own IDTR at it. Unlike @ref idt_init this does not
+ * re-program the 8259 PIC, which is BSP-only.
+ */
+void idt_load(void) {
     idt_set(&idtr);
 }
 
@@ -62,6 +83,11 @@ void idt_init(uint16_t code) {
  * @param i Vector number (only the low 4 bits pick the PIC line).
  */
 static void irq_clear_mask(size_t i) {
+    /* Only vectors below 0x30 are PIC-mapped (after the 0x20 remap); anything
+     * else (syscall 0x72, the LAPIC vectors at 0xEF-0xFF) is delivered by the
+     * LAPIC or a software interrupt and must not poke the 8259 registers. */
+    if (i >= 0x30)
+        return;
     uint16_t port = i < 8 ? PIC1_DATA : PIC2_DATA;
     uint8_t value = inportb(port) & ~(1 << i);
     outportb(port, value);
