@@ -15,6 +15,7 @@
 ;
 
 extern pit_ticks
+extern pit_uptime
 extern sched_on
 
 extern schedule
@@ -43,7 +44,8 @@ pit_int:
     mov fs, ax
     mov gs, ax
     
-    lock inc long [pit_ticks]    ; increment PIT ticks
+    lock inc long [pit_ticks]    ; increment PIT ticks (reset by the scheduler)
+    lock inc long [pit_uptime]   ; free-running ms counter (never reset)
     
     mov eax, 0              ; check if scheduling is on
     cmp [sched_on], eax

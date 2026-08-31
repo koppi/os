@@ -25,6 +25,7 @@
 #define ETHERTYPE_ARP   0x0806
 #define ETHERTYPE_IPV4  0x0800
 #define IPPROTO_ICMP    1
+#define IPPROTO_TCP     6
 #define IPPROTO_UDP     17
 
 /** The interface's IPv4 configuration (host byte order), filled by DHCP. */
@@ -41,6 +42,13 @@ typedef struct net_ipv4 {
 
 /** @brief 16-bit one's-complement checksum over @p buf. */
 uint16_t net_checksum(const void *buf, int len);
+
+/** @brief Checksum over the TCP/UDP pseudo-header + @p seg (IPs in host order). */
+uint16_t net_checksum_ph(uint32_t src, uint32_t dst, uint8_t proto,
+                         const void *seg, int len);
+
+/** @return This interface's IPv4 address (host order), 0 if unconfigured. */
+uint32_t net_my_ip(void);
 
 /** @brief Send an Ethernet frame (header prepended, padded to 60 bytes). */
 int eth_send(const uint8_t dst_mac[6], uint16_t ethertype,
@@ -71,6 +79,24 @@ int udp_send(uint32_t dst_ip, uint16_t src_port, uint16_t dst_port,
 typedef void (*udp_handler_t)(uint32_t src_ip, uint16_t src_port,
                               const uint8_t *data, int len);
 void udp_listen(uint16_t port, udp_handler_t fn);
+
+/* ---- console <-> net-thread hand-off ---- */
+
+/**
+ * @brief Run @p task on the `net` thread and block until it finishes.
+ *
+ * The IPv4 stack is single-threaded on the `net` thread, so `ping` / `dns` /
+ * `http` (which run in the console process) submit their work this way. The
+ * task body may use the send helpers and call @ref net_poll in its own wait
+ * loop. @return the task's return value.
+ */
+int net_exec(int (*task)(void));
+
+/** @brief Drain the RX ring into the stack (call from a task's wait loop). */
+void net_poll(void);
+
+/** @return A fresh ephemeral source port (49152-65535). */
+uint16_t net_ephemeral_port(void);
 
 /* ---- interface config ---- */
 

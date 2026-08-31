@@ -20,6 +20,9 @@
 #include <e1000.h>
 #include <net.h>
 #include <dhcp.h>
+#include <dns.h>
+#include <icmp.h>
+#include <tcp.h>
 #include <keyboard.h>
 #include <commands.h>
 
@@ -288,11 +291,188 @@ static void console_net(void) {
     }
 }
 
+/* ---- network commands: parsed args, run on the net thread via net_exec ---- */
+
+static char     net_host[96];
+static char     net_path[128];
+static int      net_count;
+static char     http_buf[1024];   /* do_http recv buffer (net thread only) */
+
+/** @brief Parse a dotted-quad into a host-order address. @return 1 on success. */
+static int parse_ipv4(const char *s, uint32_t *out) {
+    uint32_t v = 0;
+    int parts = 0, cur = 0, digits = 0;
+    for (const char *p = s; ; p++) {
+        if (*p >= '0' && *p <= '9') {
+            cur = cur * 10 + (*p - '0');
+            if (cur > 255) return 0;
+            digits++;
+        } else if (*p == '.' || *p == 0 || *p == ' ') {
+            if (!digits) return 0;
+            v = (v << 8) | (uint32_t)cur;
+            parts++;
+            cur = digits = 0;
+            if (*p != '.') break;
+        } else {
+            return 0;
+        }
+    }
+    if (parts != 4) return 0;
+    *out = v;
+    return 1;
+}
+
+/** @brief Copy the first whitespace-delimited token of @p src into @p dst. */
+static void copy_token(char *dst, const char *src, int max) {
+    int i = 0;
+    while (src && src[i] && src[i] != ' ' && i < max - 1) {
+        dst[i] = src[i];
+        i++;
+    }
+    dst[i] = 0;
+}
+
+/** @brief Resolve net_host (dotted-quad or DNS name) to an address. */
+static int resolve_host(uint32_t *ip) {
+    if (parse_ipv4(net_host, ip))
+        return 1;
+    uint32_t a;
+    if (dns_resolve(net_host, &a, 1) < 1) {
+        printf("%s: cannot resolve\n", net_host);
+        return 0;
+    }
+    char s[16];
+    printf("%s is %s\n", net_host, net_ip_str(a, s));
+    *ip = a;
+    return 1;
+}
+
+static int do_ping(void) {
+    uint32_t ip;
+    if (!resolve_host(&ip))
+        return -1;
+    return icmp_ping(ip, net_count);
+}
+
+static int do_dns(void) {
+    uint32_t a[8];
+    int n = dns_resolve(net_host, a, 8);
+    if (n < 1) {
+        printf("dns: %s not found\n", net_host);
+        return -1;
+    }
+    char s[16];
+    for (int i = 0; i < n; i++)
+        printf("%s has address %s\n", net_host, net_ip_str(a[i], s));
+    return n;
+}
+
+static int do_http(void) {
+    uint32_t ip;
+    if (!resolve_host(&ip))
+        return -1;
+
+    int h = tcp_connect(ip, 80);
+    if (h < 0) {
+        printf("http: connection to %s failed\n", net_host);
+        return -1;
+    }
+
+    char req[320];
+    int n = snprintf(req, sizeof req,
+                     "GET %s HTTP/1.0\r\nHost: %s\r\nUser-Agent: koppi-os\r\n"
+                     "Connection: close\r\n\r\n",
+                     net_path, net_host);
+    if (tcp_send(h, req, n) != n) {
+        printf("http: send failed\n");
+        tcp_close(h);
+        return -1;
+    }
+
+    int total = 0;
+    for (;;) {
+        int r = tcp_recv(h, http_buf, sizeof http_buf);
+        if (r <= 0)
+            break;
+        printf("%.*s", r, http_buf);
+        total += r;
+        if (total >= 16384) {
+            printf("\n[... truncated]\n");
+            break;
+        }
+    }
+    tcp_close(h);
+    printf("\n[%d bytes]\n", total);
+    return total;
+}
+
+/**
+ * @brief Handle "ping <host> [count]".
+ */
+static void console_ping(char *cmd) {
+    char *arg = get_argument(cmd, 1);
+    if (!arg || !*arg) {
+        printf("usage: ping <host> [count]\n");
+        return;
+    }
+    copy_token(net_host, arg, sizeof net_host);
+    char *cnt = get_argument(cmd, 2);
+    net_count = (cnt && *cnt) ? atoi(cnt) : 4;
+    if (net_count < 1) net_count = 1;
+    if (net_count > 16) net_count = 16;
+    net_exec(do_ping);
+}
+
+/**
+ * @brief Handle "dns <name>".
+ */
+static void console_dns(char *cmd) {
+    char *arg = get_argument(cmd, 1);
+    if (!arg || !*arg) {
+        printf("usage: dns <name>\n");
+        return;
+    }
+    copy_token(net_host, arg, sizeof net_host);
+    net_exec(do_dns);
+}
+
+/**
+ * @brief Handle "http <host|url> [path]" — a blocking HTTP/1.0 GET.
+ */
+static void console_http(char *cmd) {
+    char *arg = get_argument(cmd, 1);
+    if (!arg || !*arg) {
+        printf("usage: http <host> [path]   or   http http://host/path\n");
+        return;
+    }
+
+    char tok[192];
+    copy_token(tok, arg, sizeof tok);
+    char *host = tok;
+    if (strncmp(host, "http://", 7) == 0)
+        host += 7;
+
+    char *slash = strchr(host, '/');
+    if (slash) {
+        copy_token(net_path, slash, sizeof net_path);
+        *slash = 0;
+    } else {
+        char *p = get_argument(cmd, 2);
+        if (p && *p)
+            copy_token(net_path, p, sizeof net_path);
+        else
+            strcpy(net_path, "/");
+    }
+    copy_token(net_host, host, sizeof net_host);
+    net_exec(do_http);
+}
+
 /**
  * @brief Parse and execute one console command line.
  *
  * Recognised commands: help, mem, ps, ls, cd, start, read, beep, pci, net,
- * poweroff, reboot. Unknown input produces a "not found" message.
+ * ping, dns, http, poweroff, reboot. Unknown input produces a "not found"
+ * message.
  *
  * @param buf NUL-terminated command line (without the trailing newline).
  */
@@ -308,12 +488,21 @@ void console_exec(char *buf) {
                "beep     - plays a tone\n"
                "pci      - lists PCI devices\n"
                "net      - network interface status\n"
+               "ping     - ping <host> [count]\n"
+               "dns      - dns <name> (DNS lookup)\n"
+               "http     - http <host> [path] (HTTP/1.0 GET)\n"
                "poweroff - powers the machine off (ACPI)\n"
                "reboot   - reboots the machine\n");
     } else if(strcmp(buf, "pci") == 0) {
         console_pci();
     } else if(strcmp(buf, "net") == 0) {
         console_net();
+    } else if(strncmp(buf, "ping", 4) == 0) {
+        console_ping(buf);
+    } else if(strncmp(buf, "dns", 3) == 0) {
+        console_dns(buf);
+    } else if(strncmp(buf, "http", 4) == 0) {
+        console_http(buf);
     } else if(strcmp(buf, "poweroff") == 0) {
         printf("Powering off.\n");
         exit_qemu(0);

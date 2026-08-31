@@ -80,3 +80,9 @@ int get_tick_count();
 
 /** @brief Reset the tick counter to 0. */
 void reset_tick_count();
+
+/**
+ * @brief Free-running millisecond counter since boot (never reset by the
+ *        scheduler, unlike @ref get_tick_count). Wraps after ~49 days.
+ */
+uint32_t pit_ms(void);

@@ -132,21 +132,27 @@ On top of that, [`net.c`](net.c) is a very small IPv4 stack — Ethernet framing
 an 8-entry **ARP** cache (replies to who-has for our address, resolves next
 hops), **IPv4** (20-byte header, checksum, on-link vs. gateway routing) and
 **UDP** (checksum omitted, a tiny port→handler table). No fragmentation, no
-options, no TCP. Everything runs on the `net` kernel thread, so there is no
-locking.
+options. Everything runs on the `net` kernel thread, so there is no locking; the
+console's `ping` / `dns` / `http` commands submit their work to it with
+`net_exec()` and block until it finishes.
 
-[`dhcp.c`](dhcp.c) is a **DHCP client**: on boot the `net` thread runs
-`DISCOVER → OFFER → REQUEST → ACK` against QEMU's SLIRP server and the machine
-comes up with an address (`10.0.2.15/24 via 10.0.2.2` by default), logged as
+* **DHCP** ([`dhcp.c`](dhcp.c)): on boot the `net` thread runs
+  `DISCOVER → OFFER → REQUEST → ACK` against QEMU's SLIRP server and the machine
+  comes up with an address (`10.0.2.15/24 via 10.0.2.2` by default), renewed at
+  T1. Logged as `net: 10.0.2.15/24 via 10.0.2.2, dns 10.0.2.3, lease 86400s`.
+* **ICMP** ([`icmp.c`](icmp.c)): replies to inbound echo requests (the guest is
+  pingable) and backs the `ping <host> [count]` command, which prints per-packet
+  RTTs from the free-running `pit_ms()` clock.
+* **DNS** ([`dns.c`](dns.c)): a single-query A-record resolver over UDP to the
+  DHCP-supplied server, honouring name compression. `dns <name>` prints the
+  addresses; `ping` / `http` resolve names through it.
+* **TCP** ([`tcp.c`](tcp.c)): minimal client — active open, stop-and-wait send,
+  in-order receive, MSS option, a 1 s retransmit timer, up to four connections.
+  No listen/accept, no congestion control. `http <host> [path]` (or
+  `http http://host/path`) does an HTTP/1.0 GET and prints the response.
 
-```
-net: 10.0.2.15/24 via 10.0.2.2, dns 10.0.2.3, lease 86400s
-```
-
-The lease is renewed at T1 (half the lease time). `net` at the console shows the
-MAC, link, frame counters and — once bound — the address, gateway, DNS and the
-DHCP state. `udp_send()` / `ipv4_send()` are the hooks for anything higher
-(there is no ICMP, DNS resolver or TCP yet).
+`ipv4_send()` / `udp_send()` and `tcp_connect/send/recv/close()` are the hooks
+for anything more (there is no TLS or resolver cache).
 
 ### Drivers
 | Area | Files |
@@ -163,8 +169,9 @@ DHCP state. `udp_send()` / `ipv4_send()` are the hooks for anything higher
 | i440FX / PIIX3 chipset (host bridge, ISA bridge, IDE) | [`pci_piix.c`](pci_piix.c) |
 | PIIX4 ACPI power management (poweroff / reboot) | [`pci_acpi.c`](pci_acpi.c) |
 | Intel 82540EM gigabit NIC ("e1000", polled) | [`e1000.c`](e1000.c) |
-| IPv4 stack (Ethernet, ARP, IPv4, UDP) | [`net.c`](net.c) |
-| DHCP client | [`dhcp.c`](dhcp.c) |
+| IPv4 stack (Ethernet, ARP, IPv4, UDP, ICMP) | [`net.c`](net.c), [`icmp.c`](icmp.c) |
+| DHCP client / DNS resolver | [`dhcp.c`](dhcp.c), [`dns.c`](dns.c) |
+| Minimal client TCP | [`tcp.c`](tcp.c) |
 | QEMU / Bochs standard VGA (DISPI mode control) | [`pci_vga.c`](pci_vga.c) |
 | AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sound.c`](sound.c) |
 | PC speaker | [`pcspk.c`](pcspk.c) |
@@ -224,6 +231,9 @@ keyboard driver, echoes them, supports backspace, and executes a line on Enter.
 | `beep` | play a tone through the AC97 codec |
 | `pci` | list the enumerated PCI devices |
 | `net` | interface MAC, link, counters and the DHCP-assigned address |
+| `ping <host> [count]` | ICMP echo (resolves names via DNS) |
+| `dns <name>` | DNS A-record lookup |
+| `http <host> [path]` | HTTP/1.0 GET, prints the response |
 | `poweroff` | power the machine off (ACPI S5) |
 | `reboot` | reset the machine (0xCF9) |
 

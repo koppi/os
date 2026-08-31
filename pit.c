@@ -20,6 +20,9 @@ uint8_t sched_on = 0;
  */
 uint32_t pit_ticks __attribute__ ((aligned (4)));
 
+/** Free-running millisecond counter (1 kHz tick), never reset. */
+uint32_t pit_uptime __attribute__ ((aligned (4)));
+
 extern void pit_int();
 
 /** @brief Set the scheduler-enable flag (non-zero enables preemption). */
@@ -99,4 +102,9 @@ int get_tick_count() {
 /** @brief Zero the tick counter. */
 void reset_tick_count() {
     pit_ticks = 0;
+}
+
+/** @brief @return Milliseconds since boot (free-running, 1 kHz tick). */
+uint32_t pit_ms(void) {
+    return pit_uptime;
 }

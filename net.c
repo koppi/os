@@ -9,6 +9,8 @@
  */
 #include <net.h>
 #include <dhcp.h>
+#include <icmp.h>
+#include <tcp.h>
 #include <e1000.h>
 
 #include <io.h>
@@ -72,16 +74,36 @@ static uint32_t get_be32(const uint8_t *p) {
     return ((uint32_t)p[0] << 24) | (p[1] << 16) | (p[2] << 8) | p[3];
 }
 
-uint16_t net_checksum(const void *buf, int len) {
+static uint32_t csum_add(uint32_t sum, const void *buf, int len) {
     const uint16_t *p = buf;
-    uint32_t sum = 0;
     for (; len > 1; len -= 2)
         sum += *p++;
     if (len)
         sum += *(const uint8_t *)p;
+    return sum;
+}
+
+static uint16_t csum_fold(uint32_t sum) {
     while (sum >> 16)
         sum = (sum & 0xFFFF) + (sum >> 16);
     return (uint16_t)~sum;
+}
+
+uint16_t net_checksum(const void *buf, int len) {
+    return csum_fold(csum_add(0, buf, len));
+}
+
+uint16_t net_checksum_ph(uint32_t src, uint32_t dst, uint8_t proto,
+                         const void *seg, int len) {
+    /* TCP/UDP pseudo-header: src, dst (network order), 0, proto, seg length. */
+    uint8_t ph[12];
+    put_be32(ph + 0, src);
+    put_be32(ph + 4, dst);
+    ph[8]  = 0;
+    ph[9]  = proto;
+    ph[10] = (len >> 8) & 0xFF;
+    ph[11] = len & 0xFF;
+    return csum_fold(csum_add(csum_add(0, ph, 12), seg, len));
 }
 
 char *net_ip_str(uint32_t ip, char *b) {
@@ -244,8 +266,16 @@ static void ipv4_input(const uint8_t *p, int len) {
         total = len;
 
     uint32_t src = ntohl(h->src);
-    if (h->proto == IPPROTO_UDP)
-        udp_input(src, p + ihl, total - ihl);
+    const uint8_t *pl = p + ihl;
+    int pllen = total - ihl;
+    if (pllen < 0)
+        return;
+
+    switch (h->proto) {
+    case IPPROTO_UDP:  udp_input(src, pl, pllen); break;
+    case IPPROTO_ICMP: icmp_input(src, pl, pllen); break;
+    case IPPROTO_TCP:  tcp_input(src, pl, pllen); break;
+    }
 }
 
 /* ------------------------------------------------------------------ *
@@ -306,6 +336,7 @@ void net_input(const uint8_t *frame, uint16_t len) {
 void net_mac(uint8_t out[6])            { ncpy(out, my_mac, 6); }
 const net_ipv4_t *net_config(void)      { return &cfg; }
 int net_is_up(void)                     { return configured; }
+uint32_t net_my_ip(void)               { return cfg.ip; }
 
 void net_clear_config(void) {
     memset(&cfg, 0, sizeof cfg);
@@ -325,8 +356,36 @@ void net_set_config(const net_ipv4_t *c) {
 }
 
 /* ------------------------------------------------------------------ *
+ *  Console -> net-thread task hand-off                                *
+ * ------------------------------------------------------------------ */
+static int (* volatile net_task)(void);
+static volatile int net_task_rc;
+static volatile int net_task_done;
+
+int net_exec(int (*task)(void)) {
+    while (net_task)                     /* a previous task is still queued */
+        sleep(20);
+    net_task_done = 0;
+    net_task = task;
+    while (!net_task_done)
+        sleep(20);
+    return net_task_rc;
+}
+
+uint16_t net_ephemeral_port(void) {
+    static uint16_t p = 49152;
+    if (++p < 49152)
+        p = 49152;
+    return p;
+}
+
+/* ------------------------------------------------------------------ *
  *  Thread                                                             *
  * ------------------------------------------------------------------ */
+void net_poll(void) {
+    e1000_rx_poll(net_input);
+}
+
 void net_thread(void) {
     if (!e1000_present())
         return;
@@ -336,7 +395,12 @@ void net_thread(void) {
 
     dhcp_start();
     while (1) {
-        e1000_rx_poll(net_input);
+        if (net_task) {
+            net_task_rc = net_task();
+            net_task = 0;
+            net_task_done = 1;
+        }
+        net_poll();
         dhcp_tick();
         sleep(50);
     }
