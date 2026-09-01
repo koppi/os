@@ -3,12 +3,20 @@
  * @brief Virtual memory manager — page-directory/table maps and per-process
  *        address spaces, layered on the physical frame allocator (mm.c) and
  *        the page-table storage allocator (paging.c).
+ *
+ * SMP: every page-table mutation runs under @ref vmm_lock, and any change that
+ * removes or replaces an existing mapping is followed by a cross-CPU
+ * @ref tlb_shootdown. The "current" page directory is per-CPU (each CPU's
+ * @ref cpu_t::current_dir), set by @ref change_page_directory alongside CR3.
  */
 #include <io.h>
 #include <memory.h>
 #include <lib/string.h>
 #include <printf.h>
 #include <proc.h>
+#include <percpu.h>
+#include <apic.h>
+#include <spinlock.h>
 
 /*
  * |------------------------------------------------|
@@ -27,17 +35,20 @@
  */
 
 page_dir_t kern_dir[1024] __attribute__((aligned(4096)));
-page_dir_t *current_dir = 0;
 
 extern uint32_t kernel_start;
 extern uint32_t kernel_end;
+
+/* vmm_lock (spinlock.h) serialises every page-table mutation across CPUs. */
 
 /**
  * Initializes the Virtual Memory Manager
  */
 void vmm_init() {
     memset(kern_dir, 0, PAGEDIR_SIZE);
-    memset((void *) get_page_table_bitmap(), 0, 0x10);
+    /* Put the page-table storage window just past the kernel image, before
+     * map_kernel() allocates the first table from it. */
+    paging_init((uint32_t) &kernel_end);
     map_kernel(kern_dir);
     change_page_directory(kern_dir);
     enable_paging();
@@ -49,7 +60,7 @@ void vmm_init() {
 void map_kernel(page_dir_t *pdir) {
     vmm_addr_t virt = 0x00000000;
     mm_addr_t phys = 0x0;
-    
+
     // Identity map first 4MB
     for(int i = 0; i < 1024; i++, virt += PAGE_SIZE, phys += PAGE_SIZE) {
         if(pdir[virt >> 22] == 0) {
@@ -70,15 +81,15 @@ void map_kernel(page_dir_t *pdir) {
 }
 
 /**
- * Switches page directory with the given one
+ * Switches the calling CPU's page directory to the given one
  */
 void change_page_directory(page_dir_t *p) {
-    current_dir = p;
-    load_pdbr((mm_addr_t) current_dir);
+    this_cpu()->current_dir = p;
+    load_pdbr((mm_addr_t) p);
 }
 
 page_dir_t *get_page_directory() {
-    return current_dir;
+    return this_cpu()->current_dir;
 }
 
 page_dir_t *get_kern_directory() {
@@ -86,7 +97,7 @@ page_dir_t *get_kern_directory() {
 }
 
 /**
- * Creates a page table for the given virtual address
+ * Creates a page table for the given virtual address (caller holds vmm_lock).
  */
 int vmm_create_page_table(page_dir_t *pdir, vmm_addr_t virt, uint32_t flags) {
     void *pt = page_table_malloc();
@@ -96,32 +107,39 @@ int vmm_create_page_table(page_dir_t *pdir, vmm_addr_t virt, uint32_t flags) {
     return 1;
 }
 
+/** @return The current PTE for @p virt in @p pdir, or 0 if no page table. */
+static uint32_t pte_of(page_dir_t *pdir, vmm_addr_t virt) {
+    if(pdir[virt >> 22] == 0)
+        return 0;
+    return ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12];
+}
+
 /**
  * Allocates a chunk of memory and maps it to the virtual address
  */
 int vmm_map(page_dir_t *pdir, vmm_addr_t virt, uint32_t flags) {
-    // Get a memory block
     mm_addr_t phys = (mm_addr_t) pmm_malloc();
     if(!phys) {
         printf("VMM: Failed allocating memory %x\n", phys);
         return 0;
     }
 
-    // If the page table is not present, create it
+    uint32_t lf = spin_lock(&vmm_lock);
+    uint32_t old = pte_of(pdir, virt);
+
     if(!pdir[virt >> 22]) {
         if(!vmm_create_page_table(pdir, virt, flags)) {
+            spin_unlock(&vmm_lock, lf);
             return 0;
         }
     } else {
-        // A page-directory entry that already exists (e.g. cloned from the
-        // kernel directory) may lack permission bits this mapping needs -
-        // notably PAGE_USER. Widen it; PDE and PTE bits are ANDed by the CPU.
         pdir[virt >> 22] |= (flags & (PAGE_PRESENT | PAGE_RW | PAGE_USER));
     }
-    // Map the address to the page table
-    // Use the virtual address to get the index in the page directory and keep only the first 12 bits
-    // which is the page table and use the virtual address to find the index in the page table
     ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] = phys | flags;
+
+    if(old & PAGE_PRESENT)
+        tlb_shootdown(virt);
+    spin_unlock(&vmm_lock, lf);
     return 1;
 }
 
@@ -129,25 +147,27 @@ int vmm_map(page_dir_t *pdir, vmm_addr_t virt, uint32_t flags) {
  * Maps the physical address to the virtual one
  */
 int vmm_map_phys(page_dir_t *pdir, vmm_addr_t virt, mm_addr_t phys, uint32_t flags) {
-    // If the page table is not present, create it
+    uint32_t lf = spin_lock(&vmm_lock);
+    uint32_t old = pte_of(pdir, virt);
+
     if(pdir[virt >> 22] == 0) {
         if(!vmm_create_page_table(pdir, virt, flags)) {
+            spin_unlock(&vmm_lock, lf);
             return 0;
         }
     } else {
-        // Widen an existing PDE (e.g. one cloned from the kernel directory,
-        // which has no PAGE_USER) to carry the bits this mapping needs.
         pdir[virt >> 22] |= (flags & (PAGE_PRESENT | PAGE_RW | PAGE_USER));
     }
-    // Map the address to the page table
-    // Use the virtual address to get the index in the page directory and keep only the first 12 bits
-    // which is the page table and use the virtual address to find the index in the page table
     ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] = phys | flags;
+
+    if(old & PAGE_PRESENT)
+        tlb_shootdown(virt);
+    spin_unlock(&vmm_lock, lf);
     return 1;
 }
 
 /**
- * Gets the physical address from the given virtual address
+ * Gets the physical address from the given virtual address (lock-free read).
  */
 void *get_phys_addr(page_dir_t *pdir, vmm_addr_t virt) {
     if(pdir[virt >> 22] == 0)
@@ -155,70 +175,99 @@ void *get_phys_addr(page_dir_t *pdir, vmm_addr_t virt) {
     return (void *) (((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] >> 12 << 12);
 }
 
+/** Directory slots the kernel needs reachable from a process's ring-0 context:
+ *  0 = identity map (kernel code/data/stacks/heap/page-tables, all < 4 MiB),
+ *  1 = RETURN_ADDR stub + kernel-thread stacks,
+ *  LAPIC slot = the MMIO this_cpu() reads on every scheduler tick. */
+static int is_kernel_slot(int i) {
+    return i == 0 || i == 1 || i == (int) ((uint32_t) 0xFEE00000 >> 22);
+}
+
 /**
- * Creates a page directory to be used with a process
+ * Creates a page directory to be used with a process.
+ *
+ * Only the handful of kernel directory slots a process's ring-0 code actually
+ * touches are cloned (each with its own copy of the page table). Everything
+ * else the process builds itself. This keeps page-table storage use to a few
+ * blocks per process; the old "clone every present entry" grew the window into
+ * the kernel's own .bss.
  */
 page_dir_t *create_address_space() {
-    // Allocate space for a page directory
+    uint32_t lf = spin_lock(&vmm_lock);
     page_dir_t *pdir = (page_dir_t *) page_table_malloc();
-    if(!pdir)
+    if(!pdir) {
+        spin_unlock(&vmm_lock, lf);
         return 0;
-    // Clone page directory
-    int i;
-    vmm_addr_t addr = 0;
-    for(i = 0; i < PAGEDIR_SIZE; i++, addr += KERNEL_SPACE_END) {
-        if(kern_dir[i] & PAGE_PRESENT) {
-            if(!vmm_create_page_table(pdir, addr, kern_dir[i] << 20 >> 20)) {
-                return 0;
-            }
-            memcpy((void *) (pdir[i] >> 12 << 12), (void *) (kern_dir[i] >> 12 << 12), PAGE_SIZE);
-        }
     }
+    for(int i = 0; i < PAGEDIR_SIZE; i++) {
+        if(!is_kernel_slot(i) || !(kern_dir[i] & PAGE_PRESENT))
+            continue;
+        if(!vmm_create_page_table(pdir, (vmm_addr_t) i << 22, kern_dir[i] & 0xFFF)) {
+            spin_unlock(&vmm_lock, lf);
+            return 0;
+        }
+        memcpy((void *) (pdir[i] & ~0xFFF), (void *) (kern_dir[i] & ~0xFFF), PAGE_SIZE);
+    }
+    spin_unlock(&vmm_lock, lf);
     return pdir;
 }
 
 /**
- * Deletes a page directory
+ * Frees every page table a process directory points at, then the directory.
+ * Every table in a process directory is that process's own (kernel slots are
+ * deep copies, not shared), so this is safe once no CPU still runs on @p pdir.
  */
 void delete_address_space(page_dir_t *pdir) {
+    uint32_t lf = spin_lock(&vmm_lock);
     for(int i = 0; i < PAGEDIR_SIZE; i++) {
-        if(pdir[i * PAGE_SIZE >> 22]) {
-            vmm_unmap_page_table(pdir, i * PAGE_SIZE);
+        if(pdir[i] & PAGE_PRESENT) {
+            page_table_free((void *) (pdir[i] & PAGE_FRAME_MASK));
+            pdir[i] = 0;
         }
     }
+    page_table_free(pdir);
+    spin_unlock(&vmm_lock, lf);
+    tlb_shootdown(0);
 }
 
 /**
  * Unmaps the page table and frees the memory block
  */
 void vmm_unmap_page_table(page_dir_t *pdir, vmm_addr_t virt) {
+    uint32_t lf = spin_lock(&vmm_lock);
     void *frame = (void *) (pdir[virt >> 22] & PAGE_FRAME_MASK);
     page_table_free(frame);
     pdir[virt >> 22] = 0;
-    flush_tlb(virt);
+    tlb_shootdown(0);
+    spin_unlock(&vmm_lock, lf);
 }
 
 /**
  * Unmaps the physical address from the virtual and deallocates memory
  */
 void vmm_unmap(page_dir_t *pdir, vmm_addr_t virt) {
+    uint32_t lf = spin_lock(&vmm_lock);
     if(pdir[virt >> 22] != 0) {
         void *addr = get_phys_addr(pdir, virt);
         if(addr) {
-            pmm_free(addr);
             ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] = 0;
+            tlb_shootdown(virt);
+            pmm_free(addr);
         } else {
             printf("Error unmapping memory\n");
         }
     }
+    spin_unlock(&vmm_lock, lf);
 }
 
 /**
  * Unmaps a physical address from the virtual
  */
 void vmm_unmap_phys(page_dir_t *pdir, vmm_addr_t virt) {
+    uint32_t lf = spin_lock(&vmm_lock);
     if(pdir[virt >> 22] != 0) {
         ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] = 0;
+        tlb_shootdown(virt);
     }
+    spin_unlock(&vmm_lock, lf);
 }
-

@@ -13,7 +13,10 @@ chardev_t *kconsole;
 /**
  * @brief Write character @p c to all kernel output surfaces.
  *
- * This is the single-character primitive the printf implementation calls.
+ * The single-character primitive the printf implementation calls. Cross-CPU
+ * serialisation happens one level up: @c vprintf_ holds @ref con_lock for a
+ * whole line, and the klogf/printk macros assemble a line into a stack buffer
+ * and emit it with one printf.
  */
 void putchar_(char c) {
     kconsole->write(kconsole, &c, 1);

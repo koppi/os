@@ -13,6 +13,8 @@
 #include <printf.h>
 #include <sched.h>
 #include <pit.h>
+#include <percpu.h>
+#include <spinlock.h>
 
 /*
  * Process in memory
@@ -32,10 +34,12 @@
 /**
  * Starts a new process
  */
-int start_proc(char *name, char *arguments) {
+static int start_proc_locked(char *name, char *arguments) {
     process_t *proc = (process_t *) kmalloc(sizeof(process_t));
     strncpy(proc->name, name, sizeof(proc->name) - 1);
     proc->state = PROC_NEW;
+    proc->cpu = -1;
+    proc->last_ran = 0;
 
     // Create a new page directory
     proc->pdir = create_address_space();
@@ -88,6 +92,20 @@ int start_proc(char *name, char *arguments) {
 
     sched_add_proc(proc);
     return proc->thread_list->pid;
+}
+
+/**
+ * @brief Load an ELF and add it to the run queue.
+ *
+ * Serialised with @ref proc_lock: address-space construction hands out physical
+ * frames and briefly aliases pages into the kernel directory, which must not
+ * race another process being built on a different CPU.
+ */
+int start_proc(char *name, char *arguments) {
+    uint32_t f = spin_lock(&proc_lock);
+    int r = start_proc_locked(name, arguments);
+    spin_unlock(&proc_lock, f);
+    return r;
 }
 
 /**
@@ -261,29 +279,46 @@ void remove_proc(int pid) {
     if(cur == 0)
         return;
 
+    uint32_t plf = spin_lock(&proc_lock);
+
+    /* Unlink it from the run queue first, then wait until whichever CPU was
+     * running it has switched away (its next LAPIC tick sees state != ACTIVE),
+     * so we never free page tables that are still live in some CPU's CR3. */
+    if(cur->thread_list && cur->thread_list->main)
+        sched_remove_proc(cur->thread_list->pid);
+    for(;;) {
+        int busy = 0;
+        for(int i = 0; i < ncpu; i++)
+            if(cpus[i].current_proc == cur)
+                busy = 1;
+        if(!busy)
+            break;
+        asm volatile("pause");
+    }
+
     // Remove the executable
     for(uint32_t page = 0; page < cur->thread_list->image_size / PAGE_SIZE; page++) {
         vmm_unmap(cur->pdir, cur->thread_list->image_base + (page * PAGE_SIZE));
     }
     
     for(int i = 0; i < cur->threads; i++) {
-        if(cur->thread_list->main == 1) {
-            sched_remove_proc(cur->thread_list->pid);
-        }
         vmm_unmap(cur->pdir, cur->thread_list->stack_limit - PAGE_SIZE);
         vmm_unmap(cur->pdir, cur->thread_list->stack_kernel_limit - PAGE_SIZE);
-        for(int i = 0; i < 4; i++) {
-            vmm_unmap(cur->pdir, cur->thread_list->heap + (i * PAGE_SIZE));
+        for(int j = 0; j < 4; j++) {
+            vmm_unmap(cur->pdir, cur->thread_list->heap + (j * PAGE_SIZE));
         }
-        
+
         thread_t *thread = cur->thread_list;
         cur->thread_list = cur->thread_list->next;
         kfree(thread);
     }
-    
-    change_page_directory(get_kern_directory());
+
+    if(get_page_directory() == cur->pdir)
+        change_page_directory(get_kern_directory());
     delete_address_space(cur->pdir);
     kfree(cur);
+
+    spin_unlock(&proc_lock, plf);
 }
 
 /**
@@ -295,13 +330,19 @@ int start_kernel_proc(char *name, void *addr) {
      * the previous one's stack. */
     static uint32_t kproc_stack_base = (uint32_t) KERNEL_SPACE_END + 0x5000;
 
+    uint32_t plf = spin_lock(&proc_lock);
+
     process_t *proc = (process_t *) kmalloc(sizeof(process_t));
     strncpy(proc->name, name, sizeof(proc->name) - 1);
     proc->state = PROC_NEW;
+    proc->cpu = -1;
+    proc->last_ran = 0;
     proc->pdir = get_kern_directory();
     proc->thread_list = create_thread();
-    if(proc->thread_list == 0)
+    if(proc->thread_list == 0) {
+        spin_unlock(&proc_lock, plf);
         return PROC_STOPPED;
+    }
     proc->thread_list->main = 1;
     proc->thread_list->parent = (void *) proc;
     proc->thread_list->eip = (uint32_t) addr;
@@ -341,9 +382,11 @@ int start_kernel_proc(char *name, void *addr) {
     proc->threads = 1;
     proc->thread_list->state = PROC_ACTIVE;
     proc->state = PROC_ACTIVE;
-    
+
     sched_add_proc(proc);
-    return proc->thread_list->pid;
+    int pid = proc->thread_list->pid;
+    spin_unlock(&proc_lock, plf);
+    return pid;
 }
 
 /**

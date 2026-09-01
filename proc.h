@@ -69,6 +69,8 @@ typedef struct proc {
     page_dir_t *pdir;         /**< Page directory. */
     int threads;              /**< Thread count. */
     thread_t *thread_list;    /**< Current thread (head of the ring). */
+    int cpu;                  /**< CPU index running this process now, -1 if none (SMP). */
+    uint32_t last_ran;        /**< pit_ms() when last scheduled (round-robin tiebreak). */
     struct proc *next;        /**< Next process in the scheduler ring. */
     struct proc *prec;        /**< Previous process in the scheduler ring. */
 } process_t;

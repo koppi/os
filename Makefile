@@ -46,6 +46,7 @@ LDFLAGS += -melf_i386 -T kernel.lds -Map kernel.map -z muldefs -z noexecstack
 
 QEMU ?= qemu-system-$(TARGET)
 QEMUFLAGS += -vga std -m 256M -no-reboot
+QEMUFLAGS += -smp 4
 QEMUFLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 QEMUFLAGS += -enable-kvm
 QEMUFLAGS += -audiodev id=pa,driver=pa -machine pcspk-audiodev=pa

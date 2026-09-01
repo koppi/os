@@ -1364,10 +1364,17 @@ static int vsnprintf_impl(output_gadget_t* output, const char* format, va_list a
 
 ///////////////////////////////////////////////////////////////////////////////
 
+/* con_lock (spinlock.h) keeps a printf line from interleaving across CPUs.
+ * It is a leaf: the putchar_ path takes no other lock. */
+#include <spinlock.h>
+
 int vprintf_(const char* format, va_list arg)
 {
   output_gadget_t gadget = extern_putchar_gadget();
-  return vsnprintf_impl(&gadget, format, arg);
+  uint32_t f = spin_lock(&con_lock);
+  const int ret = vsnprintf_impl(&gadget, format, arg);
+  spin_unlock(&con_lock, f);
+  return ret;
 }
 
 int vsnprintf_(char* s, size_t n, const char* format, va_list arg)

@@ -12,7 +12,10 @@
 #include <printf.h>
 #include <percpu.h>
 
-/** Non-zero while preemptive scheduling from the timer IRQ is allowed. */
+/**
+ * Master switch: non-zero once the scheduler is running (set by sched_init).
+ * Per-CPU "don't preempt me right now" gating is separate — see @ref sched_state.
+ */
 uint8_t sched_on = 0;
 
 /**
@@ -26,14 +29,24 @@ uint32_t pit_uptime __attribute__ ((aligned (4)));
 
 extern void pit_int();
 
-/** @brief Set the scheduler-enable flag (non-zero enables preemption). */
+/**
+ * @brief Enable/disable preemption *on the calling CPU only*.
+ *
+ * On SMP the old global flag became a per-CPU flag: cross-CPU exclusion is now
+ * the subsystem spinlocks' job, and @c sched_state only keeps the local LAPIC
+ * tick from switching this CPU away mid-critical-section. It is a plain flag
+ * (not a nesting counter) so the unbalanced exit paths in proc.c / thread.c
+ * still leave preemption enabled.
+ *
+ * @param on 0 disables preemption on this CPU, non-zero re-enables it.
+ */
 void sched_state(int on) {
-    sched_on = on;
+    this_cpu()->preempt_disable = on ? 0 : 1;
 }
 
-/** @brief @return The current scheduler-enable flag. */
+/** @return Non-zero if preemption is currently enabled on the calling CPU. */
 int get_sched_state() {
-    return sched_on;
+    return this_cpu()->preempt_disable == 0;
 }
 
 /** @brief Write @p cmd to the PIT command port. */

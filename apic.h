@@ -52,3 +52,13 @@ void lapic_timer_calibrate(void);
 
 /** @brief Mask/unmask this CPU's LAPIC timer interrupt. */
 void lapic_timer_mask(int mask);
+
+/**
+ * @brief Flush virtual address @p va (or the whole TLB when @p va == 0) on the
+ *        local CPU and every other online CPU, waiting for them to acknowledge.
+ *        Degrades to a plain local flush when only one CPU is online.
+ */
+void tlb_shootdown(uint32_t va);
+
+/** @brief IPI_TLB handler body (called from the asm stub in smp_asm.asm). */
+void ipi_tlb_handler(void);

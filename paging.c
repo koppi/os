@@ -2,43 +2,71 @@
  * @file paging.c
  * @brief Storage allocator for page tables and page directories.
  *
- * Page-table structures live in a fixed 2 MiB window starting at
- * @ref PAGE_START, tracked by a small bitmap (one bit per 4 KiB block).
+ * Page-table structures live in a fixed window that starts just past the end of
+ * the kernel image (@ref paging_init) — it used to be a hard-coded 0x200000,
+ * which overlapped the kernel's own @c .data/.bss once the linked-in font blob
+ * pushed the image past 2 MiB, so @c page_table_malloc was quietly zeroing the
+ * GDT / IDT / per-CPU tables. Tracked by a small bitmap (one bit per 4 KiB).
  */
 #include <lib/string.h>
 #include <memory.h>
+#include <spinlock.h>
 
-#define MAX_BLOCKS 512            /**< Number of 4 KiB blocks in the window. */
-#define PAGE_START 0x200000       /**< Base of the page-table storage window. */
+/** Number of 4 KiB blocks in the storage window (256 KiB). */
+#define MAX_BLOCKS 64
 
-/** 16 words = 512 bits, one per 4 KiB block in the storage window. */
-static uint32_t bitmap[0x10];
+/** 2 words = 64 bits, one per 4 KiB block in the storage window. */
+static uint32_t bitmap[2];
+/** Base of the page-table storage window (set by @ref paging_init). */
+static uint32_t page_start;
 /** Count of blocks currently handed out (diagnostic only). */
 static int used_blocks = 0;
+
+/* pgtbl_lock (spinlock.h) serialises the storage-window bitmap across CPUs. */
+
+/**
+ * @brief Place the page-table storage window at @p start (page-aligned up).
+ * @return The first byte past the window (where the kernel heap begins).
+ */
+uint32_t paging_init(uint32_t start) {
+    page_start = (start + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1u);
+    memset(bitmap, 0, sizeof(bitmap));
+    used_blocks = 0;
+    return page_start + (uint32_t) MAX_BLOCKS * BLOCKS_LEN;
+}
+
+/** @return The first byte past the storage window (kernel-heap base). */
+uint32_t paging_window_end(void) {
+    return page_start + (uint32_t) MAX_BLOCKS * BLOCKS_LEN;
+}
 
 /**
  * @brief Allocate and zero one 4 KiB block for a page table or directory.
  * @return Block address in the storage window, or 0 if the window is full.
  */
 void *page_table_malloc() {
+    uint32_t f = spin_lock(&pgtbl_lock);
     int p = paging_first_free();
-    if(p == -1)
+    if(p == -1) {
+        spin_unlock(&pgtbl_lock, f);
         return 0;
+    }
     paging_set_bit(p);
     used_blocks++;
-    void *addr = (void *) ((BLOCKS_LEN * p) + PAGE_START);
+    spin_unlock(&pgtbl_lock, f);
+    void *addr = (void *) ((BLOCKS_LEN * p) + page_start);
     memset(addr, 0, PAGE_SIZE);
     return addr;
 }
 
 /** @brief Mark storage block @p bit used. */
 void paging_set_bit(int bit) {
-    bitmap[bit / 32] |= (1 << (bit % 32));
+    bitmap[bit / 32] |= (1u << (bit % 32));
 }
 
 /** @brief Mark storage block @p bit free. */
 void paging_unset_bit(int bit) {
-    bitmap[bit / 32] &= ~(1 << (bit % 32));
+    bitmap[bit / 32] &= ~(1u << (bit % 32));
 }
 
 /**
@@ -46,15 +74,11 @@ void paging_unset_bit(int bit) {
  * @return Block index, or -1 if the window is full.
  */
 int paging_first_free() {
-    uint32_t i;
-    int j;
-    
-    for(i = 0; i < MAX_BLOCKS / 32; i++) {
+    for(int i = 0; i < MAX_BLOCKS / 32; i++) {
         if(bitmap[i] != BYTE_SET) {
-            for(j = 0; j < 32; j++) {
-                if(!(bitmap[i] & (1 << j))) {
+            for(int j = 0; j < 32; j++) {
+                if(!(bitmap[i] & (1u << j)))
                     return (i * 32) + j;
-                }
             }
         }
     }
@@ -64,10 +88,18 @@ int paging_first_free() {
 /**
  * @brief Release a page-table storage block.
  * @param addr Address previously returned by @ref page_table_malloc.
+ *
+ * Ignores an address outside the window (e.g. a stale 0 from an already-cleared
+ * directory slot).
  */
 void page_table_free(void *addr) {
-    paging_unset_bit(((uint32_t) addr / BLOCKS_LEN) - PAGE_START);
+    uint32_t a = (uint32_t) addr;
+    if(a < page_start || a >= page_start + (uint32_t) MAX_BLOCKS * BLOCKS_LEN)
+        return;
+    uint32_t f = spin_lock(&pgtbl_lock);
+    paging_unset_bit((int) ((a - page_start) / BLOCKS_LEN));
     used_blocks--;
+    spin_unlock(&pgtbl_lock, f);
 }
 
 /** @return The storage-window allocation bitmap. */

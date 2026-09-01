@@ -88,9 +88,15 @@ static void *syscalls[] = {
 /**
  * @brief Install the syscall gate on vector 0x72 with DPL 3 so ring 3 can
  *        invoke it.
+ *
+ * A 32-bit *trap* gate (type 0xF), not an interrupt gate: it leaves EFLAGS.IF
+ * set, so a system call is preemptible and — importantly on SMP — a CPU that
+ * blocks on a subsystem spinlock inside a syscall keeps servicing the
+ * TLB-shootdown IPI of whichever CPU holds that lock. Critical sections that
+ * must not be preempted disable it locally with @ref sched_state.
  */
 void syscall_init() {
-    install_ir(0x72, 0x80 | 0x0E | 0x60, 0x8, &syscall_handle);
+    install_ir(0x72, 0x80 | 0x0F | 0x60, 0x8, &syscall_handle);
 }
 
 /**

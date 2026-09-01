@@ -1,18 +1,18 @@
 /**
  * @file sched.c
  * @brief Preemptive fixed-priority round-robin scheduler with real-time
- *        policies, and the first process.
+ *        policies, extended for SMP.
  *
- * @ref sched_init builds process 1 by hand and `iret`s into @ref main_proc,
- * which brings up the block devices, starts the framebuffer redraw thread and
- * runs the console. The timer IRQ calls @ref schedule on every tick while
- * @ref sched_on is set.
+ * The process ring (@ref list) is a single global run queue protected by
+ * @ref sched_lock. Each CPU tracks its own running thread/process in its
+ * @ref cpu_t; a @ref process_t carries a @c cpu field so no process is ever run
+ * on two CPUs at once. Every CPU has an idle thread it falls back to when the
+ * run queue holds nothing it may run.
  *
- * @ref schedule keeps the process ring but no longer just rotates it: it runs
- * the highest-priority ready thread, round-robins threads that share that
- * priority (each for its @ref thread_t::time quantum), and lets a newly-ready
- * higher-priority thread preempt a running lower-priority one on the next tick.
- * See sched.h for the policy / priority model.
+ * @ref sched_init builds process 1 (the console) by hand, builds one idle
+ * thread per CPU, releases the parked APs (@ref smp_release) and `iret`s into
+ * @ref main_proc. Each CPU's LAPIC timer then calls @ref schedule on every tick
+ * while @c sched_on is set and its per-CPU preemption gate is open.
  */
 #include <sched.h>
 
@@ -26,6 +26,7 @@
 #include <lib/system_calls.h>
 #include <apic.h>
 #include <percpu.h>
+#include <spinlock.h>
 
 #include <commands.h>
 #include <graphics.h>
@@ -40,26 +41,32 @@
 #include <e1000.h>
 #include <net.h>
 
+/** Master switch (pit.c): non-zero once the scheduler is live. */
+extern uint8_t sched_on;
+
+/** The global run queue: a ring of processes. Protected by @ref sched_lock. */
 process_t *list;
 static int n_proc = 1;
 
+/** Shared dummy process the per-CPU idle threads hang off. */
+static process_t idle_proc;
+
 process_t *get_cur_proc() {
-    return list;
+    return this_cpu()->current_proc;
 }
 
 process_t *get_proc_by_id(int id) {
+    uint32_t f = spin_lock(&sched_lock);
+    process_t *found = 0;
     process_t *app = list;
-    for(int i = 0; i < n_proc; i++) {
-        thread_t *thr_app = app->thread_list;
-	for(int j = 0; j < app->threads; j++) {
-            if(thr_app->pid == id) {
-                return app;
-            }
-            thr_app = thr_app->next;
+    for (int i = 0; i < n_proc && !found; i++, app = app->next) {
+        thread_t *t = app->thread_list;
+        for (int j = 0; j < app->threads; j++, t = t->next) {
+            if (t->pid == id) { found = app; break; }
         }
-        app = app->next;
     }
-    return 0;
+    spin_unlock(&sched_lock, f);
+    return found;
 }
 
 void uart_read_proc() {
@@ -97,31 +104,120 @@ void main_proc() {
     kmain_console();
 }
 
+/** @brief Nudge the other CPUs to reschedule (a new/boosted thread appeared). */
+static void kick_others(void) {
+    if (ncpu > 1)
+        lapic_ipi_allbutself(0xFC /* IPI_RESCHED */);
+}
+
 void sched_add_proc(process_t *proc) {
-    sched_state(0);
+    uint32_t f = spin_lock(&sched_lock);
+    proc->cpu = -1;
+    proc->last_ran = 0;
     n_proc++;
     proc->prec = list;
     proc->next = list->next;
     proc->next->prec = proc;
     list->next = proc;
-    sched_state(1);
+    spin_unlock(&sched_lock, f);
+    kick_others();
 }
 
 void sched_remove_proc(int id) {
-    process_t *app = get_proc_by_id(id);
-    if(app != 0) {
-        sched_state(0);
+    uint32_t f = spin_lock(&sched_lock);
+    process_t *app = list;
+    int hit = 0;
+    for (int i = 0; i < n_proc; i++, app = app->next) {
+        if (app->thread_list->pid == id) { hit = 1; break; }
+    }
+    if (hit) {
         app->prec->next = app->next;
         app->next->prec = app->prec;
         n_proc--;
-        // Only move the run cursor if it pointed at the process we just
-        // unlinked; retarget it to a still-live neighbour, never to an
-        // unrelated process (which would corrupt that process's saved state
-        // on the next tick).
-        if(list == app)
+        /* Keep the ring head valid if it pointed at the unlinked process. */
+        if (list == app)
             list = app->prec;
-        sched_state(1);
     }
+    spin_unlock(&sched_lock, f);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Idle threads                                                       *
+ * ------------------------------------------------------------------ */
+
+/** @brief Per-CPU idle loop: interrupts on, halt until the next tick. */
+static void idle_loop(void) {
+    for (;;)
+        asm volatile("sti; hlt");
+}
+
+/** @brief Build an idle thread (own kernel stack, iret frame -> idle_loop). */
+static thread_t *make_idle_thread(int cpu_index) {
+    thread_t *t = (thread_t *) kmalloc(sizeof(thread_t));
+    memset(t, 0, sizeof(*t));
+    thread_alloc_fpu_state(t);
+    t->pid = -1000 - cpu_index;
+    t->state = PROC_ACTIVE;
+    t->priority = SCHED_PRIO_MIN;
+    t->policy = SCHED_OTHER;
+    t->time = 10;
+    t->main = 1;
+    t->parent = (void *) &idle_proc;
+    t->next = t->prec = t;
+
+    /* Idle only ever nests one interrupt (tick -> schedule); 8 KiB is plenty. */
+    uint32_t ISIZE = 2 * PAGE_SIZE;
+    uint8_t *stk = (uint8_t *) kmalloc(ISIZE);
+    uint32_t top = (uint32_t) stk + ISIZE;
+    t->stack_kernel_limit = top;
+    t->stack_limit = top;
+
+    uint32_t *sp = (uint32_t *) top;
+    *--sp = 0x10;                 // ss
+    *--sp = top;                  // esp (unused: idle never enters ring 3)
+    *--sp = 0x202;                // eflags (IF set)
+    *--sp = 0x08;                 // cs
+    *--sp = (uint32_t) &idle_loop;// eip
+    *--sp = 0;                    // eax
+    *--sp = 0;                    // ebx
+    *--sp = 0;                    // ecx
+    *--sp = 0;                    // edx
+    *--sp = 0;                    // esi
+    *--sp = 0;                    // edi
+    *--sp = top;                  // ebp
+    *--sp = 0x10;                 // ds
+    *--sp = 0x10;                 // es
+    *--sp = 0x10;                 // fs
+    *--sp = 0x10;                 // gs
+    t->esp_kernel = (uint32_t) sp;
+    return t;
+}
+
+/**
+ * @brief Adopt thread @p t on this CPU and `iret` into it; never returns.
+ *
+ * Shared by @ref sched_init (the console's first thread) and @ref ap_main (an
+ * AP's idle thread). The thread's kernel stack must already hold the 16-word
+ * frame @ref schedule leaves behind (built by hand for the first entry).
+ */
+void __attribute__((noreturn)) sched_run_thread(thread_t *t) {
+    cpu_t *c = this_cpu();
+    process_t *p = (process_t *) t->parent;
+
+    c->current = t;
+    c->current_proc = p;
+    if (p != &idle_proc)
+        p->cpu = (int) c->index;
+
+    change_page_directory(p->pdir);
+    set_esp0(t->stack_kernel_limit);
+
+    asm volatile("mov %0, %%esp" : : "r"(t->esp_kernel));
+    asm volatile(
+        "pop %gs\n\t pop %fs\n\t pop %es\n\t pop %ds\n\t"
+        "pop %ebp\n\t pop %edi\n\t pop %esi\n\t pop %eax\n\t"
+        "pop %ebx\n\t pop %ecx\n\t pop %edx\n\t iret\n\t");
+    __builtin_unreachable();
 }
 
 void sched_init() {
@@ -133,6 +229,8 @@ void sched_init() {
     thread_alloc_fpu_state(main_thread);
     proc->thread_list = main_thread;
     proc->threads = 1;
+    proc->cpu = -1;
+    proc->last_ran = 0;
     main_thread->time = 10;
     main_thread->priority = SCHED_PRIO_DEFAULT;
     main_thread->policy = SCHED_OTHER;
@@ -178,34 +276,34 @@ void sched_init() {
     proc->prec = proc;
     proc->state = PROC_ACTIVE;
     list = proc;
+    n_proc = 1;
+
+    idle_proc.state = PROC_ACTIVE;
+    idle_proc.pdir = get_kern_directory();
+    idle_proc.cpu = -1;
+    strcpy(idle_proc.name, "idle");
+
     disable_int();
-    sched_state(1);
+
+    /* One idle thread per online CPU. */
+    for (int i = 0; i < ncpu; i++)
+        cpus[i].idle = make_idle_thread(i);
+
+    /* The BSP claims the console before the APs are let loose. */
+    proc->cpu = 0;
+    cpus[0].current = main_thread;
+    cpus[0].current_proc = proc;
+    cpus[0].current_dir = proc->pdir;
+    cpus[0].preempt_disable = 0;
+
+    sched_on = 1;
+    smp_release();
+
     change_page_directory(proc->pdir);
     set_esp0(main_thread->stack_kernel_limit);
-
-    /* Arm this CPU's LAPIC preemption timer. Interrupts are still masked
-     * (disable_int above); they are re-enabled by the iret to main_proc, after
-     * which this CPU's LAPIC timer drives schedule() directly. */
-    this_cpu()->current = main_thread;
-    this_cpu()->current_proc = proc;
-    this_cpu()->current_dir = proc->pdir;
-    this_cpu()->idle = 0;
-    this_cpu()->preempt_disable = 0;
     lapic_timer_start();
 
-    asm volatile("mov %%eax, %%esp" : : "a" (main_thread->esp_kernel));
-    asm volatile("pop %gs;          \
-                  pop %fs;          \
-                  pop %es;          \
-                  pop %ds;          \
-                  pop %ebp;         \
-                  pop %edi;         \
-                  pop %esi;         \
-                  pop %eax;         \
-                  pop %ebx;         \
-                  pop %ecx;         \
-                  pop %edx;         \
-                  iret");
+    sched_run_thread(main_thread);
 }
 
 
@@ -215,107 +313,115 @@ static inline int proc_runnable(process_t *proc) {
            proc->thread_list->state == PROC_ACTIVE;
 }
 
-/**
- * @brief Highest priority among all ready threads (their process head thread).
- * @return A priority in [@c SCHED_PRIO_MIN, @c SCHED_PRIO_MAX], or
- *         @c SCHED_PRIO_MIN-1 when nothing is ready.
- */
-static int top_priority(void) {
-    int top = SCHED_PRIO_MIN - 1;
-    process_t *p = list;
-    for (int i = 0; i < n_proc; i++, p = p->next) {
-        if (proc_runnable(p) && p->thread_list->priority > top)
-            top = p->thread_list->priority;
-    }
-    return top;
-}
-
-/**
- * @brief Pick the next process to run: highest priority wins, and threads that
- *        share the top priority are taken in round-robin order.
- *
- * The scan starts one past the current process so equal-priority peers rotate
- * fairly; the current process is considered last, so a lone top-priority thread
- * simply keeps running.
- *
- * @param top Target priority (from @ref top_priority).
- * @return The chosen process (never NULL; falls back to the current one).
- */
-static process_t *pick_next(int top) {
-    process_t *p = list;
-    for (int i = 0; i < n_proc; i++) {
-        p = p->next;
-        if (proc_runnable(p) && p->thread_list->priority >= top)
-            return p;
-    }
-    return list;
-}
-
 uint32_t schedule(uint32_t esp) {
     if (list == 0)
         return esp;
 
-    thread_t *cur = list->thread_list;
+    cpu_t *c = this_cpu();
+    uint32_t f = spin_lock(&sched_lock);
 
-    /* A voluntary yield counts for one scheduling decision only. */
-    int yielding = cur->yield;
-    cur->yield = 0;
+    thread_t  *out_t = c->current;
+    process_t *out_p = c->current_proc;
+    int idle_now = (out_t == c->idle) || (out_p == &idle_proc);
 
-    /* SCHED_FIFO ignores the timer; the others are rotated once their quantum
-     * is spent. get_tick_count() counts ticks since the last switch. */
-    int quantum_expired = cur->policy != SCHED_FIFO &&
-                          cur->time > 0 &&
-                          get_tick_count() >= cur->time;
+    int yielding = out_t && out_t->yield;
+    if (out_t) out_t->yield = 0;
 
-    int top = top_priority();
+    int quantum_expired = out_t && out_t->policy != SCHED_FIFO &&
+                          out_t->time > 0 &&
+                          c->sched_ticks >= (uint32_t) out_t->time;
 
-    /* Keep the current thread when it is still the most eligible one:
-     * runnable, not yielding, no higher-priority thread is waiting (real-time
-     * preemption) and it still has quantum left. This is the fast path. */
-    if (proc_runnable(list) && !yielding &&
-        cur->priority >= top && !quantum_expired)
-        return esp;
-
-    reset_tick_count();
-    cur->esp_kernel = esp;
-
-    /* Round-robin this process's own thread ring, skipping any dead threads.
-     * Falls back to the current thread when it is the only one left. */
-    thread_t *t = cur;
-    do {
-        t = t->next;
-    } while (t != cur && t->state != PROC_ACTIVE);
-    list->thread_list = t;
-
-    /* Move to the next process by priority / round-robin. */
-    list = pick_next(top);
-
-    thread_t *nxt = list->thread_list;
-    if (nxt != cur) {
-        /* The kernel never lazily switches the FPU (CR0.EM stays clear, #NM is
-         * fatal), so preserve each thread's x87/SSE state across the switch -
-         * otherwise a float-using userspace thread (e.g. the Lua interpreter)
-         * has its register stack clobbered by any other thread on every tick. */
-        asm volatile("fxsave (%0)" :: "r"(cur->fpu_state) : "memory");
-        asm volatile("fxrstor (%0)" :: "r"(nxt->fpu_state) : "memory");
+    /* Highest priority among run-queue processes this CPU may pick (runnable
+     * and not already running on another CPU), plus the one we are on. */
+    int top = SCHED_PRIO_MIN - 1;
+    {
+        process_t *p = list;
+        for (int i = 0; i < n_proc; i++, p = p->next) {
+            if (!proc_runnable(p))
+                continue;
+            if (p->cpu >= 0 && p != out_p)
+                continue;
+            if (p->thread_list->priority > top)
+                top = p->thread_list->priority;
+        }
     }
 
-    set_esp0(nxt->stack_kernel_limit);
-    change_page_directory(list->pdir);
+    /* Fast path: keep running the current (real) process. */
+    if (!idle_now && proc_runnable(out_p) && !yielding &&
+        out_p->thread_list->priority >= top && !quantum_expired) {
+        spin_unlock(&sched_lock, f);
+        return esp;
+    }
 
-    return nxt->esp_kernel;
+    /* Save the outgoing context. */
+    c->sched_ticks = 0;
+    if (out_t)
+        out_t->esp_kernel = esp;
+    if (!idle_now) {
+        out_p->cpu = -1;
+        thread_t *t = out_t;
+        do {
+            t = t->next;
+        } while (t != out_t && t->state != PROC_ACTIVE);
+        out_p->thread_list = t;
+    }
+
+    /* Pick the next process: highest priority, then least-recently-run. */
+    process_t *nxt_p = 0;
+    {
+        process_t *p = list;
+        for (int i = 0; i < n_proc; i++, p = p->next) {
+            if (!proc_runnable(p) || p->cpu >= 0)
+                continue;
+            if (p->thread_list->priority < top)
+                continue;
+            if (!nxt_p || p->last_ran < nxt_p->last_ran)
+                nxt_p = p;
+        }
+    }
+
+    thread_t *nxt_t;
+    if (nxt_p) {
+        nxt_p->cpu = (int) c->index;
+        nxt_p->last_ran = pit_ms();
+        nxt_t = nxt_p->thread_list;
+        c->current_proc = nxt_p;
+        c->current = nxt_t;
+    } else {
+        nxt_t = c->idle;
+        c->current_proc = &idle_proc;
+        c->current = c->idle;
+    }
+
+    thread_t *save_from = out_t ? out_t : c->idle;
+    if (nxt_t != save_from) {
+        asm volatile("fxsave (%0)" :: "r"(save_from->fpu_state) : "memory");
+        asm volatile("fxrstor (%0)" :: "r"(nxt_t->fpu_state) : "memory");
+    }
+
+    set_esp0(nxt_t->stack_kernel_limit);
+    {
+        page_dir_t *nd = nxt_p ? nxt_p->pdir : get_kern_directory();
+        if (nd != c->current_dir)
+            change_page_directory(nd);
+    }
+
+    spin_unlock(&sched_lock, f);
+    return nxt_t->esp_kernel;
 }
 
 void sched_yield(void) {
-    if (list == 0 || !get_sched_state())
+    if (!sched_on || this_cpu()->preempt_disable)
         return;
-    list->thread_list->yield = 1;
-    /* Wait for the next tick to run schedule(); we resume here once picked. */
-    halt();
+    thread_t *cur = this_cpu()->current;
+    if (cur)
+        cur->yield = 1;
+    /* Wait for the next tick to run schedule(); we resume here once repicked. */
+    asm volatile("sti; hlt");
 }
 
-/** @return The thread with id @p pid anywhere in the ring, or NULL. */
-static thread_t *thread_by_id(int pid) {
+/** @return The thread with id @p pid anywhere in the ring, or NULL. Caller-locked. */
+static thread_t *thread_by_id_locked(int pid) {
     process_t *p = list;
     for (int i = 0; i < n_proc; i++, p = p->next) {
         thread_t *t = p->thread_list;
@@ -333,12 +439,13 @@ int sched_set_priority(int pid, int priority) {
     if (priority > SCHED_PRIO_MAX)
         priority = SCHED_PRIO_MAX;
 
-    int prev = get_sched_state();
-    sched_state(0);
-    thread_t *t = thread_by_id(pid);
+    uint32_t f = spin_lock(&sched_lock);
+    thread_t *t = thread_by_id_locked(pid);
     if (t != 0)
         t->priority = priority;
-    sched_state(prev);
+    spin_unlock(&sched_lock, f);
+    if (t != 0)
+        kick_others();
     return t != 0 ? 0 : -1;
 }
 
@@ -346,12 +453,11 @@ int sched_set_policy(int pid, int policy) {
     if (policy != SCHED_OTHER && policy != SCHED_RR && policy != SCHED_FIFO)
         return -1;
 
-    int prev = get_sched_state();
-    sched_state(0);
-    thread_t *t = thread_by_id(pid);
+    uint32_t f = spin_lock(&sched_lock);
+    thread_t *t = thread_by_id_locked(pid);
     if (t != 0)
         t->policy = policy;
-    sched_state(prev);
+    spin_unlock(&sched_lock, f);
     return t != 0 ? 0 : -1;
 }
 
@@ -369,12 +475,13 @@ static const char *policy_name(int policy) {
 }
 
 void print_procs() {
+    uint32_t f = spin_lock(&sched_lock);
     process_t *app = list;
     printf("n_proc = %d\n", n_proc);
     for(int i = 0; i < n_proc; i++) {
         thread_t *th = app->thread_list;
-        printf("%s id: %d page directory: 0x%x state: %d prio: %d/%s%s\n",
-               app->name, th->pid, (uint32_t)app->pdir, app->state,
+        printf("%s id: %d page directory: 0x%x state: %d cpu: %d prio: %d/%s%s\n",
+               app->name, th->pid, (uint32_t)app->pdir, app->state, app->cpu,
                th->priority, policy_name(th->policy),
                SCHED_IS_RT(th->priority) ? " [rt]" : "");
         printf("    eip: 0x%x esp: 0x%x stack limit: 0x%x\nimage base: 0x%x image size: %x\n\n",
@@ -382,4 +489,5 @@ void print_procs() {
                th->image_base, th->image_size);
         app = app->next;
     }
+    spin_unlock(&sched_lock, f);
 }

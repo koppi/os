@@ -16,6 +16,7 @@ spinlock_t pgtbl_lock = SPINLOCK_INIT;
 spinlock_t kheap_lock = SPINLOCK_INIT;
 spinlock_t vmm_lock   = SPINLOCK_INIT;
 spinlock_t sched_lock = SPINLOCK_INIT;
+spinlock_t proc_lock  = SPINLOCK_INIT;
 spinlock_t fs_lock    = SPINLOCK_INIT;
 spinlock_t con_lock   = SPINLOCK_INIT;
 spinlock_t tlb_lock   = SPINLOCK_INIT;
@@ -45,24 +46,23 @@ void spinlock_init(spinlock_t *lock) {
 
 uint32_t spin_lock(spinlock_t *lock) {
     uint32_t flags = save_if();
-    set_if(0);
 
-#if defined(DEBUG)
-    uint32_t me = this_cpu()->index;
-    /* Recursive acquire on the same CPU is a deadlock (we now hold the lock,
-     * so re-taking it would spin forever). */
-    if (lock->owner == me && lock->lock) {
-        lock->depth++;
-        return flags;
-    }
-#endif
-
-    while (__sync_lock_test_and_set(&lock->lock, 1))
+    /* Acquire with local interrupts *disabled* (so no handler on this CPU can
+     * deadlock against a lock its interrupted code holds), but spin with them
+     * restored to the caller's state -- otherwise a CPU waiting here could not
+     * service the TLB-shootdown IPI of whichever CPU currently holds the lock. */
+    for (;;) {
+        set_if(0);
+        if (__sync_lock_test_and_set(&lock->lock, 1) == 0)
+            break;
+        if (flags)
+            set_if(1);
         while (lock->lock)
             __builtin_ia32_pause();
+    }
 
 #if defined(DEBUG)
-    lock->owner = me;
+    lock->owner = this_cpu()->index;
     lock->depth = 1;
 #endif
     return flags;

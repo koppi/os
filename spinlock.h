@@ -50,6 +50,16 @@ extern spinlock_t pgtbl_lock;   /**< Page-table storage allocator (paging.c). */
 extern spinlock_t kheap_lock;   /**< Kernel heap (kheap.c). */
 extern spinlock_t vmm_lock;     /**< Virtual memory maps (vmm.c). */
 extern spinlock_t sched_lock;   /**< Scheduler process/thread ring (sched.c). */
+extern spinlock_t proc_lock;    /**< Process lifecycle: start/kernel/remove (proc.c). */
 extern spinlock_t fs_lock;      /**< Filesystem / block drivers (vfs.c, fat.c). */
 extern spinlock_t con_lock;     /**< Console output path (printf/uart/video). */
 extern spinlock_t tlb_lock;     /**< TLB-shootdown operation state (vmm.c/apic.c). */
+
+/*
+ * Lock order (acquire outer first):
+ *   proc_lock  >  vmm_lock  >  { pmm_lock, pgtbl_lock, tlb_lock }
+ *   proc_lock  >  kheap_lock
+ *   proc_lock  >  sched_lock
+ * sched_lock, kheap_lock, con_lock and fs_lock are otherwise leaves.
+ * tlb_lock is only ever taken under vmm_lock or on its own (from flush_tlb).
+ */

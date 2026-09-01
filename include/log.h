@@ -33,36 +33,29 @@
 #define LOG_INFO	6
 #define LOG_DEBUG	7
 
-/**
- * @brief Print a dmesg-style "[   sec.usec] " timestamp for the current moment.
- *
- * The figure is seconds.microseconds since the PIT started (@ref pit_ms, 1 ms
- * resolution; reads 0.000000 before the timer is running). Internal helper for
- * @ref printk and @ref klogf.
- */
-#define klog_stamp() \
-do { \
-	uint32_t _klog_ms = pit_ms(); \
-	printf("[%5lu.%06lu] ", \
-	       (unsigned long)(_klog_ms / 1000u), \
-	       (unsigned long)((_klog_ms % 1000u) * 1000u)); \
-} while (0)
+/** @brief Clamp a running snprintf offset to inside a buffer of size @p n. */
+#define KLOG_CLAMP(off, n) ((off) > (int)((n) - 1) ? (int)((n) - 1) : (off))
 
 /**
  * @brief printf a line to the kernel console with a leading dmesg-style
  *        timestamp.
  *
- * Use for plain operator-facing output (command results, progress) that wants
- * the ring-buffer timestamp but not the source location and severity tag that
- * @ref klogf adds.
+ * The whole line is assembled in a stack buffer and emitted with a single
+ * printf so it stays atomic across CPUs (see @c con_lock in printf.c).
  *
  * @param str printf format string.
  * @param ... Format arguments.
  */
 #define printk(str, ...) \
 do { \
-	klog_stamp(); \
-	printf(str, ##__VA_ARGS__); \
+	char _klbuf[256]; \
+	uint32_t _klms = pit_ms(); \
+	int _klo = snprintf(_klbuf, sizeof _klbuf, "[%5lu.%06lu] ", \
+	                    (unsigned long)(_klms / 1000u), \
+	                    (unsigned long)((_klms % 1000u) * 1000u)); \
+	_klo = KLOG_CLAMP(_klo, sizeof _klbuf); \
+	snprintf(_klbuf + _klo, sizeof _klbuf - _klo, str, ##__VA_ARGS__); \
+	printf("%s", _klbuf); \
 } while (0)
 
 /**
@@ -73,6 +66,7 @@ do { \
  * @code
  * [   12.345000] foo.c:42 [INFO] the message
  * @endcode
+ * Assembled in a stack buffer and emitted with one printf (atomic across CPUs).
  *
  * @param prio One of the @c LOG_* levels (the "LOG_" prefix is stripped for
  *             display).
@@ -81,7 +75,15 @@ do { \
  */
 #define klogf(prio, str, ...) \
 do { \
-	klog_stamp(); \
-	printf("%s:%d [%s] ", __FILE__, __LINE__, #prio + 4); \
-	printf(str, ##__VA_ARGS__); \
+	char _klbuf[256]; \
+	uint32_t _klms = pit_ms(); \
+	int _klo = snprintf(_klbuf, sizeof _klbuf, "[%5lu.%06lu] ", \
+	                    (unsigned long)(_klms / 1000u), \
+	                    (unsigned long)((_klms % 1000u) * 1000u)); \
+	_klo = KLOG_CLAMP(_klo, sizeof _klbuf); \
+	_klo += snprintf(_klbuf + _klo, sizeof _klbuf - _klo, \
+	                 "%s:%d [%s] ", __FILE__, __LINE__, #prio + 4); \
+	_klo = KLOG_CLAMP(_klo, sizeof _klbuf); \
+	snprintf(_klbuf + _klo, sizeof _klbuf - _klo, str, ##__VA_ARGS__); \
+	printf("%s", _klbuf); \
 } while (0)

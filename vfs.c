@@ -15,6 +15,7 @@
 #include <pit.h>
 #include <printf.h>
 #include <kheap.h>
+#include <spinlock.h>
 
 static filesystem *devs[MAX_DEVICES];
 
@@ -22,12 +23,15 @@ static filesystem *devs[MAX_DEVICES];
  * The block drivers hand back a pointer to one shared sector buffer that the
  * caller must consume before yielding, and fat.c keeps global FAT/scratch
  * state — none of it is re-entrant. A filesystem operation therefore has to run
- * to completion without the cooperative scheduler switching to another thread
- * that also touches the filesystem (classically: the framebuffer thread
- * loading the cursor bitmap while a process image is being read off the same
- * disk). These bracket every VFS entry point that reaches a driver.
+ * to completion without another thread — on this CPU (sched_state) or another
+ * (fs_lock) — touching the filesystem. These bracket every VFS entry point that
+ * reaches a driver. fs_enter/fs_leave are not nested, so one saved-flags slot
+ * (only written by the lock holder) is enough.
  */
+static uint32_t fs_saved_flags;
+
 static int fs_enter(void) {
+    fs_saved_flags = spin_lock(&fs_lock);
     int prev = get_sched_state();
     sched_state(0);
     return prev;
@@ -35,6 +39,7 @@ static int fs_enter(void) {
 
 static void fs_leave(int prev) {
     sched_state(prev);
+    spin_unlock(&fs_lock, fs_saved_flags);
 }
 
 void vfs_init() {
@@ -155,7 +160,9 @@ void vfs_file_write(file *f, char *str) {
 void vfs_file_close(file *f) {
     if(f) {
         if(devs[f->dev]) {
+            int s = fs_enter();
             devs[f->dev]->close(f);
+            fs_leave(s);
             kfree(f);
         }
     }
@@ -164,7 +171,9 @@ void vfs_file_close(file *f) {
 void vfs_file_close_user(file *f) {
     if(f) {
         if(devs[f->dev]) {
+            int s = fs_enter();
             devs[f->dev]->close(f);
+            fs_leave(s);
             process_t *cur = get_cur_proc();
             if(cur && cur->thread_list) {
                 ufree(f, (vmm_addr_t *) cur->thread_list->heap);

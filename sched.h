@@ -80,6 +80,14 @@ void sched_add_proc(process_t *proc);
 void sched_remove_proc(int id);
 /** @brief Build the first process and iret into it; does not return. */
 void sched_init();
+/**
+ * @brief Adopt @p t on the calling CPU and `iret` into it; never returns.
+ *
+ * Used for a CPU's first entry into a thread: @ref sched_init for the console,
+ * @ref ap_main for an application processor's idle thread. @p t's kernel stack
+ * must already hold the frame @ref schedule expects.
+ */
+void sched_run_thread(struct thread *t) __attribute__((noreturn));
 /** @return Number of processes in the ring. */
 int get_nproc();
 /** @brief Print the process table (the `ps` command). */
