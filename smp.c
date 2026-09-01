@@ -69,9 +69,9 @@ cpu_t *cpu_by_apicid(uint32_t apicid) {
  * @brief LAPIC timer tick: bump this CPU's tick counter and, unless preemption
  *        is gated, run the scheduler.
  * @param esp Kernel ESP of the interrupted thread.
- * @return Kernel ESP to resume on.
+ * @return Packed resume-ESP + CR3 (see @ref schedule).
  */
-uint32_t lapic_timer_tick(uint32_t esp) {
+uint64_t lapic_timer_tick(uint32_t esp) {
     cpu_t *c = this_cpu();
     c->sched_ticks++;
     if (!sched_on || c->preempt_disable)
@@ -82,8 +82,9 @@ uint32_t lapic_timer_tick(uint32_t esp) {
 /**
  * @brief Reschedule IPI: force this CPU through the scheduler now (used to make
  *        a freshly-woken high-priority thread preempt without waiting a tick).
+ * @return Packed resume-ESP + CR3 (see @ref schedule).
  */
-uint32_t ipi_resched_tick(uint32_t esp) {
+uint64_t ipi_resched_tick(uint32_t esp) {
     cpu_t *c = this_cpu();
     if (!sched_on || c->preempt_disable)
         return esp;

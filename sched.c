@@ -313,11 +313,15 @@ static inline int proc_runnable(process_t *proc) {
            proc->thread_list->state == PROC_ACTIVE;
 }
 
-uint32_t schedule(uint32_t esp) {
+/** @brief Pack a resume-ESP + a CR3-to-load (0 = keep current) for the stub. */
+#define SCHED_RESUME(esp, cr3) (((uint64_t)(uint32_t)(cr3) << 32) | (uint32_t)(esp))
+
+uint64_t schedule(uint32_t esp) {
     if (list == 0)
         return esp;
 
     cpu_t *c = this_cpu();
+    page_dir_t *entry_dir = c->current_dir;
     uint32_t f = spin_lock(&sched_lock);
 
     thread_t  *out_t = c->current;
@@ -400,14 +404,15 @@ uint32_t schedule(uint32_t esp) {
     }
 
     set_esp0(nxt_t->stack_kernel_limit);
-    {
-        page_dir_t *nd = nxt_p ? nxt_p->pdir : get_kern_directory();
-        if (nd != c->current_dir)
-            change_page_directory(nd);
-    }
+
+    /* Record the target address space but do NOT load CR3 here: we are still
+     * running on the outgoing thread's kernel stack, which may not be mapped in
+     * the new directory. The asm stub loads CR3 right after it switches ESP. */
+    page_dir_t *nd = nxt_p ? nxt_p->pdir : get_kern_directory();
+    c->current_dir = nd;
 
     spin_unlock(&sched_lock, f);
-    return nxt_t->esp_kernel;
+    return SCHED_RESUME(nxt_t->esp_kernel, nd != entry_dir ? nd : 0);
 }
 
 void sched_yield(void) {

@@ -45,9 +45,13 @@ lapic_timer_int:
     mov gs, ax
 
     push ebx
-    call lapic_timer_tick    ; uint32_t lapic_timer_tick(uint32_t esp)
+    call lapic_timer_tick    ; edx:eax = (cr3-or-0):(resume esp)
     add esp, 4
     mov esp, eax             ; switch to the chosen thread's kernel stack
+    test edx, edx            ; edx != 0 -> load the new address space now that
+    jz .no_cr3               ;   ESP is the new stack (mapped there, not here)
+    mov cr3, edx
+.no_cr3:
 
     LAPIC_EOI
 
@@ -112,9 +116,13 @@ ipi_resched_int:
     mov gs, ax
 
     push ebx
-    call ipi_resched_tick
+    call ipi_resched_tick    ; edx:eax = (cr3-or-0):(resume esp)
     add esp, 4
     mov esp, eax
+    test edx, edx
+    jz .no_cr3
+    mov cr3, edx
+.no_cr3:
 
     LAPIC_EOI
 

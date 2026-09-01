@@ -45,12 +45,17 @@ process_t *get_cur_proc();
 /** @return The process owning thread id @p id, or NULL. */
 process_t *get_proc_by_id(int id);
 /**
- * @brief Timer-IRQ scheduler tick: save @p esp, pick the next runnable
- *        process/thread and return its kernel stack pointer.
+ * @brief Timer/IPI scheduler tick: save @p esp, pick the next runnable
+ *        process/thread and hand the asm stub what it needs to resume it.
+ *
  * @param esp Kernel ESP of the interrupted thread.
- * @return Kernel ESP to resume on.
+ * @return A packed value: the low 32 bits are the kernel ESP to resume on; the
+ *         high 32 bits are the page-directory (CR3) to load, or 0 to keep the
+ *         current one. The caller must load CR3 *after* switching ESP — the
+ *         outgoing thread's kernel stack may not be mapped in the new address
+ *         space, and this one's may not be mapped in the old one.
  */
-uint32_t schedule(uint32_t esp);
+uint64_t schedule(uint32_t esp);
 /**
  * @brief Voluntarily give up the CPU.
  *
