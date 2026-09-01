@@ -12,6 +12,7 @@
 #include <icmp.h>
 #include <ntp.h>
 #include <tcp.h>
+#include <nfs.h>
 #include <e1000.h>
 
 #include <io.h>
@@ -411,6 +412,8 @@ void net_thread(void) {
             else if (--ntp_left == 0)
                 klogf(LOG_WARNING, "ntp: giving up, RTC left unsynced\n");
         }
+
+        nfs_boot_tick();
 
         sleep(50);
     }

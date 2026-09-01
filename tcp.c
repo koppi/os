@@ -272,6 +272,10 @@ static int alloc(void) {
 }
 
 int tcp_connect(uint32_t ip, uint16_t port) {
+    return tcp_connect_lport(ip, port, 0);
+}
+
+int tcp_connect_lport(uint32_t ip, uint16_t port, uint16_t lport) {
     if (!net_is_up())
         return -1;
     int h = alloc();
@@ -281,7 +285,7 @@ int tcp_connect(uint32_t ip, uint16_t port) {
     struct conn *c = &conns[h];
     c->remote_ip   = ip;
     c->remote_port = port;
-    c->local_port  = net_ephemeral_port();
+    c->local_port  = lport ? lport : net_ephemeral_port();
     uint32_t isn   = (uint32_t)rdtsc();
     c->snd_una = c->snd_nxt = isn;
     c->state   = ST_SYN_SENT;
