@@ -10,6 +10,8 @@
  */
 #include <lib/string.h>
 #include <mm.h>
+#include <apic.h>
+#include <spinlock.h>
 
 /** Physical-memory-manager state. */
 mem_info_t pmm;
@@ -104,16 +106,22 @@ void pmm_deinit_reg(mm_addr_t addr, uint32_t size) {
     }
 }
 
+/* pmm_lock (spinlock.h) serialises the frame bitmap across CPUs. */
+
 /**
  * @brief Allocate one physical frame.
  * @return Physical address of the frame, or 0 if none is free.
  */
 void *pmm_malloc() {
+    uint32_t f = spin_lock(&pmm_lock);
     int p = pmm_first_free();
-    if(!p)
+    if(p <= 0) {
+        spin_unlock(&pmm_lock, f);
         return 0;
+    }
     pmm_set_bit(p);
     pmm.used_blocks++;
+    spin_unlock(&pmm_lock, f);
     return (void *) (BLOCKS_LEN * p);
 }
 
@@ -125,8 +133,10 @@ void *pmm_malloc() {
 void pmm_free(mm_addr_t *addr) {
     if((uint32_t) addr < KERNEL_SPACE_END)
         return;
+    uint32_t f = spin_lock(&pmm_lock);
     pmm_unset_bit((uint32_t) addr / BLOCKS_LEN);
     pmm.used_blocks--;
+    spin_unlock(&pmm_lock, f);
 }
 
 /** @return The frame bitmap. */
@@ -174,11 +184,15 @@ mm_addr_t get_pdbr() {
 }
 
 /**
- * @brief Invalidate one TLB entry.
- * @param addr Virtual address whose translation to flush.
+ * @brief Invalidate one TLB entry on every CPU.
+ *
+ * On SMP a mapping change on one CPU leaves stale entries in the others' TLBs,
+ * so this broadcasts a shootdown IPI and waits for the acks (see
+ * @ref tlb_shootdown). Degrades to a local @c invlpg when only one CPU is up,
+ * which is the state during early boot.
  */
 void flush_tlb(vmm_addr_t addr) {
-    asm volatile("cli; invlpg (%0); sti" : : "r" (addr));
+    tlb_shootdown((uint32_t) addr);
 }
 
 /** @return The current CR0 value. */

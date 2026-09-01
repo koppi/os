@@ -47,6 +47,7 @@ extern struct ap_info apinfo[MAX_CPU];
 typedef struct cpu {
     uint32_t index;            /**< Index into @ref cpus[]. */
     uint32_t apicid;           /**< Local APIC id. */
+    int present;               /**< Slot is configured (apicid is valid). */
     volatile int online;       /**< Non-zero once this CPU is running ap_main(). */
     uint32_t sched_ticks;      /**< LAPIC-timer ticks since last reset. */
 

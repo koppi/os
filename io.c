@@ -7,6 +7,7 @@
 #include <printf.h>
 #include <log.h>
 #include <pci_acpi.h>
+#include <percpu.h>
 
 /** @brief Execute one @c hlt instruction. */
 void halt() {
@@ -23,6 +24,7 @@ void halt() {
  * finally spins forever.
  */
 void __attribute__((noreturn)) exit_qemu(const int status_code) {
+  smp_halt_others();   /* stop the APs before we pull the machine down */
   if (status_code) {
     outportb(0xf4, status_code); // qemu isa-debug-exit port
   } else {

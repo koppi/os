@@ -52,6 +52,15 @@ void vmm_unmap(page_dir_t *pdir, vmm_addr_t virt);
 /** @brief Clear the PTE for @p virt without freeing the frame. */
 void vmm_unmap_phys(page_dir_t *pdir, vmm_addr_t virt);
 
+/**
+ * @brief Position the page-table storage window at @p start (rounded up to a
+ *        page). Call once from @ref vmm_init with the end of the kernel image.
+ * @return The first byte past the window — where the kernel heap starts.
+ */
+uint32_t paging_init(uint32_t start);
+/** @return The first byte past the page-table window (kernel-heap base). */
+uint32_t paging_window_end(void);
+
 /** @brief Allocate a zeroed 4 KiB block for a page table. */
 void *page_table_malloc();
 void paging_set_bit(int bit);        /**< Mark page-table block @p bit used. */

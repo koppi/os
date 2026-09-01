@@ -12,7 +12,7 @@
 extern lapic_base
 extern lapic_timer_tick
 extern ipi_tlb_handler
-extern ipi_resched_handler
+extern ipi_resched_tick
 extern lapic_eoi
 
 %macro LAPIC_EOI 0
@@ -91,11 +91,19 @@ ipi_tlb_int:
 
 global ipi_resched_int
 ipi_resched_int:
-    pusha
+    push eax
+    push ebx
+    push ecx
+    push edx
+    push esi
+    push edi
+    push ebp
     push ds
     push es
     push fs
     push gs
+
+    mov ebx, esp
 
     mov ax, 0x10
     mov ds, ax
@@ -103,7 +111,10 @@ ipi_resched_int:
     mov fs, ax
     mov gs, ax
 
-    call ipi_resched_handler
+    push ebx
+    call ipi_resched_tick
+    add esp, 4
+    mov esp, eax
 
     LAPIC_EOI
 
@@ -111,7 +122,13 @@ ipi_resched_int:
     pop fs
     pop es
     pop ds
-    popa
+    pop ebp
+    pop edi
+    pop esi
+    pop edx
+    pop ecx
+    pop ebx
+    pop eax
     iretd
 
 global lapic_spurious_int

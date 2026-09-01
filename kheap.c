@@ -7,14 +7,16 @@
 #include <mm.h>
 #include <paging.h>
 #include <printf.h>
+#include <spinlock.h>
 
 extern uint32_t kernel_start;
 extern uint32_t kernel_end;
 
 /*
- * The kernel heap sits between the end of the kernel image and the top of the
- * identity-mapped low 4 MB (pmm_init2() reserves 0..KERNEL_SPACE_END from the
- * physical allocator, so nothing else hands these frames out).
+ * The kernel heap sits between the page-table storage window (which starts just
+ * past the kernel image — see paging_init) and the top of the identity-mapped
+ * low 4 MB. pmm_init2() reserves 0..KERNEL_SPACE_END, so nothing else hands
+ * these frames out.
  */
 #define HEAP_END 0x400000
 
@@ -24,8 +26,8 @@ heap_info_t heap_info;
  * Init the kernel heap memory
  */
 void kheap_init() {
-    uint8_t *base = (uint8_t *) &kernel_end;
-    size_t total = HEAP_END - (uint32_t) &kernel_end;
+    uint8_t *base = (uint8_t *) paging_window_end();
+    size_t total = HEAP_END - (uint32_t) base;
 
     heap_info.start = (vmm_addr_t *) base;
     heap_info.size = total;
@@ -37,8 +39,13 @@ void kheap_init() {
     heap_info.first_header->next = 0;
 }
 
+/* kheap_lock (spinlock.h) serialises the free list across CPUs. */
+
 void *kmalloc(size_t len) {
-    return first_free(len);
+    uint32_t f = spin_lock(&kheap_lock);
+    void *p = first_free(len);
+    spin_unlock(&kheap_lock, f);
+    return p;
 }
 
 void kfree(void *ptr) {
@@ -46,8 +53,12 @@ void kfree(void *ptr) {
         return;
 
     heap_header_t *head = (heap_header_t *) ((uint8_t *) ptr - sizeof(heap_header_t));
-    if((head->magic != HEAP_MAGIC) || head->is_free)
+
+    uint32_t f = spin_lock(&kheap_lock);
+    if((head->magic != HEAP_MAGIC) || head->is_free) {
+        spin_unlock(&kheap_lock, f);
         return;
+    }
 
     head->is_free = 1;
     heap_info.used -= head->size;
@@ -60,6 +71,7 @@ void kfree(void *ptr) {
         heap_info.used -= sizeof(heap_header_t);
         app = app->next;
     }
+    spin_unlock(&kheap_lock, f);
 }
 
 void *first_free(size_t len) {

@@ -31,29 +31,45 @@ computed from the last commit (`ver.h`, `main.c`, `Makefile`).
 * x87 FPU init — [`fpu.c`](fpu.c)
 
 ### SMP / multi-core
-* Per-CPU state (`cpu_t`) with its own current thread, page directory, TSS and
-  LAPIC timer — [`percpu.h`](percpu.h), [`smp.c`](smp.c).
-* Real test-and-set spinlocks with `pause` and IF save/restore — one per
-  subsystem (PMM, VMM, scheduler, VFS, console, TLB) — [`spinlock.c`](spinlock.c),
-  [`spinlock.h`](spinlock.h). The owning CPU is never switched away mid-critical
-  section.
-* BSP discovers APs via ACPI, copies a trampoline to 0x8000, publishes per-CPU
-  boot-info blocks and raises INIT-SIPI-SIPI — [`smp.c`](smp.c),
-  [`smp_asm.asm`](smp_asm.asm). Each AP claims an index, loads the kernel page
-  tables and enters `ap_main`.
-* Per-CPU preemption: each core's LAPIC timer fires vector `0xEF`, bumps
-  `sched_ticks` and calls the local `schedule()` — no global PIT tick. APs run
-  scheduled kernel threads and ring-3 processes in parallel.
-* TLB-shootdown IPIs (vector `0xFD`) broadcast via `lapic_ipi_allbutself`; the
-  shared request is gated by `tlb_lock` — [`apic.c`](apic.c), [`smp_asm.asm`](smp_asm.asm).
-* Reschedule IPIs (vector `0xFC`) kick a target CPU's scheduler out of its idle
-  thread so a newly-woken high-priority thread can run immediately.
+QEMU is launched with `-smp 4` and **all four cores run kernel threads and
+ring-3 processes in parallel** — `ps` and the `cpus` command show which core
+each is on.
+
+* Per-CPU state (`cpu_t`): its own current thread/process, page directory, TSS,
+  idle thread, LAPIC timer and preemption gate — [`percpu.h`](percpu.h),
+  [`smp.c`](smp.c). `this_cpu()` resolves it from the local APIC id.
+* **AP bring-up**: the BSP parses the ACPI **MADT** ([`acpi.c`](acpi.c)),
+  maps + calibrates the Local APIC ([`apic.c`](apic.c)), copies a real-mode
+  trampoline to `0x8000` ([`ap_boot.asm`](ap_boot.asm)) and raises
+  INIT-SIPI-SIPI. Each AP loads the kernel page tables, sets up its APIC / FPU /
+  TSS in `ap_main` and parks until `sched_init` releases it into the scheduler.
+* **SMP scheduler** ([`sched.c`](sched.c)): one global run queue (the process
+  ring) under `sched_lock`; each core tracks its own current thread and a
+  `process_t::cpu` field keeps a process from running on two cores at once.
+  Preemption is driven by each core's LAPIC timer (vector `0xEF`) — no global
+  PIT tick. A core with nothing to run falls back to its idle thread.
+* **Fine-grained spinlocks** — real test-and-set with `pause`; the holder keeps
+  local interrupts off (never preempted mid-section) but *spins* with them on,
+  so a lock waiter still services TLB-shootdown IPIs. One lock per subsystem:
+  physical allocator, page-table window, kernel heap, VMM, scheduler, process
+  lifecycle, VFS and the console — [`spinlock.h`](spinlock.h). System-call
+  entry is a **trap gate** so a syscall blocked on a lock stays interruptible.
+* **TLB-shootdown IPIs** (vector `0xFD`): every `vmm_unmap*` / kernel-mapping
+  change flushes locally, broadcasts via `lapic_ipi_allbutself` and waits for
+  the other cores to acknowledge — [`apic.c`](apic.c). Degrades to a plain
+  `invlpg` on `-smp 1`.
+* **Reschedule IPIs** (vector `0xFC`) kick the other cores through `schedule()`
+  when a new or boosted thread appears.
+* The page-table storage window moved from a fixed `0x200000` (which the
+  linked-in 1.3 MiB font blob had grown the kernel image straight through) to
+  just past `kernel_end` — [`paging.c`](paging.c).
 
 ### Scheduling & processes
 * Preemptive fixed-priority round-robin scheduler with real-time policies
-  (`SCHED_OTHER` / `SCHED_RR` / `SCHED_FIFO`) — [`sched.c`](sched.c). Timer-IRQ
-  driven: each tick it runs the highest-priority ready thread, round-robins
-  equal priorities by quantum, and lets a higher priority preempt within a tick.
+  (`SCHED_OTHER` / `SCHED_RR` / `SCHED_FIFO`) — [`sched.c`](sched.c). Each core's
+  LAPIC timer runs `schedule()`: it runs the highest-priority ready thread,
+  round-robins equal priorities by quantum, and lets a higher priority preempt
+  within a tick. SMP-aware — see **SMP / multi-core** above.
 * Processes (flat binaries loaded from the filesystem) — [`proc.c`](proc.c)
 * Threads — [`thread.c`](thread.c)
 * `int 0x72` syscall gate — [`syscall.c`](syscall.c). Implemented calls:
@@ -293,7 +309,8 @@ keyboard driver, echoes them, supports backspace, and executes a line on Enter.
 | --- | --- |
 | `help` | list commands |
 | `mem` | physical memory, kernel heap and `cr0/cr2/cr3` |
-| `ps` | process table |
+| `ps` | process table (with the CPU each process is on) |
+| `cpus` | online CPUs and what each core is currently running |
 | `ls` | list the working directory (device list at the root) |
 | `cd [dir]` | change working directory; no argument resets to the root |
 | `start <prog> [args]` | load an ELF, run it in ring 3, block until it exits, then reap it |
@@ -411,11 +428,13 @@ make clean        # remove build artifacts
 UART/log → parse multiboot → physical MM (e820) → VMM → kernel heap →
 VGA or VBE → GDT → IDT → FPU → PIC → PIT (1 kHz) → VFS → floppy detect →
 keyboard → mouse → UART RX IRQ → sound → syscalls → TSS → RTC →
-PCI (enumerate + bind drivers) → scheduler.
+PCI (enumerate + bind drivers) → **ACPI/MADT → Local APIC → AP bring-up** →
+scheduler.
 
-`sched_init()` does not return: it `iret`s into the scheduler's first process
-(`main_proc` in [`sched.c`](sched.c)), which brings up the floppy and IDE
-block devices, mounts their FAT volumes, starts the framebuffer redraw thread,
+`sched_init()` does not return: it builds one idle thread per core, releases
+the parked application processors and `iret`s into the scheduler's first
+process (`main_proc` in [`sched.c`](sched.c)), which brings up the floppy and
+IDE block devices, mounts their FAT volumes, starts the framebuffer redraw thread,
 the USB thread (`usb_thread` — enumerate, then poll HID endpoints and hub
 ports) and, if an e1000 was found, the `net` thread (`net_thread` — run the
 DHCP client, sync the RTC over NTP, then service the RX ring), and then runs

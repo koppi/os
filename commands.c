@@ -27,6 +27,7 @@
 #include <ntp.h>
 #include <rtc.h>
 #include <keyboard.h>
+#include <percpu.h>
 #include <commands.h>
 
 /** Scratch buffer used to assemble an absolute path before a VFS call. */
@@ -509,6 +510,7 @@ void console_exec(char *buf) {
         printf("help     - shows help\n"
                "mem      - prints RAM info\n"
                "ps       - prints process information\n"
+               "cpus     - lists the online CPUs and what each is running\n"
                "ls       - lists the current directory\n"
                "cd       - changes directory\n"
                "start    - runs a program\n"
@@ -547,6 +549,8 @@ void console_exec(char *buf) {
         print_meminfo();
     } else if(strcmp(buf, "ps") == 0) {
         print_procs();
+    } else if(strcmp(buf, "cpus") == 0) {
+        smp_report();
     } else if(strcmp(buf, "ls") == 0) {
         if(dir[0] == 0) {
             vfs_ls();

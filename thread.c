@@ -11,6 +11,8 @@
 #include <pit.h>
 #include <printf.h>
 #include <fpu.h>
+#include <percpu.h>
+#include <spinlock.h>
 
 /** asm helper (thread_asm) that returns twice, once in each thread. */
 extern void fork_eip();
@@ -68,8 +70,9 @@ thread_t *create_thread() {
  * @return Child pid in the parent, 0 in the child, -1 on failure.
  */
 int start_thread() {
+    /* Local preemption off for the duration; cross-CPU exclusion for the
+     * shared thread ring is sched_lock (taken around the splice below). */
     sched_state(0);
-    disable_int();
     process_t *cur = get_cur_proc();
     
     thread_t *thread = create_thread();
@@ -106,13 +109,14 @@ int start_thread() {
     }
     memcpy((void *) thread->heap, (void *) cur->thread_list->heap, PAGE_SIZE);
     
+    uint32_t sf = spin_lock(&sched_lock);
     cur->threads++;
-    
     thread->prec = cur->thread_list;
     thread->next = cur->thread_list->next;
     cur->thread_list->next->prec = thread;
     cur->thread_list->next = thread;
-    
+    spin_unlock(&sched_lock, sf);
+
     // TODO fix splitting
     fork_eip();
     if(cur->thread_list == parent) {
@@ -148,21 +152,28 @@ void stop_thread(int code) {
     // Terminating the main thread will terminate the process
     if(cur->thread_list->main == 1)
         end_proc(code);
-    
+
     thread_t *thread = cur->thread_list;
-    
-    cur->thread_list->next->prec = cur->thread_list->prec;
-    cur->thread_list->prec->next = cur->thread_list->next;
-    
+
+    uint32_t sf = spin_lock(&sched_lock);
+    thread->state = PROC_STOPPED;
+    thread->next->prec = thread->prec;
+    thread->prec->next = thread->next;
+    if(cur->thread_list == thread)
+        cur->thread_list = thread->next;
+    cur->threads--;
+    spin_unlock(&sched_lock, sf);
+
     for(int p = 0; p < PROC_USER_STACK_PAGES; p++)
         vmm_unmap(cur->pdir, thread->stack_limit - (p + 1) * PAGE_SIZE);
     for(vmm_addr_t va = thread->heap; va < thread->heap_limit; va += PAGE_SIZE)
         vmm_unmap(cur->pdir, va);
-    /* Kernel-stack frames are intentionally leaked - see remove_proc(). */
 
-    kfree(thread->fpu_state_raw);
-    kfree(thread);
-    
+    /* The kernel-stack frames and the thread control block are intentionally
+     * leaked: this CPU is still executing on this thread's stack and
+     * @c this_cpu()->current still points at it until the next tick switches
+     * away, so freeing either here is a use-after-free on SMP. */
+
     sched_state(1);
     enable_int();
     while(1);
