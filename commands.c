@@ -25,6 +25,7 @@
 #include <icmp.h>
 #include <tcp.h>
 #include <ntp.h>
+#include <nfs.h>
 #include <rtc.h>
 #include <keyboard.h>
 #include <percpu.h>
@@ -250,6 +251,63 @@ void console_read(char *command) {
 }
 
 /**
+ * @brief Handle "touch <file>" — create an empty file.
+ */
+static void console_touch(char *command) {
+    char *arg = get_argument(command, 1);
+    if(!arg || !*arg) {
+        printf("touch: missing file name\n");
+        return;
+    }
+    if(!resolve_path(senddir, sizeof(senddir), arg)) {
+        printf("touch: path too long\n");
+        return;
+    }
+    if(!vfs_touch(senddir))
+        printf("touch: %s: failed\n", senddir);
+}
+
+/**
+ * @brief Handle "rm <file>" — delete a file.
+ */
+static void console_rm(char *command) {
+    char *arg = get_argument(command, 1);
+    if(!arg || !*arg) {
+        printf("rm: missing file name\n");
+        return;
+    }
+    if(!resolve_path(senddir, sizeof(senddir), arg)) {
+        printf("rm: path too long\n");
+        return;
+    }
+    if(!vfs_delete(senddir))
+        printf("rm: %s: failed\n", senddir);
+}
+
+/**
+ * @brief Handle "write <file> <text>" — write one record of text to a file.
+ */
+static void console_write(char *command) {
+    char *arg = get_argument(command, 1);
+    char *text = get_argument(command, 2);
+    if(!arg || !*arg || !text || !*text) {
+        printf("usage: write <file> <text>\n");
+        return;
+    }
+    if(!resolve_path(senddir, sizeof(senddir), arg)) {
+        printf("write: path too long\n");
+        return;
+    }
+    file *f = vfs_file_open(senddir, "w");
+    if(f->type != FS_FILE) {
+        printf("write: %s: cannot open\n", senddir);
+    } else {
+        vfs_file_write(f, text);
+    }
+    vfs_file_close(f);
+}
+
+/**
  * @brief Play a short square-wave tone through the AC97 codec ("beep").
  */
 static void console_beep(void) {
@@ -266,6 +324,16 @@ static void console_beep(void) {
  */
 static void console_pci(void) {
     pci_dump();
+}
+
+/**
+ * @brief Print the NFSv4.1 client mount state ("nfs").
+ */
+static void console_nfs(void) {
+    printf("%s\n", nfs_status_str());
+    if (nfs_is_mounted())
+        printf("  try: ls /nfs   cd /nfs   read /nfs/<file>   "
+               "touch /nfs/<file>   rm /nfs/<file>\n");
 }
 
 /**
@@ -515,9 +583,13 @@ void console_exec(char *buf) {
                "cd       - changes directory\n"
                "start    - runs a program\n"
                "read     - prints a file\n"
+               "touch    - creates an empty file\n"
+               "rm       - deletes a file\n"
+               "write    - write <file> <text>\n"
                "beep     - plays a tone\n"
                "pci      - lists PCI devices\n"
                "net      - network interface status\n"
+               "nfs      - NFSv4.1 client mount status\n"
                "ping     - ping <host> [count]\n"
                "dns      - dns <name> (DNS lookup)\n"
                "http     - http <host> [path] (HTTP/1.0 GET)\n"
@@ -529,6 +601,8 @@ void console_exec(char *buf) {
         console_pci();
     } else if(strcmp(buf, "net") == 0) {
         console_net();
+    } else if(strcmp(buf, "nfs") == 0) {
+        console_nfs();
     } else if(strncmp(buf, "ping", 4) == 0) {
         console_ping(buf);
     } else if(strncmp(buf, "dns", 3) == 0) {
@@ -563,6 +637,12 @@ void console_exec(char *buf) {
         console_start(buf);
     } else if(strncmp(buf, "read", 4) == 0) {
         console_read(buf);
+    } else if(strncmp(buf, "touch", 5) == 0) {
+        console_touch(buf);
+    } else if(strncmp(buf, "rm", 2) == 0) {
+        console_rm(buf);
+    } else if(strncmp(buf, "write", 5) == 0) {
+        console_write(buf);
     } else if(strncmp(buf, "beep", 4) == 0) {
         console_beep();
     } else {

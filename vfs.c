@@ -16,6 +16,7 @@
 #include <printf.h>
 #include <kheap.h>
 #include <spinlock.h>
+#include <nfs.h>
 
 static filesystem *devs[MAX_DEVICES];
 
@@ -55,9 +56,15 @@ void vfs_ls() {
                 printf("%s\n", device->mount);
         }
     }
+    if(nfs_is_mounted())
+        printf("%s\n", NFS_MOUNTPOINT);
 }
 
 void vfs_ls_dir(char *dir) {
+    if(nfs_is_mounted() && nfs_owns_path(dir)) {
+        nfs_vfs_ls(dir);
+        return;
+    }
     int device = get_dev_id_by_name(dir);
     if(device >= 0 && devs[device]) {
         int s = fs_enter();
@@ -67,6 +74,13 @@ void vfs_ls_dir(char *dir) {
 }
 
 int vfs_cd(char *name) {
+    if(nfs_is_mounted() && nfs_owns_path(name)) {
+        if(strchr(name + 1, '/')) {
+            file f = nfs_vfs_cd(name);
+            return (f.type == FS_DIR);
+        }
+        return 1;   /* bare "/nfs" mount point */
+    }
     int device = get_dev_id_by_name(name);
     int ret = 0;
     if(device >= 0 && devs[device]) {
@@ -83,6 +97,8 @@ int vfs_cd(char *name) {
 }
 
 int vfs_touch(char *name) {
+    if(nfs_is_mounted() && nfs_owns_path(name))
+        return nfs_vfs_touch(name);
     int device = get_dev_id_by_name(name);
     int ret = 0;
     if(device >= 0 && devs[device]) {
@@ -94,6 +110,8 @@ int vfs_touch(char *name) {
 }
 
 int vfs_delete(char *name) {
+    if(nfs_is_mounted() && nfs_owns_path(name))
+        return nfs_vfs_delete(name);
     int device = get_dev_id_by_name(name);
     int ret = 0;
     if(device >= 0 && devs[device]) {
@@ -105,10 +123,14 @@ int vfs_delete(char *name) {
 }
 
 file *vfs_file_open(char *name, char *mode) {
-    int device = get_dev_id_by_name(name);
     file *f = kmalloc(sizeof(file));
     f->type = FS_NULL;
     f->dev = 0;   // keep vfs_file_close() in-bounds if the open fails
+    if(nfs_is_mounted() && nfs_owns_path(name)) {
+        *f = nfs_vfs_open(name, mode);
+        return f;
+    }
+    int device = get_dev_id_by_name(name);
     if(device >= 0 && devs[device]) {
         int s = fs_enter();
         *f = devs[device]->open(name + 1);
@@ -124,6 +146,11 @@ file *vfs_file_open_user(char *name, char *mode) {
     process_t *cur = get_cur_proc();
     if(cur && cur->thread_list) {
         file *f = (file *) umalloc(sizeof(file), (vmm_addr_t *) cur->thread_list->heap);
+        if(nfs_is_mounted() && nfs_owns_path(name)) {
+            file fil = nfs_vfs_open(name, mode);
+            memcpy(f, &fil, sizeof(file));
+            return fil.type == FS_NULL ? 0 : f;
+        }
         int device = get_dev_id_by_name(name);
         if(device >= 0 && devs[device]) {
             int s = fs_enter();
@@ -142,6 +169,10 @@ file *vfs_file_open_user(char *name, char *mode) {
 }
 
 void vfs_file_read(file *f, char *str) {
+    if(f && f->dev == NFS_DEV_ID) {
+        nfs_vfs_read(f, str);
+        return;
+    }
     if(f && devs[f->dev]) {
         int s = fs_enter();
         devs[f->dev]->read(f, str);
@@ -150,6 +181,10 @@ void vfs_file_read(file *f, char *str) {
 }
 
 void vfs_file_write(file *f, char *str) {
+    if(f && f->dev == NFS_DEV_ID) {
+        nfs_vfs_write(f, str);
+        return;
+    }
     if(f && devs[f->dev]) {
         int s = fs_enter();
         devs[f->dev]->write(f, str);
@@ -159,6 +194,11 @@ void vfs_file_write(file *f, char *str) {
 
 void vfs_file_close(file *f) {
     if(f) {
+        if(f->dev == NFS_DEV_ID) {
+            nfs_vfs_close(f);
+            kfree(f);
+            return;
+        }
         if(devs[f->dev]) {
             int s = fs_enter();
             devs[f->dev]->close(f);

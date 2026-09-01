@@ -191,6 +191,19 @@ with `net_exec()` and block until it finishes.
   in-order receive, MSS option, a 1 s retransmit timer, up to four connections.
   No listen/accept, no congestion control. `http <host> [path]` (or
   `http http://host/path`) does an HTTP/1.0 GET and prints the response.
+* **NFSv4.1** ([`nfs.c`](nfs.c)): an in-kernel NFS client hung off the VFS. Once
+  DHCP has an address the `net` thread auto-mounts `cube00.fritz.box:/nfs`
+  at `/nfs` (retrying every 10 s until the server answers), logged as
+  `nfs: mounted ... at /nfs`. It speaks ONC-RPC (AUTH_SYS, from a reserved
+  local port) over the TCP client above: EXCHANGE_ID + CREATE_SESSION, then one
+  SEQUENCE-wrapped COMPOUND per operation — OPEN/CLOSE with real stateids, READ,
+  WRITE, CREATE (via OPEN), REMOVE, READDIR, GETATTR — reconnecting on
+  `NFS4ERR_BADSESSION`. Single session slot, no locking or delegations. Then
+  `ls /nfs`, `cd /nfs`, `read /nfs/<file>`, `touch /nfs/<file>`,
+  `write /nfs/<file> <text>` and `rm /nfs/<file>` work like any other mount;
+  `nfs` prints the mount status. The server must permit the client's address
+  (the client uses a privileged source port, so a default `sec`/`secure`
+  export is fine).
 
 `ipv4_send()` / `udp_send()` and `tcp_connect/send/recv/close()` are the hooks
 for anything more (there is no TLS or resolver cache).
@@ -214,6 +227,7 @@ for anything more (there is no TLS or resolver cache).
 | DHCP client / DNS resolver | [`dhcp.c`](dhcp.c), [`dns.c`](dns.c) |
 | SNTP client (sets the RTC at boot) | [`ntp.c`](ntp.c) |
 | Minimal client TCP | [`tcp.c`](tcp.c) |
+| In-kernel NFSv4.1 client (auto-mounts `/nfs`) | [`nfs.c`](nfs.c) |
 | QEMU / Bochs standard VGA (DISPI mode control) | [`pci_vga.c`](pci_vga.c) |
 | AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sound.c`](sound.c) |
 | PC speaker | [`pcspk.c`](pcspk.c) |
@@ -315,9 +329,13 @@ keyboard driver, echoes them, supports backspace, and executes a line on Enter.
 | `cd [dir]` | change working directory; no argument resets to the root |
 | `start <prog> [args]` | load an ELF, run it in ring 3, block until it exits, then reap it |
 | `read <file>` | print a file |
+| `touch <file>` | create an empty file |
+| `write <file> <text>` | write one record of text to a file |
+| `rm <file>` | delete a file |
 | `beep` | play a tone through the AC97 codec |
 | `pci` | list the enumerated PCI devices |
 | `net` | interface MAC, link, counters and the DHCP-assigned address |
+| `nfs` | NFSv4.1 client mount status for `/nfs` |
 | `ping <host> [count]` | ICMP echo (resolves names via DNS) |
 | `dns <name>` | DNS A-record lookup |
 | `http <host> [path]` | HTTP/1.0 GET, prints the response |

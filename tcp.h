@@ -20,6 +20,12 @@ void tcp_input(uint32_t src_ip, const uint8_t *p, int len);
  */
 int tcp_connect(uint32_t ip, uint16_t port);
 
+/**
+ * @brief Like @ref tcp_connect but bind a specific local port (0 = ephemeral).
+ *        NFS uses a reserved port (< 1024) so default "secure" exports accept it.
+ */
+int tcp_connect_lport(uint32_t ip, uint16_t port, uint16_t lport);
+
 /** @brief Send @p len bytes, waiting for each segment's ACK. @return bytes sent, -1 on error. */
 int tcp_send(int h, const void *data, int len);
 
