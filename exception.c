@@ -3,7 +3,7 @@
  * @brief C side of the CPU-exception handlers.
  *
  * Each handler prints a diagnostic. If the fault happened in kernel mode
- * (saved CS == 0x10) it is unrecoverable and the machine panics; if it
+ * (DS == 0x10) it is unrecoverable and the machine panics; if it
  * happened in ring 3 the current process is torn down via
  * @ref return_exception instead.
  */
@@ -18,16 +18,17 @@
 void (*return_error)() = (void *) RETURN_ADDR;
 
 /**
- * @brief Return non-zero if the saved CS on the stack belongs to ring 3.
+ * @brief Return non-zero if the current DS selector belongs to ring 3.
  *
- * Used by exception handlers that receive no explicit register frame: the
- * CPU pushes EIP, CS and EFLAGS before jumping to the C handler, and the
- * frame-pointer prologue puts the saved CS at 8(%ebp).
+ * For direct C exception handlers the CPU leaves DS untouched, so a
+ * user-mode fault still carries the user data selector (0x23) while
+ * kernel-mode faults run with DS == 0x10.  This is reliable regardless
+ * of whether the exception pushed an error code or switched stacks.
  */
-static inline int is_user_mode_stack(void) {
-    uint32_t cs;
-    asm volatile("mov 8(%%ebp), %0" : "=r"(cs));
-    return cs != 0x10;
+static inline int is_user_mode(void) {
+    uint32_t ds;
+    asm volatile("mov %%ds, %0" : "=r"(ds));
+    return ds != 0x10;
 }
 
 /**
@@ -58,7 +59,7 @@ void default_ir_handler() {
 
 /** @brief \#DE — divide error. Fatal in kernel, kills process in user. */
 void ex_divide_by_zero() {
-    if (is_user_mode_stack()) {
+    if (is_user_mode()) {
         return_exception();
     }
     printf("Division by zero\n");
@@ -67,7 +68,7 @@ void ex_divide_by_zero() {
 
 /** @brief \#DB — debug / single step. Fatal in kernel, kills process in user. */
 void ex_single_step() {
-    if (is_user_mode_stack()) {
+    if (is_user_mode()) {
         return_exception();
     }
     printf("Single step\n");
@@ -82,7 +83,7 @@ void ex_nmi() {
 
 /** @brief \#BP — breakpoint. Fatal in kernel, kills process in user. */
 void ex_breakpoint() {
-    if (is_user_mode_stack()) {
+    if (is_user_mode()) {
         return_exception();
     }
     printf("Breakpoint\n");
@@ -91,7 +92,7 @@ void ex_breakpoint() {
 
 /** @brief \#OF — overflow. Fatal in kernel, kills process in user. */
 void ex_overflow() {
-    if (is_user_mode_stack()) {
+    if (is_user_mode()) {
         return_exception();
     }
     printf("Overflow\n");
@@ -100,7 +101,7 @@ void ex_overflow() {
 
 /** @brief \#BR — bound range exceeded. Fatal in kernel, kills process in user. */
 void ex_bounds_check() {
-    if (is_user_mode_stack()) {
+    if (is_user_mode()) {
         return_exception();
     }
     printf("Bounds check\n");
@@ -124,7 +125,7 @@ void ex_invalid_opcode(struct regs *re) {
 
 /** @brief \#NM — device (FPU) not available. Fatal in kernel, kills process in user. */
 void ex_device_not_available() {
-    if (is_user_mode_stack()) {
+    if (is_user_mode()) {
         return_exception();
     }
     printf("Device not available\n");
@@ -139,7 +140,7 @@ void ex_double_fault() {
 
 /** @brief \#TS — invalid TSS. Fatal in kernel, kills process in user. */
 void ex_invalid_tss() {
-    if (is_user_mode_stack()) {
+    if (is_user_mode()) {
         return_exception();
     }
     printf("Invalid TSS\n");
@@ -148,7 +149,7 @@ void ex_invalid_tss() {
 
 /** @brief \#NP — segment not present. Fatal in kernel, kills process in user. */
 void ex_segment_not_present() {
-    if (is_user_mode_stack()) {
+    if (is_user_mode()) {
         return_exception();
     }
     printf("Segment not present\n");
@@ -157,7 +158,7 @@ void ex_segment_not_present() {
 
 /** @brief \#SS — stack-segment fault. Fatal in kernel, kills process in user. */
 void ex_stack_fault() {
-    if (is_user_mode_stack()) {
+    if (is_user_mode()) {
         return_exception();
     }
     printf("Stack fault\n");
@@ -216,7 +217,7 @@ void ex_page_fault(struct regs_error *re) {
 
 /** @brief \#MF — x87 FPU error. Fatal in kernel, kills process in user. */
 void ex_fpu_error() {
-    if (is_user_mode_stack()) {
+    if (is_user_mode()) {
         return_exception();
     }
     printf("FPU error\n");
@@ -225,7 +226,7 @@ void ex_fpu_error() {
 
 /** @brief \#AC — alignment check. Fatal in kernel, kills process in user. */
 void ex_alignment_check() {
-    if (is_user_mode_stack()) {
+    if (is_user_mode()) {
         return_exception();
     }
     printf("Alignment check\n");
@@ -240,7 +241,7 @@ void ex_machine_check() {
 
 /** @brief \#XM — SIMD floating-point exception. Fatal in kernel, kills process in user. */
 void ex_simd_fpu() {
-    if (is_user_mode_stack()) {
+    if (is_user_mode()) {
         return_exception();
     }
     printf("SIMD FPU error\n");

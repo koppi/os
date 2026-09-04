@@ -311,10 +311,6 @@ void remove_proc(int pid) {
     for(int i = 0; i < cur->threads; i++) {
         thread_t *thread = cur->thread_list;
 
-        if(thread->main == 1)
-            sched_remove_proc(thread->pid);   // re-enables the scheduler flag
-        sched_state(0);
-
         for(int p = 0; p < PROC_USER_STACK_PAGES; p++)
             vmm_unmap(cur->pdir, thread->stack_limit - (p + 1) * PAGE_SIZE);
         for(vmm_addr_t va = thread->heap; va < thread->heap_limit; va += PAGE_SIZE)
