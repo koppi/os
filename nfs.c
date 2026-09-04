@@ -451,14 +451,34 @@ static int nfs_establish(void) {
     nfs_mounted = 0;
     if (nfs_conn >= 0) { tcp_close(nfs_conn); nfs_conn = -1; }
 
-    uint32_t ip = 0;
-    if (!parse_dotted_quad(NFS_HOST, &ip) &&
-        (dns_resolve(NFS_HOST, &ip, 1) < 1 || !ip)) {
+    uint32_t addrs[4];
+    int n_addrs = 0;
+    uint32_t dotted;
+    if (parse_dotted_quad(NFS_HOST, &dotted)) {
+        addrs[n_addrs++] = dotted;
+    } else {
+        /* A stale/duplicate DNS answer (e.g. an old DHCP lease the name
+         * server hasn't expired yet) shouldn't wedge the mount - try every
+         * address returned, not just the first. */
+        n_addrs = dns_resolve(NFS_HOST, addrs, 4);
+    }
+    if (n_addrs < 1) {
         klogf(LOG_WARNING, "nfs: cannot resolve %s\n", NFS_HOST);
         return -1;
     }
-    int h = tcp_connect_lport(ip, NFS_PORT, 1023);   /* reserved local port */
-    if (h < 0) { klogf(LOG_WARNING, "nfs: connect to %s:%d failed\n", NFS_HOST, NFS_PORT); return -1; }
+
+    /* Reserved (<1024, for a "secure" export) but varies per attempt: a fixed
+     * port would collide with a lingering server-side socket from a prior
+     * connection that never got a clean FIN (e.g. the client rebooted or the
+     * link dropped mid-session) - the server answers a fresh SYN on that
+     * 4-tuple with a bare challenge ACK instead of SYN-ACK, and the mount
+     * just hangs retransmitting forever. */
+    uint16_t lport = (uint16_t)(512 + (rdtsc() % 512));
+
+    int h = -1;
+    for (int i = 0; i < n_addrs && h < 0; i++)
+        h = tcp_connect_lport(addrs[i], NFS_PORT, lport);
+    if (h < 0) { klogf(LOG_WARNING, "nfs: connect to %s:%d failed (%d address(es) tried)\n", NFS_HOST, NFS_PORT, n_addrs); return -1; }
     nfs_conn = h;
 
     establishing = 1;
