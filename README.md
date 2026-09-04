@@ -29,6 +29,9 @@ computed from the last commit (`ver.h`, `main.c`, `Makefile`).
 * 8259 PIC remap — [`pic.c`](pic.c)
 * TSS for ring-3 → ring-0 transitions — [`tss.c`](tss.c)
 * x87 FPU init — [`fpu.c`](fpu.c)
+* Fault isolation — a ring-3 exception (#GP, #PF, #UD, #DE, #BP, #OF, #BR,
+  #NM, #TS, #NP, #SS, #MF, #AC, #XM) kills only the faulting process via
+  `return_exception()`; kernel-mode faults still panic — [`exception.c`](exception.c).
 
 ### SMP / multi-core
 QEMU is launched with `-smp 4` and **all four cores run kernel threads and
@@ -65,13 +68,14 @@ each is on.
   just past `kernel_end` — [`paging.c`](paging.c).
 
 ### Scheduling & processes
-* Preemptive fixed-priority round-robin scheduler with real-time policies
-  (`SCHED_OTHER` / `SCHED_RR` / `SCHED_FIFO`) — [`sched.c`](sched.c). Each core's
-  LAPIC timer runs `schedule()`: it runs the highest-priority ready thread,
-  round-robins equal priorities by quantum, and lets a higher priority preempt
-  within a tick. SMP-aware — see **SMP / multi-core** above.
+* Preemptive weighted fixed-priority round-robin scheduler with real-time
+  policies (`SCHED_OTHER` / `SCHED_RR` / `SCHED_FIFO`) — [`sched.c`](sched.c).
+  Each core's LAPIC timer runs `schedule()`: each thread carries a `weight`
+  and its quantum is `WEIGHT_BASE * weight` ticks; it runs the highest-priority
+  ready thread, round-robins equal priorities by quantum, and lets a higher
+  priority preempt within a tick. SMP-aware — see **SMP / multi-core** above.
 * Processes (flat binaries loaded from the filesystem) — [`proc.c`](proc.c)
-* Threads — [`thread.c`](thread.c)
+* Threads — [`thread.c`](thread.h)
 * `int 0x72` syscall gate — [`syscall.c`](syscall.c). Implemented calls:
   `printf`, `gets`/`scanf`, `fork`, `exit`, process return, `fopen`, `fclose`,
   `malloc`, `free`.
@@ -204,6 +208,29 @@ with `net_exec()` and block until it finishes.
   `nfs` prints the mount status. The server must permit the client's address
   (the client uses a privileged source port, so a default `sec`/`secure`
   export is fine).
+* **SSHv2 server** ([`ssh.c`](ssh.c)): a small in-kernel sshd, enough for a
+  stock OpenSSH client to log in and reach the same command shell as the
+  local console. Algorithms: curve25519-sha256 key exchange, ssh-ed25519 host
+  key (persisted hex-encoded at `/hda/sshkey`, so it survives reboots),
+  aes128-ctr cipher, hmac-sha2-256 MAC — all defaults a modern OpenSSH client
+  already offers, so no client-side flags are needed beyond accepting the
+  host key on first connect. Authentication is a single fixed
+  username/password (`koppi` / `os` — see `SSH_USERNAME`/`SSH_PASSWORD` in
+  [`ssh.c`](ssh.c)), since there is no user database in this OS. A `shell`
+  channel request bridges to `console_exec()` — the exact same command table
+  as the physical keyboard console — echoing keystrokes and mirroring output
+  both locally and over the channel; an `exec` request runs one command and
+  exits. Like NFS, this runs entirely on the `net` thread: `ssh_tick()` polls
+  the listening socket and, once accepted, runs the whole session to
+  completion before returning, so only one SSH session is serviced at a time
+  and other `net`-thread work pauses for its duration. `ssh` prints the
+  listener status. The underlying crypto (SHA-256/512, a small 256-bit
+  bignum, Curve25519, Ed25519, AES-128) is hand-rolled in
+  [`bignum256.c`](bignum256.c), [`sha2.c`](sha2.c),
+  [`curve25519.c`](curve25519.c), [`ed25519.c`](ed25519.c) and
+  [`aes128.c`](aes128.c) — there is no OpenSSL/libsodium here — seeded by a
+  best-effort timing-jitter CSPRNG ([`csprng.c`](csprng.c)); treat it as a
+  hobby-OS demo, not an audited implementation.
 
 `ipv4_send()` / `udp_send()` and `tcp_connect/send/recv/close()` are the hooks
 for anything more (there is no TLS or resolver cache).
@@ -226,8 +253,10 @@ for anything more (there is no TLS or resolver cache).
 | IPv4 stack (Ethernet, ARP, IPv4, UDP, ICMP) | [`net.c`](net.c), [`icmp.c`](icmp.c) |
 | DHCP client / DNS resolver | [`dhcp.c`](dhcp.c), [`dns.c`](dns.c) |
 | SNTP client (sets the RTC at boot) | [`ntp.c`](ntp.c) |
-| Minimal client TCP | [`tcp.c`](tcp.c) |
+| Minimal TCP (client + passive-open listen/accept) | [`tcp.c`](tcp.c) |
 | In-kernel NFSv4.1 client (auto-mounts `/nfs`) | [`nfs.c`](nfs.c) |
+| In-kernel SSHv2 server (port 22) | [`ssh.c`](ssh.c) |
+| Crypto primitives (SHA-2, bignum, Curve25519, Ed25519, AES-128, CSPRNG) | [`sha2.c`](sha2.c), [`bignum256.c`](bignum256.c), [`curve25519.c`](curve25519.c), [`ed25519.c`](ed25519.c), [`aes128.c`](aes128.c), [`csprng.c`](csprng.c) |
 | QEMU / Bochs standard VGA (DISPI mode control) | [`pci_vga.c`](pci_vga.c) |
 | AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sound.c`](sound.c) |
 | PC speaker | [`pcspk.c`](pcspk.c) |
@@ -336,6 +365,7 @@ keyboard driver, echoes them, supports backspace, and executes a line on Enter.
 | `pci` | list the enumerated PCI devices |
 | `net` | interface MAC, link, counters and the DHCP-assigned address |
 | `nfs` | NFSv4.1 client mount status for `/nfs` |
+| `ssh` | in-kernel SSH server listener status |
 | `ping <host> [count]` | ICMP echo (resolves names via DNS) |
 | `dns <name>` | DNS A-record lookup |
 | `http <host> [path]` | HTTP/1.0 GET, prints the response |
@@ -415,7 +445,10 @@ QEMU is launched with 256 MB RAM, `-vga std`, the floppy + IDE hard disk +
 CD-ROM images, AC97 / SB16 / PC-speaker audio, a UHCI controller with a
 `usb-kbd` on root port 1 and a `usb-hub` on root port 2 carrying a `usb-mouse`,
 an `isa-debug-exit` device (the kernel uses it to exit QEMU with a status code),
-and KVM acceleration.
+KVM acceleration, and a SLIRP `netdev` forwarding host port **2222** to the
+guest's port 22 — once the guest has DHCP'd an address (see the boot log),
+`ssh -p 2222 koppi@localhost` (password `os`) from the host reaches the
+in-kernel SSH server.
 
 Once the `>` prompt appears, try:
 
@@ -455,5 +488,6 @@ process (`main_proc` in [`sched.c`](sched.c)), which brings up the floppy and
 IDE block devices, mounts their FAT volumes, starts the framebuffer redraw thread,
 the USB thread (`usb_thread` — enumerate, then poll HID endpoints and hub
 ports) and, if an e1000 was found, the `net` thread (`net_thread` — run the
-DHCP client, sync the RTC over NTP, then service the RX ring), and then runs
-the interactive console (`kmain_console`).
+DHCP client, sync the RTC over NTP, then service the RX ring, retry the NFS
+mount and poll the SSH listener), and then runs the interactive console
+(`kmain_console`).

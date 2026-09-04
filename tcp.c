@@ -16,7 +16,7 @@
 #include "cpu.h"
 
 #define IPPROTO_TCP  6
-#define TCP_NCONN     4
+#define TCP_NCONN     6
 #define TCP_RXBUF     8192
 #define TCP_MSS       1400
 
@@ -28,7 +28,8 @@
 
 enum {
     ST_CLOSED, ST_SYN_SENT, ST_ESTABLISHED,
-    ST_FIN_WAIT_1, ST_FIN_WAIT_2, ST_CLOSING, ST_CLOSE_WAIT, ST_LAST_ACK
+    ST_FIN_WAIT_1, ST_FIN_WAIT_2, ST_CLOSING, ST_CLOSE_WAIT, ST_LAST_ACK,
+    ST_LISTEN, ST_SYN_RCVD
 };
 
 struct tcp_hdr {
@@ -39,7 +40,7 @@ struct tcp_hdr {
 } __attribute__((packed));
 
 struct conn {
-    int      used, state, reset;
+    int      used, state, reset, accepted;
     uint32_t remote_ip;
     uint16_t local_port, remote_port;
     uint32_t snd_una, snd_nxt, rcv_nxt;
@@ -69,6 +70,15 @@ static struct conn *find_conn(uint32_t rip, uint16_t rport, uint16_t lport) {
             return &conns[i];
     return NULL;
 }
+
+static struct conn *find_listener(uint16_t lport) {
+    for (int i = 0; i < TCP_NCONN; i++)
+        if (conns[i].used && conns[i].state == ST_LISTEN && conns[i].local_port == lport)
+            return &conns[i];
+    return NULL;
+}
+
+static int alloc(void);
 
 /* ------------------------------------------------------------------ *
  *  Segment output                                                     *
@@ -192,6 +202,21 @@ void tcp_input(uint32_t src_ip, const uint8_t *p, int len) {
 
     struct conn *c = find_conn(src_ip, sport, dport);
     if (!c) {
+        if ((fl & (F_SYN | F_ACK)) == F_SYN && find_listener(dport)) {
+            int h = alloc();
+            if (h >= 0) {
+                struct conn *nc = &conns[h];
+                nc->remote_ip   = src_ip;
+                nc->remote_port = sport;
+                nc->local_port  = dport;
+                nc->rcv_nxt     = seq + 1;
+                uint32_t isn    = (uint32_t)rdtsc();
+                nc->snd_una = nc->snd_nxt = isn;
+                nc->state = ST_SYN_RCVD;
+                seg_send_tracked(nc, F_SYN | F_ACK, NULL, 0, 1);
+            }
+            return;
+        }
         if (!(fl & F_RST))
             seg_rst(src_ip, sport, dport, (fl & F_ACK) ? ack : 0);
         return;
@@ -233,6 +258,8 @@ void tcp_input(uint32_t src_ip, const uint8_t *p, int len) {
             c->state = ST_CLOSED;
         else if (c->state == ST_LAST_ACK && !c->rt_pending)
             c->state = ST_CLOSED;
+        else if (c->state == ST_SYN_RCVD && !c->rt_pending)
+            c->state = ST_ESTABLISHED;
     }
 
     /* In-order data. */
@@ -269,6 +296,38 @@ static int alloc(void) {
             return i;
         }
     return -1;
+}
+
+int tcp_listen(uint16_t port) {
+    int h = alloc();
+    if (h < 0)
+        return -1;
+    conns[h].state = ST_LISTEN;
+    conns[h].local_port = port;
+    return h;
+}
+
+int tcp_accept(int listen_h) {
+    if (listen_h < 0 || listen_h >= TCP_NCONN || !conns[listen_h].used ||
+        conns[listen_h].state != ST_LISTEN)
+        return -1;
+    uint16_t port = conns[listen_h].local_port;
+    for (int i = 0; i < TCP_NCONN; i++) {
+        struct conn *c = &conns[i];
+        if (c->used && c->state == ST_ESTABLISHED && c->local_port == port && !c->accepted) {
+            c->accepted = 1;
+            return i;
+        }
+    }
+    return -1;
+}
+
+int tcp_is_open(int h) {
+    if (h < 0 || h >= TCP_NCONN || !conns[h].used || conns[h].reset)
+        return 0;
+    /* ST_CLOSE_WAIT deliberately excluded: the peer has sent FIN, so no more
+     * data will ever arrive, even though we may still be able to write. */
+    return conns[h].state == ST_ESTABLISHED;
 }
 
 int tcp_connect(uint32_t ip, uint16_t port) {
@@ -329,6 +388,24 @@ int tcp_send(int h, const void *data, int len) {
         off += chunk;
     }
     return off;
+}
+
+int tcp_recv_nb(int h, void *buf, int max) {
+    if (h < 0 || h >= TCP_NCONN || !conns[h].used)
+        return -1;
+    struct conn *c = &conns[h];
+    if (c->reset)
+        return -1;
+    if (c->rx_len == 0)
+        return 0;
+
+    int n = c->rx_len < max ? c->rx_len : max;
+    uint8_t *o = buf;
+    for (int i = 0; i < n; i++)
+        o[i] = c->rxbuf[(c->rx_head + i) % TCP_RXBUF];
+    c->rx_head = (c->rx_head + n) % TCP_RXBUF;
+    c->rx_len -= n;
+    return n;
 }
 
 int tcp_recv(int h, void *buf, int max) {

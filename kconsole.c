@@ -10,6 +10,9 @@
 /** The character device kernel output goes to (serial UART during boot). */
 chardev_t *kconsole;
 
+/** Extra output sink for an active SSH session; NULL when none is active. */
+void (*ssh_output_hook)(char c) = 0;
+
 /**
  * @brief Write character @p c to all kernel output surfaces.
  *
@@ -25,4 +28,6 @@ void putchar_(char c) {
     buf[1] = 0;
     write_log(buf);
     vga_putchar(c);
+    if (ssh_output_hook)
+        ssh_output_hook(c);
 }

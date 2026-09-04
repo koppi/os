@@ -78,3 +78,11 @@ void delay_400ns();
  * @return Pointer to a shared static buffer; consume it before the next read.
  */
 char *ata_read_sector(int lba);
+
+/**
+ * @brief Write the shared buffer (see @ref ata_read_sector) to one 512-byte
+ *        sector by LBA, then flush the drive's write cache.
+ * @param lba Logical block address.
+ * @return 1 on success.
+ */
+int ata_write_sector(int lba);

@@ -17,6 +17,12 @@ uint8_t ata_irq_done = 0;
 
 static device_t dev_info[4];
 
+/** Shared scratch sector: @ref ata_read_sector fills it and returns it,
+ *  @ref ata_write_sector sends it back out -- the same read-modify-write
+ *  convention @c floppy_read_sector / @c floppy_write_sector use over
+ *  @c dma_buffer (see fat_touch()). */
+static uint8_t ata_buf[512];
+
 extern void ata_int();
 
 void ata_init() {
@@ -39,6 +45,7 @@ void ata_init() {
             dev_info[i].mount[2] = i + 'a';
             dev_info[i].mount[3] = 0;
             dev_info[i].read = &ata_read_sector;
+            dev_info[i].write = &ata_write_sector;
             fat_init(&dev_info[i].fs);
             device_register(&dev_info[i]);
             klogf(LOG_INFO, "ATA %s: mounted as %s\n", chan_name[i], dev_info[i].mount);
@@ -136,7 +143,6 @@ char *ata_read_sector(int lba) {
     // Shared scratch sector, like floppy_read_sector(): the caller must consume
     // the data before the next read. Returning a fresh kmalloc() here leaked
     // 512 bytes of kernel heap on every sector read.
-    static uint8_t buf[512];
     outportb(ata_info.cur_hdd.sel_reg, 0xE0 | ((lba >> 24) & 0x0F)); // maybe or with (ata_info.cur_hdd.type << 4)
     outportb(ata_info.cur_hdd.err_reg, 0x00);
     outportb(ata_info.cur_hdd.sectors_reg, (uint8_t) 1);
@@ -155,9 +161,44 @@ char *ata_read_sector(int lba) {
     } while((st & 0x80) || !(st & 0x08));
 
     for(int i = 0; i < 256; i++) {
-        ((uint16_t *) buf)[i] = inportw(ata_info.cur_hdd.data_reg);
+        ((uint16_t *) ata_buf)[i] = inportw(ata_info.cur_hdd.data_reg);
     }
     delay_400ns();
-    return (char *) buf;
+    return (char *) ata_buf;
+}
+
+int ata_write_sector(int lba) {
+    outportb(ata_info.cur_hdd.sel_reg, 0xE0 | ((lba >> 24) & 0x0F));
+    outportb(ata_info.cur_hdd.err_reg, 0x00);
+    outportb(ata_info.cur_hdd.sectors_reg, (uint8_t) 1);
+    outportb(ata_info.cur_hdd.lba_low_reg, lba & 0x000000ff);
+    outportb(ata_info.cur_hdd.lba_mid_reg, (lba & 0x0000ff00) >> 8);
+    outportb(ata_info.cur_hdd.lba_high_reg, (lba & 0x00ff0000) >> 16);
+    outportb(ata_info.cur_hdd.status_reg, 0x30); // WRITE SECTORS
+    delay_400ns();
+
+    uint8_t st;
+    do {
+        st = inportb(ata_info.cur_hdd.status_reg);
+    } while((st & 0x80) || !(st & 0x08));
+
+    for(int i = 0; i < 256; i++) {
+        outportw(ata_info.cur_hdd.data_reg, ((uint16_t *) ata_buf)[i]);
+    }
+    delay_400ns();
+
+    do {
+        st = inportb(ata_info.cur_hdd.status_reg);
+    } while(st & 0x80);
+
+    // FLUSH CACHE, so the write actually reaches the (virtual) platter
+    // before a caller assumes it's durable.
+    outportb(ata_info.cur_hdd.status_reg, 0xE7);
+    delay_400ns();
+    do {
+        st = inportb(ata_info.cur_hdd.status_reg);
+    } while(st & 0x80);
+
+    return 1;
 }
 

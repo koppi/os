@@ -13,6 +13,7 @@
 #include <ntp.h>
 #include <tcp.h>
 #include <nfs.h>
+#include <ssh.h>
 #include <e1000.h>
 
 #include <io.h>
@@ -414,6 +415,7 @@ void net_thread(void) {
         }
 
         nfs_boot_tick();
+        ssh_tick();
 
         sleep(50);
     }
