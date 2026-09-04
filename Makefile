@@ -67,7 +67,7 @@ BRIDGE ?= br0
 ifeq ($(NET),bridge)
 NETDEV = -netdev bridge,id=n0,br=$(BRIDGE) -device e1000,netdev=n0
 else
-NETDEV = -netdev user,id=n0 -device e1000,netdev=n0
+    NETDEV = -netdev user,id=n0,hostfwd=tcp::2222-:22 -device e1000,netdev=n0
 endif
 
 QEMU ?= qemu-system-$(TARGET)
@@ -75,8 +75,6 @@ QEMUFLAGS += -vga std -m 256M -no-reboot
 QEMUFLAGS += -smp 4
 QEMUFLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 QEMUFLAGS += -enable-kvm
-QEMUFLAGS += -netdev user,id=n0,hostfwd=tcp::2222-:22
-QEMUFLAGS += -device e1000,netdev=n0
 QEMUFLAGS += -audiodev id=pa,driver=pa -machine pcspk-audiodev=pa
 QEMUFLAGS += -device sb16,audiodev=pa
 QEMUFLAGS += -device ac97,audiodev=pa
