@@ -11,6 +11,7 @@
 typedef struct thread {
     pid_t pid;                      /**< Thread id. */
     int time;                       /**< Round-robin quantum, in PIT ticks. */
+    int weight;                     /**< Scheduler weight: quantum = @c WEIGHT_BASE * @c weight. */
     int priority;                   /**< Scheduling priority, higher = more urgent (@c SCHED_PRIO_* in sched.h). */
     int policy;                     /**< @c SCHED_OTHER / @c SCHED_RR / @c SCHED_FIFO (see sched.h). */
     int yield;                      /**< Set by @ref sched_yield to drop the CPU on the next tick. */

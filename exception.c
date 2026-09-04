@@ -3,7 +3,7 @@
  * @brief C side of the CPU-exception handlers.
  *
  * Each handler prints a diagnostic. If the fault happened in kernel mode
- * (saved ES == 0x10) it is unrecoverable and the machine panics; if it
+ * (saved CS == 0x10) it is unrecoverable and the machine panics; if it
  * happened in ring 3 the current process is torn down via
  * @ref return_exception instead.
  */
@@ -16,6 +16,26 @@
 
 /** Entry point jumped to in userspace to unwind a faulted process. */
 void (*return_error)() = (void *) RETURN_ADDR;
+
+/**
+ * @brief Return non-zero if the saved CS on the stack belongs to ring 3.
+ *
+ * Used by exception handlers that receive no explicit register frame: the
+ * CPU pushes EIP, CS and EFLAGS before jumping to the C handler, and the
+ * frame-pointer prologue puts the saved CS at 8(%ebp).
+ */
+static inline int is_user_mode_stack(void) {
+    uint32_t cs;
+    asm volatile("mov 8(%%ebp), %0" : "=r"(cs));
+    return cs != 0x10;
+}
+
+/**
+ * @brief Return non-zero if @p cs belongs to ring 3.
+ */
+static inline int is_user_mode_cs(uint32_t cs) {
+    return cs != 0x10;
+}
 
 /**
  * @brief Hand control to the userspace return stub with status 1.
@@ -36,38 +56,53 @@ void default_ir_handler() {
     panic("");
 }
 
-/** @brief \#DE — divide error. Fatal. */
+/** @brief \#DE — divide error. Fatal in kernel, kills process in user. */
 void ex_divide_by_zero() {
+    if (is_user_mode_stack()) {
+        return_exception();
+    }
     printf("Division by zero\n");
     panic("");
 }
 
-/** @brief \#DB — debug / single step. Fatal. */
+/** @brief \#DB — debug / single step. Fatal in kernel, kills process in user. */
 void ex_single_step() {
+    if (is_user_mode_stack()) {
+        return_exception();
+    }
     printf("Single step\n");
     panic("");
 }
 
-/** @brief Non-maskable interrupt trap. Fatal. */
+/** @brief Non-maskable interrupt trap. Always fatal. */
 void ex_nmi() {
     printf("NMI trap\n");
     panic("");
 }
 
-/** @brief \#BP — breakpoint. Fatal. */
+/** @brief \#BP — breakpoint. Fatal in kernel, kills process in user. */
 void ex_breakpoint() {
+    if (is_user_mode_stack()) {
+        return_exception();
+    }
     printf("Breakpoint\n");
     panic("");
 }
 
-/** @brief \#OF — overflow. Fatal. */
+/** @brief \#OF — overflow. Fatal in kernel, kills process in user. */
 void ex_overflow() {
+    if (is_user_mode_stack()) {
+        return_exception();
+    }
     printf("Overflow\n");
     panic("");
 }
 
-/** @brief \#BR — bound range exceeded. Fatal. */
+/** @brief \#BR — bound range exceeded. Fatal in kernel, kills process in user. */
 void ex_bounds_check() {
+    if (is_user_mode_stack()) {
+        return_exception();
+    }
     printf("Bounds check\n");
     panic("");
 }
@@ -80,41 +115,51 @@ void ex_bounds_check() {
 void ex_invalid_opcode(struct regs *re) {
     printf("Invalid opcode\n");
     printf("eip: %x cs: %x\neax: %u ebx: %u ecx: %u edx: %u\nesp: %x ebp: %x esi: %u edi: %u\nds: %x es: %x fs: %x gs: %x\n", re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp, re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
-    if(re->es == 0x10) {
-        // If an Invalid Opcode occurs in kernel mode, we don't really want to continue
-        panic("");
-    } else {
-        // If we were in user mode, just kill that thread or process
+    if(is_user_mode_cs(re->cs)) {
         return_exception();
+    } else {
+        panic("");
     }
 }
 
-/** @brief \#NM — device (FPU) not available. Fatal. */
+/** @brief \#NM — device (FPU) not available. Fatal in kernel, kills process in user. */
 void ex_device_not_available() {
+    if (is_user_mode_stack()) {
+        return_exception();
+    }
     printf("Device not available\n");
     panic("");
 }
 
-/** @brief \#DF — double fault. Fatal. */
+/** @brief \#DF — double fault. Always fatal. */
 void ex_double_fault() {
     printf("Double fault\n");
     panic("");
 }
 
-/** @brief \#TS — invalid TSS. Fatal. */
+/** @brief \#TS — invalid TSS. Fatal in kernel, kills process in user. */
 void ex_invalid_tss() {
+    if (is_user_mode_stack()) {
+        return_exception();
+    }
     printf("Invalid TSS\n");
     panic("");
 }
 
-/** @brief \#NP — segment not present. Fatal. */
+/** @brief \#NP — segment not present. Fatal in kernel, kills process in user. */
 void ex_segment_not_present() {
+    if (is_user_mode_stack()) {
+        return_exception();
+    }
     printf("Segment not present\n");
     panic("");
 }
 
-/** @brief \#SS — stack-segment fault. Fatal. */
+/** @brief \#SS — stack-segment fault. Fatal in kernel, kills process in user. */
 void ex_stack_fault() {
+    if (is_user_mode_stack()) {
+        return_exception();
+    }
     printf("Stack fault\n");
     panic("");
 }
@@ -129,12 +174,10 @@ void ex_gpf(struct regs_error *re) {
     printf("eip: %x cs: %x\neax: %u ebx: %u ecx: %u edx: %u\nesp: %x ebp: %x esi: %u edi: %u\nds: %x es: %x fs: %x gs: %x\n", re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp, re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
     printf("cr2: %x cr3: %x\n", get_cr2(), get_pdbr());
 
-    // If a GPF occurs in kernel mode, we don't really want to continue
-    if(re->es == 0x10) {
-        panic("");
-    } else {
-        // If we were in user mode, just kill that thread or process
+    if(is_user_mode_cs(re->cs)) {
         return_exception();
+    } else {
+        panic("");
     }
 }
 
@@ -164,35 +207,42 @@ void ex_page_fault(struct regs_error *re) {
 
     //printf("\nPage fault at addr: 0x%x\n", (unsigned)virt_addr);
     printf("Phys addr: 0x%x\n", phys_addr);
-    // If a Page Fault occurs in kernel mode, we don't really want to continue
-    if(re->es == 0x10) {
-        panic("");
-    } else {
-        // If we were in user mode, just kill that thread or process
+    if(is_user_mode_cs(re->cs)) {
         return_exception();
+    } else {
+        panic("");
     }
 }
 
-/** @brief \#MF — x87 FPU error. Fatal. */
+/** @brief \#MF — x87 FPU error. Fatal in kernel, kills process in user. */
 void ex_fpu_error() {
+    if (is_user_mode_stack()) {
+        return_exception();
+    }
     printf("FPU error\n");
     panic("");
 }
 
-/** @brief \#AC — alignment check. Fatal. */
+/** @brief \#AC — alignment check. Fatal in kernel, kills process in user. */
 void ex_alignment_check() {
+    if (is_user_mode_stack()) {
+        return_exception();
+    }
     printf("Alignment check\n");
     panic("");
 }
 
-/** @brief \#MC — machine check. Fatal. */
+/** @brief \#MC — machine check. Always fatal. */
 void ex_machine_check() {
     printf("Machine check\n");
     panic("");
 }
 
-/** @brief \#XM — SIMD floating-point exception. Fatal. */
+/** @brief \#XM — SIMD floating-point exception. Fatal in kernel, kills process in user. */
 void ex_simd_fpu() {
+    if (is_user_mode_stack()) {
+        return_exception();
+    }
     printf("SIMD FPU error\n");
     panic("");
 }
