@@ -18,6 +18,7 @@
 
 #include <io.h>
 #include <kheap.h>
+#include <ssh.h>
 #include <paging.h>
 #include <pit.h>
 #include <proc.h>
@@ -97,6 +98,7 @@ void main_proc() {
     start_kernel_proc("usb", &usb_thread);
     if (e1000_present())
         start_kernel_proc("net", &net_thread);
+    start_kernel_proc("ssh-worker", &ssh_worker_func);
     //start_kernel_proc("demo_thread", &demo_thread);
     //start_kernel_proc("uart_read", &uart_read_proc);
 

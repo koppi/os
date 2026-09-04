@@ -18,6 +18,8 @@
 #include <commands.h>
 #include <kconsole.h>
 #include <printf.h>
+#include <kheap.h>
+#include <spinlock.h>
 #include <log.h>
 #include <csprng.h>
 #include <sha2.h>
@@ -70,6 +72,15 @@ typedef struct {
 
 static int listen_h = -1;
 static int session_count = 0;
+
+typedef struct ssh_pending {
+    int h;
+    struct ssh_pending *next;
+} ssh_pending_t;
+
+static ssh_pending_t *ssh_pending_head = 0;
+static ssh_pending_t *ssh_pending_tail = 0;
+static spinlock_t ssh_pending_lock;
 
 const char *ssh_status_str(void) {
     static char buf[64];
@@ -945,6 +956,41 @@ void ssh_tick(void) {
     if (h < 0)
         return;
 
-    session_count++;
-    ssh_serve_connection(h);
+    ssh_pending_t *node = kmalloc(sizeof(ssh_pending_t));
+    if (!node) {
+        tcp_close(h);
+        return;
+    }
+    node->h = h;
+    node->next = 0;
+
+    uint32_t f = spin_lock(&ssh_pending_lock);
+    if (ssh_pending_tail)
+        ssh_pending_tail->next = node;
+    else
+        ssh_pending_head = node;
+    ssh_pending_tail = node;
+    spin_unlock(&ssh_pending_lock, f);
+}
+
+void ssh_worker_func(void) {
+    for (;;) {
+        ssh_pending_t *node = 0;
+        uint32_t f = spin_lock(&ssh_pending_lock);
+        if (ssh_pending_head) {
+            node = ssh_pending_head;
+            ssh_pending_head = node->next;
+            if (!ssh_pending_head)
+                ssh_pending_tail = 0;
+        }
+        spin_unlock(&ssh_pending_lock, f);
+
+        if (node) {
+            ssh_serve_connection(node->h);
+            kfree(node);
+            session_count++;
+        } else {
+            asm volatile("pause");
+        }
+    }
 }

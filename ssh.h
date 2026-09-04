@@ -10,18 +10,18 @@
  * fixed username/password (see @c SSH_USERNAME / @c SSH_PASSWORD in ssh.c) —
  * there is no user database in this OS.
  *
- * Like @ref nfs_boot_tick, this runs entirely on the `net` kernel thread:
- * @ref ssh_tick polls for a new connection and, once one is accepted, runs
- * the whole session (auth, shell) to completion before returning. Only one
- * SSH session is handled at a time, and other `net`-thread work (DHCP
- * renewal, NFS, ntp) is paused for the duration of a session — consistent
- * with the rest of this single-threaded network stack.
+ * A dedicated worker thread services sessions from a queue so the `net`
+ * thread is never blocked. Multiple connections can queue up and are
+ * served in order.
  */
 #pragma once
 
-/** @brief Called every iteration of the `net` thread: accepts and services
- *  one SSH connection at a time on port 22. */
+/** @brief Called every iteration of the `net` thread: accepts new SSH
+ *  connections and queues them for the worker thread. */
 void ssh_tick(void);
+
+/** @brief Worker thread entry point: dequeues and serves SSH sessions. */
+void ssh_worker_func(void);
 
 /** @brief One-line human readable status, for the `ssh` console command. */
 const char *ssh_status_str(void);
