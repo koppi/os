@@ -451,14 +451,26 @@ static int nfs_establish(void) {
     nfs_mounted = 0;
     if (nfs_conn >= 0) { tcp_close(nfs_conn); nfs_conn = -1; }
 
-    uint32_t ip = 0;
-    if (!parse_dotted_quad(NFS_HOST, &ip) &&
-        (dns_resolve(NFS_HOST, &ip, 1) < 1 || !ip)) {
+    uint32_t addrs[4];
+    int n_addrs = 0;
+    uint32_t dotted;
+    if (parse_dotted_quad(NFS_HOST, &dotted)) {
+        addrs[n_addrs++] = dotted;
+    } else {
+        /* A stale/duplicate DNS answer (e.g. an old DHCP lease the name
+         * server hasn't expired yet) shouldn't wedge the mount - try every
+         * address returned, not just the first. */
+        n_addrs = dns_resolve(NFS_HOST, addrs, 4);
+    }
+    if (n_addrs < 1) {
         klogf(LOG_WARNING, "nfs: cannot resolve %s\n", NFS_HOST);
         return -1;
     }
-    int h = tcp_connect_lport(ip, NFS_PORT, 1023);   /* reserved local port */
-    if (h < 0) { klogf(LOG_WARNING, "nfs: connect to %s:%d failed\n", NFS_HOST, NFS_PORT); return -1; }
+
+    int h = -1;
+    for (int i = 0; i < n_addrs && h < 0; i++)
+        h = tcp_connect_lport(addrs[i], NFS_PORT, 1023);   /* reserved local port */
+    if (h < 0) { klogf(LOG_WARNING, "nfs: connect to %s:%d failed (%d address(es) tried)\n", NFS_HOST, NFS_PORT, n_addrs); return -1; }
     nfs_conn = h;
 
     establishing = 1;

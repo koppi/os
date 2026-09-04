@@ -44,6 +44,32 @@ CFLAGS += -DOS_VER_MAJ=0 -DOS_VER_MIN=$(GIT_COUNT) -DOS_VER_REV=$(GIT_REV)
 
 LDFLAGS += -melf_i386 -T kernel.lds -Map kernel.map -z muldefs -z noexecstack
 
+# Networking backend for the e1000 NIC:
+#   NET=user   (default) SLIRP user-mode networking. No host setup needed, but
+#              it NATs the guest (10.0.2.15) and can rewrite the source port on
+#              connections that leave the SLIRP-internal address space, which
+#              breaks NFS mounts against a "secure" (privileged-port-only)
+#              export. Fine for DHCP/DNS/HTTP/ICMP.
+#   NET=bridge Bridged networking: the guest gets a real address on BRIDGE
+#              (default br0) via the setuid qemu-bridge-helper, so DHCP/NFS
+#              behave like a real machine on the LAN. Requires host setup:
+#                1. a bridge device, e.g.
+#                     sudo ip link add br0 type bridge
+#                     sudo ip link set br0 up
+#                     sudo ip link set <phys-if> master br0   # or use your
+#                       distro's netplan/NetworkManager bridge config instead
+#                2. /etc/qemu/bridge.conf containing "allow br0"
+#                3. qemu-bridge-helper must be setuid root (usually already
+#                   true from the qemu-utils/qemu-system-common package)
+#              Then: make qemu-iso NET=bridge [BRIDGE=br0]
+NET ?= user
+BRIDGE ?= br0
+ifeq ($(NET),bridge)
+NETDEV = -netdev bridge,id=n0,br=$(BRIDGE) -device e1000,netdev=n0
+else
+NETDEV = -netdev user,id=n0 -device e1000,netdev=n0
+endif
+
 QEMU ?= qemu-system-$(TARGET)
 QEMUFLAGS += -vga std -m 256M -no-reboot
 QEMUFLAGS += -smp 4
@@ -61,6 +87,7 @@ QEMUFLAGS += -display sdl
 QEMUFLAGS += -usb
 QEMUFLAGS += -device usb-kbd,port=1
 QEMUFLAGS += -device usb-hub,port=2 -device usb-mouse,port=2.1
+QEMUFLAGS += $(NETDEV)
 
 all: lib apps $(KERNEL)
 
