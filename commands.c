@@ -251,6 +251,32 @@ void console_read(char *command) {
 }
 
 /**
+ * @brief Handle "ls [dir]" — list a directory.
+ *
+ * With no argument, lists the console's working directory (or the device
+ * list at the root). With an argument, lists that path directly without
+ * changing the working directory (resolved via resolve_path()).
+ *
+ * @param command Full command line ("ls" or "ls <dir>").
+ */
+static void console_ls(char *command) {
+    char *arg = get_argument(command, 1);
+    if(!arg || !*arg) {
+        if(dir[0] == 0) {
+            vfs_ls();
+        } else {
+            vfs_ls_dir(dir);
+        }
+        return;
+    }
+    if(!resolve_path(senddir, sizeof(senddir), arg)) {
+        printf("ls: path too long\n");
+        return;
+    }
+    vfs_ls_dir(senddir);
+}
+
+/**
  * @brief Handle "touch <file>" — create an empty file.
  */
 static void console_touch(char *command) {
@@ -579,7 +605,7 @@ void console_exec(char *buf) {
                "mem      - prints RAM info\n"
                "ps       - prints process information\n"
                "cpus     - lists the online CPUs and what each is running\n"
-               "ls       - lists the current directory\n"
+               "ls       - lists the current directory, or ls <dir>\n"
                "cd       - changes directory\n"
                "start    - runs a program\n"
                "read     - prints a file\n"
@@ -625,12 +651,8 @@ void console_exec(char *buf) {
         print_procs();
     } else if(strcmp(buf, "cpus") == 0) {
         smp_report();
-    } else if(strcmp(buf, "ls") == 0) {
-        if(dir[0] == 0) {
-            vfs_ls();
-        } else {
-            vfs_ls_dir(dir);
-        }
+    } else if(strncmp(buf, "ls", 2) == 0) {
+        console_ls(buf);
     } else if(strncmp(buf, "cd", 2) == 0) {
         console_cd(dir, buf);
     } else if(strncmp(buf, "start", 5) == 0) {
