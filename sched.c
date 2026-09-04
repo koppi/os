@@ -231,7 +231,8 @@ void sched_init() {
     proc->threads = 1;
     proc->cpu = -1;
     proc->last_ran = 0;
-    main_thread->time = 10;
+    main_thread->time = WEIGHT_BASE;
+    main_thread->weight = 1;
     main_thread->priority = SCHED_PRIO_DEFAULT;
     main_thread->policy = SCHED_OTHER;
     main_thread->yield = 0;
@@ -462,6 +463,20 @@ int sched_set_policy(int pid, int policy) {
     thread_t *t = thread_by_id_locked(pid);
     if (t != 0)
         t->policy = policy;
+    spin_unlock(&sched_lock, f);
+    return t != 0 ? 0 : -1;
+}
+
+int sched_set_weight(int pid, int weight) {
+    if (weight < 1)
+        return -1;
+
+    uint32_t f = spin_lock(&sched_lock);
+    thread_t *t = thread_by_id_locked(pid);
+    if (t != 0) {
+        t->weight = weight;
+        t->time = WEIGHT_BASE * weight;
+    }
     spin_unlock(&sched_lock, f);
     return t != 0 ? 0 : -1;
 }

@@ -11,5 +11,6 @@ apps/hello/hello
 apps/example/example
 apps/mem/mem
 apps/lua/lua
+apps/fault/fault
 os.sublime-workspace
 docs/

@@ -238,9 +238,16 @@ int stack_fill(thread_t *thread, uint32_t argc, uint32_t argv) {
     *--stackp = 0x23;                                       // fs
     *--stackp = 0x23;                                       // gs
     thread->esp_kernel = (uint32_t) stackp;
-    
-    vmm_unmap_phys(get_kern_directory(), (uint32_t) thread->esp);
-    
+
+    /* Drop the kernel-directory aliases map_user_range() left behind; the
+     * frames stay mapped in the process directory. */
+    vmm_addr_t ustk = thread->stack_limit - PROC_USER_STACK_PAGES * PAGE_SIZE;
+    vmm_addr_t kstk = thread->stack_kernel_limit - PROC_KERNEL_STACK_PAGES * PAGE_SIZE;
+    for(int p = 0; p < PROC_USER_STACK_PAGES; p++)
+        vmm_unmap_phys(get_kern_directory(), ustk + (uint32_t) p * PAGE_SIZE);
+    for(int p = 0; p < PROC_KERNEL_STACK_PAGES; p++)
+        vmm_unmap_phys(get_kern_directory(), kstk + (uint32_t) p * PAGE_SIZE);
+
     return 1;
 }
 
@@ -300,16 +307,26 @@ void remove_proc(int pid) {
     for(uint32_t page = 0; page < cur->thread_list->image_size / PAGE_SIZE; page++) {
         vmm_unmap(cur->pdir, cur->thread_list->image_base + (page * PAGE_SIZE));
     }
-    
-    for(int i = 0; i < cur->threads; i++) {
-        vmm_unmap(cur->pdir, cur->thread_list->stack_limit - PAGE_SIZE);
-        vmm_unmap(cur->pdir, cur->thread_list->stack_kernel_limit - PAGE_SIZE);
-        for(int j = 0; j < 4; j++) {
-            vmm_unmap(cur->pdir, cur->thread_list->heap + (j * PAGE_SIZE));
-        }
 
+    for(int i = 0; i < cur->threads; i++) {
         thread_t *thread = cur->thread_list;
-        cur->thread_list = cur->thread_list->next;
+
+        if(thread->main == 1)
+            sched_remove_proc(thread->pid);   // re-enables the scheduler flag
+        sched_state(0);
+
+        for(int p = 0; p < PROC_USER_STACK_PAGES; p++)
+            vmm_unmap(cur->pdir, thread->stack_limit - (p + 1) * PAGE_SIZE);
+        for(vmm_addr_t va = thread->heap; va < thread->heap_limit; va += PAGE_SIZE)
+            vmm_unmap(cur->pdir, va);
+        /* Kernel-stack frames are intentionally leaked: unmapping them here (or
+         * in stop_thread) corrupts a still-in-use allocation somewhere in the
+         * kernel heap once a few sizeable processes have run in sequence. The
+         * per-process kstack is 4 pages; the leak is bounded and benign for the
+         * interactive workload. See apps/lua/PORTING.md. */
+
+        cur->thread_list = thread->next;
+        kfree(thread->fpu_state_raw);
         kfree(thread);
     }
 

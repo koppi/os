@@ -50,7 +50,8 @@ thread_t *create_thread() {
     }
     thread->pid = pid++;
     thread->main = 0;
-    thread->time = 10;
+    thread->time = WEIGHT_BASE;
+    thread->weight = 1;
     thread->priority = SCHED_PRIO_DEFAULT;
     thread->policy = SCHED_OTHER;
     thread->yield = 0;

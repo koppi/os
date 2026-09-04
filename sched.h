@@ -37,6 +37,9 @@
 #define SCHED_PRIO_RT_MIN   16  /**< A priority >= this is a real-time priority. */
 ///@}
 
+/** Base number of PIT ticks in a default time slice (scaled by @ref thread_t::weight). */
+#define WEIGHT_BASE 10
+
 /** @return Non-zero if priority @p p lies in the real-time band. */
 #define SCHED_IS_RT(p)  ((p) >= SCHED_PRIO_RT_MIN)
 
@@ -79,6 +82,13 @@ int sched_set_priority(int pid, int priority);
  * @return 0 on success, -1 on a bad policy or unknown thread.
  */
 int sched_set_policy(int pid, int policy);
+/**
+ * @brief Change thread @p pid's scheduler weight (scales its quantum).
+ * @param pid    Thread id.
+ * @param weight New weight (must be > 0).
+ * @return 0 on success, -1 if no such thread.
+ */
+int sched_set_weight(int pid, int weight);
 /** @brief Insert @p proc into the scheduler ring. */
 void sched_add_proc(process_t *proc);
 /** @brief Unlink the process owning thread id @p id from the ring. */

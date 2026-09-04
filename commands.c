@@ -26,6 +26,7 @@
 #include <tcp.h>
 #include <ntp.h>
 #include <nfs.h>
+#include <ssh.h>
 #include <rtc.h>
 #include <keyboard.h>
 #include <percpu.h>
@@ -363,6 +364,13 @@ static void console_nfs(void) {
 }
 
 /**
+ * @brief Print the in-kernel SSH server's status ("ssh").
+ */
+static void console_ssh(void) {
+    printf("ssh: %s\n", ssh_status_str());
+}
+
+/**
  * @brief Print the network interface's MAC, link state and frame counters ("net").
  */
 static void console_net(void) {
@@ -616,6 +624,7 @@ void console_exec(char *buf) {
                "pci      - lists PCI devices\n"
                "net      - network interface status\n"
                "nfs      - NFSv4.1 client mount status\n"
+               "ssh      - in-kernel SSH server status\n"
                "ping     - ping <host> [count]\n"
                "dns      - dns <name> (DNS lookup)\n"
                "http     - http <host> [path] (HTTP/1.0 GET)\n"
@@ -629,6 +638,8 @@ void console_exec(char *buf) {
         console_net();
     } else if(strcmp(buf, "nfs") == 0) {
         console_nfs();
+    } else if(strcmp(buf, "ssh") == 0) {
+        console_ssh();
     } else if(strncmp(buf, "ping", 4) == 0) {
         console_ping(buf);
     } else if(strncmp(buf, "dns", 3) == 0) {
