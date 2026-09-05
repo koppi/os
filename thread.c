@@ -100,7 +100,12 @@ int start_thread() {
         return -1;
     }
     
-    memcpy((void *) thread->stack_limit - PAGE_SIZE, (void *) cur->thread_list->stack_limit - PAGE_SIZE, PAGE_SIZE);
+    vmm_addr_t child_ustack = thread->stack_limit - PROC_USER_STACK_PAGES * PAGE_SIZE;
+    vmm_addr_t parent_ustack = cur->thread_list->stack_limit - PROC_USER_STACK_PAGES * PAGE_SIZE;
+    for (int p = 0; p < PROC_USER_STACK_PAGES; p++)
+        memcpy((void *)(child_ustack + p * PAGE_SIZE),
+               (void *)(parent_ustack + p * PAGE_SIZE),
+               PAGE_SIZE);
 
     if(!build_heap(thread, cur->pdir, cur->threads + 1)) {
         kfree(thread);
@@ -108,7 +113,10 @@ int start_thread() {
         enable_int();
         return -1;
     }
-    memcpy((void *) thread->heap, (void *) cur->thread_list->heap, PAGE_SIZE);
+    for (int p = 0; p < PROC_HEAP_PAGES; p++)
+        memcpy((void *)(thread->heap + p * PAGE_SIZE),
+               (void *)(cur->thread_list->heap + p * PAGE_SIZE),
+               PAGE_SIZE);
     
     uint32_t sf = spin_lock(&sched_lock);
     cur->threads++;
@@ -118,7 +126,8 @@ int start_thread() {
     cur->thread_list->next = thread;
     spin_unlock(&sched_lock, sf);
 
-    // TODO fix splitting
+    // TODO: parent heap pages beyond PROC_HEAP_PAGES are not copied;
+    // copy-on-write would be needed for programs that sbrk().
     fork_eip();
     if(cur->thread_list == parent) {
         thread->state = PROC_ACTIVE;

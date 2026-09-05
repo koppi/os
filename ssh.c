@@ -2,13 +2,20 @@
  * @file ssh.c
  * @brief In-kernel SSHv2 server (see ssh.h for the algorithm/scope summary).
  *
- * Everything here runs synchronously on the `net` thread: @ref ssh_tick
- * polls the listening socket, and once a client is accepted the whole
- * session (version/KEX/auth/shell) runs to completion in
- * @ref ssh_serve_connection before returning to the caller. All sizable
- * buffers are function-local `static` (not stack) since the 16 KiB kernel
- * stack has no room for multi-KB packet buffers, and there is only ever one
- * session in flight so that costs nothing.
+ * @ref ssh_tick, called every `net`-thread iteration, only accepts a new
+ * connection and pushes its handle onto a small queue (@ref ssh_pending_lock
+ * protects the hand-off) -- it never blocks. A dedicated `ssh-worker` thread
+ * (@ref ssh_worker_func) dequeues handles and serves each session in
+ * @ref ssh_serve_connection, but that call itself is marshalled onto the
+ * `net` thread via @ref net_exec: the whole IPv4/TCP stack (tcp.c, net.c,
+ * e1000.c) assumes single-threaded access with no locking, so
+ * tcp_send()/tcp_recv() must never run from any thread but `net`. The
+ * payoff of the queue is that accepting a new connection never has to wait
+ * for a prior session to finish; an active session still ties up the `net`
+ * thread for its duration, same as before. All sizable buffers are
+ * function-local `static` (not stack) since the 16 KiB kernel stack has no
+ * room for multi-KB packet buffers, and sessions are served one at a time
+ * so that costs nothing.
  */
 #include <ssh.h>
 
@@ -20,6 +27,7 @@
 #include <printf.h>
 #include <kheap.h>
 #include <spinlock.h>
+#include <io.h>
 #include <log.h>
 #include <csprng.h>
 #include <sha2.h>
@@ -80,7 +88,7 @@ typedef struct ssh_pending {
 
 static ssh_pending_t *ssh_pending_head = 0;
 static ssh_pending_t *ssh_pending_tail = 0;
-static spinlock_t ssh_pending_lock;
+static spinlock_t ssh_pending_lock = SPINLOCK_INIT;
 
 const char *ssh_status_str(void) {
     static char buf[64];
@@ -141,7 +149,7 @@ static const uint8_t *rd_string(reader_t *r, uint32_t *outlen) {
     uint32_t n = rd_u32(r);
     if (r->off > r->len || n > (uint32_t)(r->len - r->off)) {
         *outlen = 0;
-        return r->p + r->off;
+        return 0;
     }
     const uint8_t *p = r->p + r->off;
     r->off += (int)n;
@@ -321,7 +329,9 @@ static int recv_packet(ssh_conn_t *sc, uint8_t *payload_out, int *payload_len, i
     memcpy(content, first + 4, have);
 
     int need = (int)packet_length - have;
-    if (need < 0 || have + need > (int)sizeof content)
+    if (need < 0)
+        need = 0;
+    if (have + need > (int)sizeof content)
         return -1;
     if (need > 0) {
         if (recv_exact(sc->h, content + have, need) < 0)
@@ -422,12 +432,12 @@ static int verify_kexinit_algos(const uint8_t *payload, int len) {
     reader_t r = { payload + 17, len - 17, 0 };   /* skip msg type + 16-byte cookie */
     uint32_t l;
     const uint8_t *s;
-    s = rd_string(&r, &l); if (!list_has(s, l, "curve25519-sha256")) return 0;
-    s = rd_string(&r, &l); if (!list_has(s, l, "ssh-ed25519"))       return 0;
-    s = rd_string(&r, &l); if (!list_has(s, l, "aes128-ctr"))        return 0;
-    s = rd_string(&r, &l); if (!list_has(s, l, "aes128-ctr"))        return 0;
-    s = rd_string(&r, &l); if (!list_has(s, l, "hmac-sha2-256"))     return 0;
-    s = rd_string(&r, &l); if (!list_has(s, l, "hmac-sha2-256"))     return 0;
+    s = rd_string(&r, &l); if (!s || !list_has(s, l, "curve25519-sha256")) return 0;
+    s = rd_string(&r, &l); if (!s || !list_has(s, l, "ssh-ed25519"))       return 0;
+    s = rd_string(&r, &l); if (!s || !list_has(s, l, "aes128-ctr"))        return 0;
+    s = rd_string(&r, &l); if (!s || !list_has(s, l, "aes128-ctr"))        return 0;
+    s = rd_string(&r, &l); if (!s || !list_has(s, l, "hmac-sha2-256"))     return 0;
+    s = rd_string(&r, &l); if (!s || !list_has(s, l, "hmac-sha2-256"))     return 0;
     return 1;
 }
 
@@ -538,14 +548,17 @@ static int do_userauth(ssh_conn_t *sc) {
         reader_t r = { p + 1, plen - 1, 0 };
         uint32_t ulen, slen, mlen;
         const uint8_t *uname  = rd_string(&r, &ulen);
+        if (!uname) return -1;
         (void)rd_string(&r, &slen);
         const uint8_t *method = rd_string(&r, &mlen);
+        if (!method) return -1;
 
         int ok = 0;
         if (mlen == 8 && bytes_eq(method, (const uint8_t *)"password", 8)) {
             (void)rd_byte(&r);
             uint32_t pwlen;
             const uint8_t *pw = rd_string(&r, &pwlen);
+            if (!pw) return -1;
             if (ulen == (uint32_t)strlen(SSH_USERNAME) &&
                 bytes_eq(uname, (const uint8_t *)SSH_USERNAME, (int)ulen) &&
                 pwlen == (uint32_t)strlen(SSH_PASSWORD) &&
@@ -664,6 +677,7 @@ static int wait_for_session_channel(ssh_conn_t *sc, uint32_t *peer_channel_out,
             reader_t r = { payload + 1, paylen - 1, 0 };
             uint32_t tlen;
             const uint8_t *tname = rd_string(&r, &tlen);
+            if (!tname) return -1;
             uint32_t sender_channel = rd_u32(&r);
             (void)rd_u32(&r);
             (void)rd_u32(&r);
@@ -696,6 +710,7 @@ static int wait_for_session_channel(ssh_conn_t *sc, uint32_t *peer_channel_out,
             (void)rd_u32(&r);
             uint32_t tlen;
             const uint8_t *tname = rd_string(&r, &tlen);
+            if (!tname) return -1;
             uint8_t want_reply = rd_byte(&r);
 
             if (tlen == 5 && bytes_eq(tname, (const uint8_t *)"shell", 5)) {
@@ -706,6 +721,7 @@ static int wait_for_session_channel(ssh_conn_t *sc, uint32_t *peer_channel_out,
             } else if (tlen == 4 && bytes_eq(tname, (const uint8_t *)"exec", 4)) {
                 uint32_t clen;
                 const uint8_t *cmd = rd_string(&r, &clen);
+                if (!cmd) return -1;
                 if ((int)clen >= exec_cmd_max)
                     clen = (uint32_t)(exec_cmd_max - 1);
                 memcpy(exec_cmd_out, (void *)cmd, clen);
@@ -773,6 +789,7 @@ static void run_shell(ssh_conn_t *sc, uint32_t peer_channel) {
             (void)rd_u32(&r);
             uint32_t dlen;
             const uint8_t *data = rd_string(&r, &dlen);
+            if (!data) break;
 
             for (uint32_t k = 0; k < dlen; k++) {
                 uint8_t d = data[k];
@@ -973,6 +990,15 @@ void ssh_tick(void) {
     spin_unlock(&ssh_pending_lock, f);
 }
 
+/** @brief Handle stashed for @ref net_exec_serve -- net_exec() tasks take no
+ *  argument, and only one worker iteration is ever in flight at a time. */
+static int pending_serve_h;
+
+static int net_exec_serve(void) {
+    ssh_serve_connection(pending_serve_h);
+    return 0;
+}
+
 void ssh_worker_func(void) {
     for (;;) {
         ssh_pending_t *node = 0;
@@ -986,7 +1012,17 @@ void ssh_worker_func(void) {
         spin_unlock(&ssh_pending_lock, f);
 
         if (node) {
-            ssh_serve_connection(node->h);
+            /* ssh_serve_connection() calls tcp_send/tcp_recv/tcp_close, and
+             * the whole net stack (tcp.c/net.c/e1000.c) assumes single-
+             * threaded access from the `net` thread -- there is no locking
+             * anywhere in it. Running the session here directly would race
+             * net_thread's own net_poll()/tcp_input() on the same
+             * connection table and RX ring. net_exec() marshals it onto the
+             * net thread instead, exactly like ping/dns/http/nfs do; this
+             * thread's own job is just to keep accepting and queuing new
+             * connections without waiting for a prior session to finish. */
+            pending_serve_h = node->h;
+            net_exec(net_exec_serve);
             kfree(node);
             session_count++;
         } else {

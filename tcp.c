@@ -444,6 +444,10 @@ int tcp_close(int h) {
     } else if (c->state == ST_CLOSE_WAIT) {
         seg_send_tracked(c, F_FIN | F_ACK, NULL, 0, 0);
         c->state = ST_LAST_ACK;
+    } else if (c->state == ST_SYN_RCVD || c->state == ST_SYN_SENT) {
+        seg_rst(c->remote_ip, c->remote_port, c->local_port, 0);
+        c->state = ST_CLOSED;
+        c->rt_pending = 0;
     }
 
     for (int i = 0; i < 150 && c->state != ST_CLOSED && c->state != ST_FIN_WAIT_2 &&
