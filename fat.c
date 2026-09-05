@@ -554,6 +554,345 @@ void fat_ls(char *dir) {
     kfree(normal_name);
 }
 
+/* ------------------------------------------------------------------------- *
+ *  Boot-time defragmentation
+ *
+ *  fat_defrag() runs from vfs_mount(), after the BPB has been parsed but
+ *  before the volume is announced to the VFS. It relocates every regular file
+ *  in the root directory so that each file occupies one contiguous cluster run
+ *  and the files are packed from cluster 2 in directory order, leaving all free
+ *  space in a single run at the tail. A textual progress bar is drawn while
+ *  clusters move, in the style of fsck / e2fsck -C.
+ *
+ *  It is deliberately conservative. A volume with subdirectories, cross-linked
+ *  or lost clusters, an unexpected geometry, or one that is more than half
+ *  full is reported and then left completely untouched.
+ *
+ *  Memory budget is tiny (the kernel heap is ~140 KiB): an in-use bitmap
+ *  (~1 bit per cluster) plus one uint32 array per file for its cluster chain.
+ *  File data is shuffled one cluster at a time through the block driver's
+ *  shared sector buffer, never buffered whole.
+ * ------------------------------------------------------------------------- */
+
+#define DFG_BAR_W 32
+
+static int  dfg_bit(const uint8_t *bm, uint32_t i) { return (bm[i >> 3] >> (i & 7)) & 1; }
+static void dfg_set(uint8_t *bm, uint32_t i) { bm[i >> 3] |=  (uint8_t) (1u << (i & 7)); }
+static void dfg_clr(uint8_t *bm, uint32_t i) { bm[i >> 3] &= (uint8_t) ~(1u << (i & 7)); }
+
+/** Render an 8.3 entry as a lowercase "name.ext" into @p out (<= 13 bytes). */
+static void dfg_name(const directory_t *e, char *out) {
+    int n = 0;
+    for(int i = 0; i < 8 && e->filename[i] != ' '; i++)
+        out[n++] = tolower((char) e->filename[i]);
+    if(e->extension[0] != ' ') {
+        out[n++] = '.';
+        for(int i = 0; i < 3 && e->extension[i] != ' '; i++)
+            out[n++] = tolower((char) e->extension[i]);
+    }
+    out[n] = 0;
+}
+
+/** Redraw the progress bar in place (single write, carriage-return prefixed). */
+static void dfg_bar(device_t *dev, uint32_t done, uint32_t total, const char *name) {
+    static const char eq[DFG_BAR_W + 1] = "================================";
+    uint32_t pct = total ? (uint32_t) ((uint64_t) done * 100 / total) : 100;
+    uint32_t k   = total ? (uint32_t) ((uint64_t) done * DFG_BAR_W / total) : DFG_BAR_W;
+    printf("\r  %s: defrag |%.*s%*s| %3u%%  %-13.13s",
+           dev->mount, (int) k, eq, (int) (DFG_BAR_W - k), "", pct, name);
+}
+
+/** Highest free cluster — scratch space for evictions. 0 if the volume is full. */
+static uint32_t dfg_free_high(const uint8_t *occ, uint32_t ccount) {
+    for(uint32_t c = ccount; c-- > 2;)
+        if(!dfg_bit(occ, c))
+            return c;
+    return 0;
+}
+
+/** Locate the file (@p gf) and chain position (@p pf) that hold cluster @p cl. */
+static int dfg_owner(uint32_t **chain, const uint32_t *clen, uint32_t m,
+                     uint32_t cl, uint32_t *gf, uint32_t *pf) {
+    for(uint32_t g = 0; g < m; g++)
+        for(uint32_t p = 0; p < clen[g]; p++)
+            if(chain[g][p] == cl) { *gf = g; *pf = p; return 1; }
+    return 0;
+}
+
+/** Copy one whole cluster, @p from -> @p to, via the driver's shared buffer. */
+static void dfg_copy(device_t *dev, uint32_t from, uint32_t to) {
+    uint32_t a = fat_cluster_lba(dev, from), b = fat_cluster_lba(dev, to);
+    for(uint32_t s = 0; s < dev->minfo.cluster_sectors; s++) {
+        dev->read(a + s);        /* fills the shared sector buffer ... */
+        dev->write(b + s);       /* ... which write() flushes straight back out */
+    }
+}
+
+/** Point root-directory entry @p idx at first cluster @p first. */
+static void dfg_set_first(device_t *dev, uint32_t idx, uint32_t first) {
+    uint32_t per = SECTOR_SIZE / 32;
+    uint32_t sec = dev->minfo.root_offset + idx / per;
+    directory_t *d = (directory_t *) dev->read(sec);
+    d[idx % per].first_cluster = (uint16_t) (first & 0xFFFF);
+    d[idx % per].first_cluster_high_bytes = (uint16_t) (first >> 16);
+    dev->write(sec);
+}
+
+void fat_defrag(device_t *dev) {
+    fat_mount_info_t *mi = &dev->minfo;
+
+    /* Only FAT12/FAT16 with the geometry the driver understands. A device that
+     * failed to mount leaves minfo zeroed, which these checks also reject. */
+    if((mi->type != FAT12 && mi->type != FAT16) ||
+       mi->cluster_sectors == 0 || mi->sector_bytes != SECTOR_SIZE ||
+       mi->fat_size == 0 || mi->n_fats == 0)
+        return;
+
+    uint32_t ccount = fat_cluster_count(dev);        /* one past the last cluster */
+    uint32_t fat_capacity = mi->fat_size * (SECTOR_SIZE / 2) + 2;
+    if(ccount <= 3 || ccount > fat_capacity)
+        return;
+
+    uint32_t bmsz = (ccount + 7) / 8;
+    uint8_t *occ = kmalloc(bmsz);
+    if(!occ)
+        return;
+    memset(occ, 0, bmsz);
+
+    /* ---- 1. in-use bitmap, straight from FAT copy #0 ---- */
+    uint32_t used = 0;
+    if(mi->type == FAT16) {
+        for(uint32_t s = 0; s < mi->fat_size; s++) {
+            uint8_t sec[SECTOR_SIZE];
+            memcpy(sec, dev->read(mi->fat_offset + s), SECTOR_SIZE);
+            for(uint32_t e = 0; e < SECTOR_SIZE / 2; e++) {
+                uint32_t c = s * (SECTOR_SIZE / 2) + e;
+                if(c < 2 || c >= ccount)
+                    continue;
+                if(sec[e * 2] | (sec[e * 2 + 1] << 8)) { dfg_set(occ, c); used++; }
+            }
+        }
+    } else {
+        for(uint32_t c = 2; c < ccount; c++)
+            if(fat_get_entry(dev, c)) { dfg_set(occ, c); used++; }
+    }
+
+    /* Not enough slack to shuffle in place with a safety margin: leave it be. */
+    if((uint64_t) used * 2 + 64 > ccount - 2) {
+        printf("  %s: FAT%s too full to defragment (%u/%u clusters)\n",
+               dev->mount, mi->type == FAT12 ? "12" : "16", used, ccount - 2);
+        kfree(occ);
+        return;
+    }
+
+    /* ---- 2. scan the root directory ---- */
+    uint32_t per = SECTOR_SIZE / 32;
+    uint32_t m = 0;
+    int bad = 0, ended = 0;
+    for(uint32_t s = 0; s < mi->root_size && !ended && !bad; s++) {
+        uint8_t sec[SECTOR_SIZE];
+        memcpy(sec, dev->read(mi->root_offset + s), SECTOR_SIZE);
+        directory_t *d = (directory_t *) sec;
+        for(uint32_t j = 0; j < per; j++) {
+            uint8_t c0 = d[j].filename[0];
+            if(c0 == 0x00) { ended = 1; break; }
+            if(c0 == 0xE5 || d[j].attrs == 0x0F || (d[j].attrs & DIR_VOL_LABEL))
+                continue;
+            if(d[j].attrs & DIR_SUBDIR) { bad = 1; break; }   /* subdirs: skip volume */
+            m++;
+        }
+    }
+    if(bad || m == 0) {
+        if(bad)
+            printf("  %s: has subdirectories, skipping defragmentation\n", dev->mount);
+        kfree(occ);
+        return;
+    }
+
+    uint32_t  *ndir   = kmalloc(sizeof(uint32_t)   * m);
+    uint32_t  *want   = kmalloc(sizeof(uint32_t)   * m);
+    uint32_t  *clen   = kmalloc(sizeof(uint32_t)   * m);
+    uint32_t **chain  = kmalloc(sizeof(uint32_t *) * m);
+    char    (*nm)[16] = kmalloc(sizeof(*nm)        * m);
+    uint32_t nchain = 0;
+    if(!ndir || !want || !clen || !chain || !nm)
+        goto cleanup;
+
+    /* ---- 3. fill the file table and walk each current cluster chain ---- */
+    ended = 0;
+    uint32_t idx = 0;
+    uint32_t eoc_lo = (mi->type == FAT12) ? 0x0FF8 : 0xFFF8;
+    for(uint32_t s = 0; s < mi->root_size && !ended && !bad; s++) {
+        uint8_t sec[SECTOR_SIZE];
+        memcpy(sec, dev->read(mi->root_offset + s), SECTOR_SIZE);
+        directory_t *d = (directory_t *) sec;
+        for(uint32_t j = 0; j < per && !bad; j++) {
+            uint8_t c0 = d[j].filename[0];
+            if(c0 == 0x00) { ended = 1; break; }
+            if(c0 == 0xE5 || d[j].attrs == 0x0F ||
+               (d[j].attrs & DIR_VOL_LABEL) || (d[j].attrs & DIR_SUBDIR))
+                continue;
+
+            uint32_t bpc = mi->cluster_sectors * SECTOR_SIZE;
+            uint32_t sz  = d[j].file_size;
+            uint32_t nc  = (sz + bpc - 1) / bpc;
+            uint32_t fc  = d[j].first_cluster |
+                           ((uint32_t) d[j].first_cluster_high_bytes << 16);
+            if(nc == 0)
+                continue;                            /* empty file: no clusters */
+            if(idx >= m) { bad = 1; break; }
+
+            uint32_t *ch = kmalloc(sizeof(uint32_t) * nc);
+            if(!ch) { bad = 1; break; }
+            chain[nchain++] = ch;
+
+            uint32_t cl = fc, n = 0;
+            while(cl >= 2 && cl < eoc_lo && n < nc) {
+                if(cl >= ccount) { bad = 1; break; }
+                ch[n++] = cl;
+                cl = fat_get_entry(dev, cl);
+            }
+            /* Exactly nc clusters, ending on a real EOC: anything else means the
+             * directory size and the FAT disagree -> do not touch this volume. */
+            if(bad || n != nc || (cl >= 2 && cl < eoc_lo)) { bad = 1; break; }
+
+            dfg_name(&d[j], nm[idx]);
+            ndir[idx]  = s * per + j;
+            want[idx]  = nc;
+            clen[idx]  = nc;
+            idx++;
+        }
+    }
+    if(bad || idx != m) {
+        if(bad)
+            printf("  %s: FAT needs repair, skipping defragmentation\n", dev->mount);
+        goto cleanup;
+    }
+
+    /* Every allocated cluster must belong to exactly one file we can see. */
+    uint32_t tot = 0;
+    for(uint32_t f = 0; f < m; f++)
+        tot += want[f];
+    if(tot != used) {
+        printf("  %s: %u lost/shared clusters, skipping defragmentation\n",
+               dev->mount, used > tot ? used - tot : tot - used);
+        goto cleanup;
+    }
+
+    /* ---- 4. how fragmented is it already? ---- */
+    uint32_t base = 2, frag = 0;
+    for(uint32_t f = 0; f < m; f++) {
+        int ok = (chain[f][0] == base);
+        for(uint32_t j = 1; j < clen[f] && ok; j++)
+            if(chain[f][j] != chain[f][j - 1] + 1)
+                ok = 0;
+        if(!ok)
+            frag++;
+        base += want[f];
+    }
+
+    printf("  %s: FAT%s  %u/%u clusters  %u file%s  %u fragmented\n",
+           dev->mount, mi->type == FAT12 ? "12" : "16", used, ccount - 2,
+           m, m == 1 ? "" : "s", frag);
+    if(frag == 0)
+        goto cleanup;                                /* already contiguous */
+
+    /* ---- 5. compact: place each file into [base, base + len) in dir order ---- */
+    uint32_t moved_files = 0, moved_cl = 0, done = 0;
+    base = 2;
+    dfg_bar(dev, 0, tot, nm[0]);
+    for(uint32_t f = 0; f < m; f++) {
+        int touched = 0;
+        for(uint32_t j = 0; j < clen[f]; j++) {
+            uint32_t dst = base + j;
+            uint32_t src = chain[f][j];
+            if(src != dst) {
+                touched = 1;
+                if(dfg_bit(occ, dst)) {
+                    /* dst is live data: our own later cluster, or another file */
+                    uint32_t g = 0, p = 0;
+                    if(!dfg_owner(chain, clen, m, dst, &g, &p)) {
+                        printf("\n  %s: internal error, aborting defrag\n", dev->mount);
+                        goto cleanup;
+                    }
+                    uint32_t ev = dfg_free_high(occ, ccount);
+                    if(ev == 0) {
+                        printf("\n  %s: out of scratch space, aborting defrag\n",
+                               dev->mount);
+                        goto cleanup;
+                    }
+                    dfg_copy(dev, dst, ev);
+                    dfg_set(occ, ev);
+                    dfg_clr(occ, dst);
+                    if(g == f) {
+                        chain[f][p] = ev;            /* fixed up by the relink below */
+                    } else {
+                        if(p == 0)
+                            dfg_set_first(dev, ndir[g], ev);
+                        else
+                            fat_set_entry(dev, chain[g][p - 1], ev);
+                        fat_set_entry(dev, ev, (p + 1 < clen[g]) ? chain[g][p + 1]
+                                                                 : (fat_eoc(dev) | 7));
+                        fat_set_entry(dev, dst, 0);
+                        chain[g][p] = ev;
+                    }
+                    moved_cl++;
+                }
+                dfg_copy(dev, src, dst);
+                dfg_set(occ, dst);
+                dfg_clr(occ, src);
+                chain[f][j] = dst;
+                moved_cl++;
+            }
+            done++;
+            if((done & 15) == 0 || j + 1 == clen[f])
+                dfg_bar(dev, done, tot, nm[f]);
+        }
+        if(touched) {
+            for(uint32_t j = 0; j < clen[f]; j++)
+                fat_set_entry(dev, base + j, (j + 1 < clen[f]) ? (base + j + 1)
+                                                              : (fat_eoc(dev) | 7));
+            dfg_set_first(dev, ndir[f], base);
+            moved_files++;
+        }
+        base += want[f];
+    }
+
+    /* ---- 6. free every cluster past the packed region ---- */
+    if(mi->type == FAT16) {
+        for(uint32_t s = 0; s < mi->fat_size; s++) {
+            uint8_t sec[SECTOR_SIZE];
+            memcpy(sec, dev->read(mi->fat_offset + s), SECTOR_SIZE);
+            for(uint32_t e = 0; e < SECTOR_SIZE / 2; e++) {
+                uint32_t c = s * (SECTOR_SIZE / 2) + e;
+                if(c < 2 + tot || c >= ccount)
+                    continue;
+                if(sec[e * 2] | (sec[e * 2 + 1] << 8))
+                    fat_set_entry(dev, c, 0);
+            }
+        }
+    } else {
+        for(uint32_t c = 2 + tot; c < ccount; c++)
+            if(fat_get_entry(dev, c))
+                fat_set_entry(dev, c, 0);
+    }
+
+    dfg_bar(dev, tot, tot, "done");
+    printf("\n  %s: defragmented %u file%s, moved %u cluster%s\n",
+           dev->mount, moved_files, moved_files == 1 ? "" : "s",
+           moved_cl, moved_cl == 1 ? "" : "s");
+
+cleanup:
+    for(uint32_t i = 0; i < nchain; i++)
+        kfree(chain[i]);
+    kfree(nm);
+    kfree(chain);
+    kfree(clen);
+    kfree(want);
+    kfree(ndir);
+    kfree(occ);
+}
+
 void fat_init(filesystem *fs_fat) {
     fs_fat->mount = &fat_mount;
     fs_fat->read = &fat_read;

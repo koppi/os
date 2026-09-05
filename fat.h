@@ -84,6 +84,11 @@ typedef struct directory {
 
 /** @brief Read the boot sector and fill @p dev->minfo with the FAT geometry. */
 void fat_mount(device_t *dev);
+/** @brief Compact the root-directory files into contiguous, packed clusters,
+ *         drawing an fsck-style progress bar. Called at mount time, before the
+ *         volume is handed to the VFS. A no-op on anything but a healthy,
+ *         less-than-half-full FAT12/FAT16 volume. */
+void fat_defrag(device_t *dev);
 /** @brief Pack a normal name into an 11-char space-padded 8.3 name. */
 void to_dos_file_name(char *name, char *str);
 /** @brief Unpack an 11-char 8.3 name into a lowercase "name.ext" string. */

@@ -275,8 +275,16 @@ int vfs_get_dev(char *name) {
 
 void vfs_mount(char *name) {
     device_t *dev = get_dev_by_name(name);
-    devs[dev->id] = &dev->fs;
+    if(!dev)
+        return;
+    /* Parse the geometry, defragment the volume, then make it visible. The
+     * defrag pass shuffles raw sectors and drives its own progress output, so
+     * it has to run before any other thread can reach the filesystem. */
     fat_mount(dev);
+    int s = fs_enter();
+    fat_defrag(dev);
+    fs_leave(s);
+    devs[dev->id] = &dev->fs;
 }
 
 void vfs_unmount(char *name) {
