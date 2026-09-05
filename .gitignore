@@ -12,5 +12,10 @@ apps/example/example
 apps/mem/mem
 apps/lua/lua
 apps/fault/fault
+apps/cc/cc
+apps/cc/cc-native
+apps/cc/cc-dbg
+apps/cc/cc-asan
+apps/cc/cc.selfhost
 os.sublime-workspace
 docs/

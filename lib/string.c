@@ -140,11 +140,11 @@ void to_lowercase(char *str, char *format) {
 }
 
 char toupper(char c) {
-    return c - 32;
+    return (c >= 'a' && c <= 'z') ? c - 32 : c;
 }
 
 char tolower(char c) {
-    return c + 32;
+    return (c >= 'A' && c <= 'Z') ? c + 32 : c;
 }
 
 int vsprintf(char *str, const char *format, va_list args) {

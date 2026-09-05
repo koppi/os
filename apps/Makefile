@@ -5,6 +5,7 @@ all:
 	$(MAKE) -C mem
 	$(MAKE) -C lua
 	$(MAKE) -C fault
+	$(MAKE) -C cc
 
 clean:
 	$(MAKE) -C 01 clean
@@ -13,5 +14,6 @@ clean:
 	$(MAKE) -C mem clean
 	$(MAKE) -C lua clean
 	$(MAKE) -C fault clean
+	$(MAKE) -C cc clean
 
 .phony: all clean

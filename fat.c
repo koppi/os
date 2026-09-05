@@ -54,6 +54,8 @@ void fat_mount(device_t *dev) {
     dev->minfo.root_size = ((bs->bpb.n_dir_entries * 32) + (bs->bpb.sector_bytes - 1)) / bs->bpb.sector_bytes;
     dev->minfo.first_data_sector = dev->minfo.root_offset + dev->minfo.root_size;
     dev->minfo.data_sectors = dev->minfo.n_sectors - dev->minfo.first_data_sector;
+    dev->minfo.n_fats = bs->bpb.n_fats;
+    dev->minfo.sector_bytes = bs->bpb.sector_bytes;
     
     uint32_t total_clusters = dev->minfo.data_sectors / bs->bpb.cluster_sectors;
     if(total_clusters < 4085)
@@ -82,8 +84,9 @@ void to_dos_file_name(char *name, char *str) {
     if(name[i] == '.') {
         for(int j = 0; j < 3; j++) {
             i++;
-            if(name[i])
-                str[8 + j] = toupper(name[i]);
+            if(!name[i])
+                break;
+            str[8 + j] = toupper(name[i]);
         }
     }
     str[NAME_LEN] = 0;
@@ -127,7 +130,7 @@ directory_t *fat_get_dir(file *f) {
     char *dos_file_name = kmalloc(NAME_LEN + 1);
     to_dos_file_name(f->name, dos_file_name);
     device_t *dev = get_dev_by_id(f->dev);
-    
+
     for(uint32_t i = 0; i < dev->minfo.root_size; i++) {
         directory_t *dir = (directory_t *) dev->read(dev->minfo.root_offset + i);
         for(int j = 0; j < 16; j++, dir++) {
@@ -233,21 +236,197 @@ void fat_read(file *f, char *buf) {
 void fat_write(file *f, char *str) {
     if(!f)
         return;
-    
-    char *dos_file_name = kmalloc(NAME_LEN + 1);
-    to_dos_file_name(f->name, dos_file_name);
-    
+    /* Legacy one-record write: replace the whole file with a single
+     * NUL-terminated string (used by the console "write <file> <text>"). */
+    fat_write_all(f, str, strlen(str));
+}
+
+/* ------------------------------------------------------------------------- *
+ *  FAT16 chain writes: cluster allocation, chain linking and multi-sector
+ *  file writes. Enough for a program on the OS to save a multi-KB output
+ *  (e.g. the self-hosting C compiler). FAT12 is handled for completeness.
+ * ------------------------------------------------------------------------- */
+
+/** End-of-chain marker for the volume's FAT width. */
+static uint32_t fat_eoc(device_t *dev) {
+    return (dev->minfo.type == FAT12) ? 0x0FF8 : 0xFFF8;
+}
+
+/** Highest usable cluster number + 1. */
+static uint32_t fat_cluster_count(device_t *dev) {
+    return 2 + dev->minfo.data_sectors / dev->minfo.cluster_sectors;
+}
+
+/** Read FAT entry @p cl (cluster number) from the first FAT copy. */
+static uint32_t fat_get_entry(device_t *dev, uint32_t cl) {
+    if(dev->minfo.type == FAT12) {
+        uint32_t fo = cl + (cl / 2);
+        uint32_t sec = dev->minfo.fat_offset + fo / SECTOR_SIZE;
+        uint32_t off = fo % SECTOR_SIZE;
+        uint8_t *b = (uint8_t *) dev->read(sec);
+        uint16_t lo = b[off];
+        uint16_t hi = (off == SECTOR_SIZE - 1)
+                          ? ((uint8_t *) dev->read(sec + 1))[0]
+                          : b[off + 1];
+        uint16_t v = (uint16_t) (lo | (hi << 8));
+        return (cl & 1) ? (uint32_t) (v >> 4) : (uint32_t) (v & 0x0FFF);
+    }
+    uint32_t fo = cl * 2;
+    uint32_t sec = dev->minfo.fat_offset + fo / SECTOR_SIZE;
+    uint32_t off = fo % SECTOR_SIZE;
+    uint8_t *b = (uint8_t *) dev->read(sec);
+    return (uint32_t) (b[off] | (b[off + 1] << 8));
+}
+
+/** Write FAT entry @p cl = @p val, mirrored to every FAT copy. */
+static void fat_set_entry(device_t *dev, uint32_t cl, uint32_t val) {
+    for(uint32_t fat = 0; fat < dev->minfo.n_fats; fat++) {
+        uint32_t base = dev->minfo.fat_offset + fat * dev->minfo.fat_size;
+        if(dev->minfo.type == FAT12) {
+            uint32_t fo = cl + (cl / 2);
+            uint32_t sec = base + fo / SECTOR_SIZE;
+            uint32_t off = fo % SECTOR_SIZE;
+            uint8_t *b = (uint8_t *) dev->read(sec);
+            uint8_t next0 = (off == SECTOR_SIZE - 1) ? 0 : b[off + 1];
+            if(cl & 1) {
+                b[off] = (uint8_t) ((b[off] & 0x0F) | ((val << 4) & 0xF0));
+                next0 = (uint8_t) ((val >> 4) & 0xFF);
+            } else {
+                b[off] = (uint8_t) (val & 0xFF);
+                next0 = (uint8_t) ((next0 & 0xF0) | ((val >> 8) & 0x0F));
+            }
+            if(off == SECTOR_SIZE - 1) {
+                dev->write(sec);
+                uint8_t *b2 = (uint8_t *) dev->read(sec + 1);
+                b2[0] = next0;
+                dev->write(sec + 1);
+            } else {
+                b[off + 1] = next0;
+                dev->write(sec);
+            }
+        } else {
+            uint32_t fo = cl * 2;
+            uint32_t sec = base + fo / SECTOR_SIZE;
+            uint32_t off = fo % SECTOR_SIZE;
+            uint8_t *b = (uint8_t *) dev->read(sec);
+            b[off] = (uint8_t) (val & 0xFF);
+            b[off + 1] = (uint8_t) ((val >> 8) & 0xFF);
+            dev->write(sec);
+        }
+    }
+}
+
+/** LBA of the first sector of data cluster @p cl. */
+static uint32_t fat_cluster_lba(device_t *dev, uint32_t cl) {
+    return dev->minfo.first_data_sector + (cl - 2) * dev->minfo.cluster_sectors;
+}
+
+/** Free every cluster of the chain starting at @p first. */
+static void fat_free_chain(device_t *dev, uint32_t first) {
+    uint32_t cl = first;
+    uint32_t eoc = fat_eoc(dev);
+    while(cl >= 2 && cl < eoc && cl < fat_cluster_count(dev)) {
+        uint32_t next = fat_get_entry(dev, cl);
+        fat_set_entry(dev, cl, 0);
+        cl = next;
+    }
+}
+
+/**
+ * Scan the first FAT for @p want free clusters, recording them in @p out.
+ * One forward pass over the FAT sectors. @return the number found.
+ */
+static uint32_t fat_scan_free(device_t *dev, uint32_t want, uint32_t *out) {
+    uint32_t total = fat_cluster_count(dev);
+    uint32_t got = 0;
+    if(dev->minfo.type == FAT12) {
+        for(uint32_t cl = 2; cl < total && got < want; cl++)
+            if(fat_get_entry(dev, cl) == 0)
+                out[got++] = cl;
+        return got;
+    }
+    for(uint32_t sec = 0; sec < dev->minfo.fat_size && got < want; sec++) {
+        uint8_t *b = (uint8_t *) dev->read(dev->minfo.fat_offset + sec);
+        for(uint32_t e = 0; e < SECTOR_SIZE / 2 && got < want; e++) {
+            uint32_t cl = sec * (SECTOR_SIZE / 2) + e;
+            if(cl < 2 || cl >= total)
+                continue;
+            if((b[e * 2] | (b[e * 2 + 1] << 8)) == 0)
+                out[got++] = cl;
+        }
+    }
+    return got;
+}
+
+/**
+ * Replace the contents of @p f with @p len bytes of @p buf: reallocate the
+ * cluster chain, write the data and update the directory entry.
+ */
+void fat_write_all(file *f, char *buf, uint32_t len) {
+    if(!f)
+        return;
     device_t *dev = get_dev_by_id(f->dev);
-    memset(dma_buffer, 0, SECTOR_SIZE);
-    memcpy(dma_buffer, str, strlen(str));
-    dev->write(get_phys_sector(f));
-    f->len++;
-    
+    if(!dev)
+        return;
+
+    uint32_t spc = dev->minfo.cluster_sectors;
+    uint32_t bytes_per_cluster = spc * SECTOR_SIZE;
+    uint32_t nc = (len + bytes_per_cluster - 1) / bytes_per_cluster;
+
+    /* Drop the old chain first so its clusters become available again. */
     directory_t *dir = fat_get_dir(f);
+    if(!dir)
+        return;
+    uint32_t old_first = dir->first_cluster |
+                         ((uint32_t) dir->first_cluster_high_bytes << 16);
+    if(old_first >= 2)
+        fat_free_chain(dev, old_first);
+
+    uint32_t first_cluster = 0;
+    if(nc > 0) {
+        uint32_t *cl = kmalloc(nc * sizeof(uint32_t));
+        if(!cl)
+            return;
+        if(fat_scan_free(dev, nc, cl) < nc) {
+            printf("fat: no space for %u clusters\n", nc);
+            kfree(cl);
+            return;
+        }
+        /* Link the chain. */
+        for(uint32_t i = 0; i < nc; i++)
+            fat_set_entry(dev, cl[i], (i + 1 < nc) ? cl[i + 1] : fat_eoc(dev) | 7);
+        /* Write the data, one sector at a time. */
+        for(uint32_t i = 0; i < nc; i++) {
+            for(uint32_t s = 0; s < spc; s++) {
+                uint32_t lba = fat_cluster_lba(dev, cl[i]) + s;
+                uint32_t doff = i * bytes_per_cluster + s * SECTOR_SIZE;
+                uint8_t *sec = (uint8_t *) dev->read(lba);
+                uint32_t n = (doff < len) ? (len - doff) : 0;
+                if(n > SECTOR_SIZE)
+                    n = SECTOR_SIZE;
+                if(n < SECTOR_SIZE)
+                    memset(sec, 0, SECTOR_SIZE);
+                if(n)
+                    memcpy(sec, buf + doff, n);
+                dev->write(lba);
+            }
+        }
+        first_cluster = cl[0];
+        kfree(cl);
+    }
+
+    /* Update the directory entry (re-fetch: the scans above reused the
+     * shared sector buffer). */
+    dir = fat_get_dir(f);
     if(dir) {
-        dir->file_size = f->len;
+        dir->first_cluster = (uint16_t) (first_cluster & 0xFFFF);
+        dir->first_cluster_high_bytes = (uint16_t) (first_cluster >> 16);
+        dir->file_size = len;
         dev->write(dev->minfo.root_offset + offset);
     }
+    f->len = len;
+    f->current_cluster = first_cluster;
+    f->eof = 0;
 }
 
 int fat_delete(char *name) {
@@ -385,5 +564,6 @@ void fat_init(filesystem *fs_fat) {
     fs_fat->cd = &fat_cd;
     fs_fat->touch = &fat_touch;
     fs_fat->delete = &fat_delete;
+    fs_fat->write_all = &fat_write_all;
 }
 

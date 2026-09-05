@@ -78,13 +78,19 @@ each is on.
 * Threads — [`thread.c`](thread.h)
 * `int 0x72` syscall gate — [`syscall.c`](syscall.c). Implemented calls:
   `printf`, `gets`/`scanf`, `fork`, `exit`, process return, `fopen`, `fclose`,
-  `malloc`, `free`.
+  `malloc`, `free`, `realloc`, `write`, `fread`, `time`, `clock`, `spit`
+  (whole-file write).
 
 ### Filesystems
 * Virtual filesystem layer — [`vfs.c`](vfs.c)
 * **FAT** (FAT12/16) driver — [`fat.c`](fat.c). Reads the layout from the BPB
   (reserved sectors, FAT count/size, root-dir size), so it is not tied to
   1.44M floppy geometry — but it still assumes one sector per cluster.
+  **Writes** are supported on FAT16: `fat_write_all()` reallocates a file's
+  cluster chain (a one-pass free-cluster scan, both FAT copies kept in sync),
+  writes the data and updates the directory entry — enough for a program on the
+  OS to save a multi-KB output. `vfs_spit()` (create/truncate + write) is
+  exposed to userspace as syscall #16.
 * ELF loading helpers — [`elf.c`](elf.c)
 
 ### USB
@@ -295,7 +301,9 @@ for anything more (there is no TLS or resolver cache).
 * `int 0x72` calls: `printf`(0), `gets`(1), `fork`(3), `exit`(4), return(5),
   `fopen`(6), `fclose`(7), `malloc`(9), `free`(10), `realloc`(11),
   `write`(12, length-delimited), `fread`(13, 512-byte block),
-  `time`(14, RTC), `clock`(15, PIT) — see [`syscall.c`](syscall.c).
+  `time`(14, RTC), `clock`(15, PIT), `spit`(16, whole-file write:
+  `spit(path, buf, len)` creates/truncates the file and writes `len` bytes) —
+  see [`syscall.c`](syscall.c). `write_file()` in [`lib/`](lib) wraps #16.
 * The ELF loader ([`elf.c`](elf.c)) maps every page of a `PT_LOAD` segment to
   its own frame and covers the `.bss` tail, so multi-page ring-3 binaries load.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
@@ -310,6 +318,43 @@ for anything more (there is no TLS or resolver cache).
     recursion (staged as `mem`)
   * [`apps/lua`](apps/lua) — **Lua 5.4.8**, ported to run as a ring-3 program
     (staged as `lua`); see below
+  * [`apps/cc`](apps/cc) — **a self-hosting C compiler** (staged as `cc`);
+    see below
+
+### C compiler
+
+[`apps/cc/cc.c`](apps/cc/cc.c) is a tiny **two-pass C compiler** that runs as a
+ring-3 program and compiles a single C file straight to a runnable ELF — there
+is no assembler or linker on the OS, so `cc` is front end **+** i386 code
+generator **+** ELF writer in one. It is written in the C subset it accepts, so
+it **compiles itself**:
+
+```
+make qemu-nox SMP=1                    # cc is heavy; boot single-core (see NOTES.md)
+start hda/cc  hda/cc.c -o hda/cc2      # cc compiles its own source
+start hda/cc2 hda/cc.c -o hda/cc3      # the result compiles it again
+sum hda/cc2 ; sum hda/cc3              # identical checksums => fixed point
+start hda/cc2 hda/test.c -o hda/t ; start hda/t     # -> "test: 37 checks OK"
+```
+
+* **Pass 1** (front end): lex → parse → semantic analysis, producing a typed
+  AST and an insertion-ordered symbol table. **Pass 2** (back end): walk the
+  AST emitting i386 machine code into a byte buffer with a relocation list,
+  then lay out one `PT_LOAD` ELF at `0x800000` and patch the relocations.
+* **One translation unit.** `cc` prepends [`prelude.c`](apps/cc/prelude.c) (a
+  small libc: `malloc`/`printf`/`string.h`/file I/O over the syscalls) unless
+  `-nostdlib` is given, so a compiled program links nothing.
+* **No preprocessor** by design: `#include`/`#define` lines are skipped by the
+  lexer; the libc surface comes from the prelude. Two code-generator builtins
+  (`__syscall0..3`, and the plain i386 `&arg` varargs trick) stand in for
+  inline assembly.
+* Accepts `struct`/`union`/`enum`/`typedef`, pointers and arrays, function
+  pointers, `switch`, `goto`, every operator, varargs **call sites**, and
+  constant global initializers. Not supported (diagnosed, not mis-compiled):
+  `float`/`double`, 64-bit `long long` (folded to 32-bit), by-value struct
+  args/returns, the preprocessor. See [`apps/cc/NOTES.md`](apps/cc/NOTES.md).
+* Cross-develop on Linux with `make -C apps/cc native` (`./cc-native`); it
+  emits byte-identical output to the on-OS `cc` for any input.
 
 ### Lua
 [`apps/lua`](apps/lua) is a full port of the reference **Lua 5.4.8**
@@ -361,6 +406,7 @@ keyboard driver, echoes them, supports backspace, and executes a line on Enter.
 | `touch <file>` | create an empty file |
 | `write <file> <text>` | write one record of text to a file |
 | `rm <file>` | delete a file |
+| `sum <file>` | FNV-1a checksum + byte length of a file |
 | `beep` | play a tone through the AC97 codec |
 | `pci` | list the enumerated PCI devices |
 | `net` | interface MAC, link, counters and the DHCP-assigned address |
@@ -424,14 +470,16 @@ FAT volume with the compiled apps copied in.
 
 ```bash
 ./floppy.sh    # 1.44M FAT12 floppy image
-./hda.sh       # 5M FAT hard-disk image
+./hda.sh       # 16M FAT16 hard-disk image
 ```
 
 Both scripts use mtools (no root / loop device) and stage `hello`, `tst`,
 `example`, `mem`, the `lua` interpreter (with `t.lua` and `mod.lua`), and the
-`mouse.bmp` cursor bitmap. The in-kernel FAT driver only
-handles one sector per cluster, so the images are made with
-`mkfs.fat -C … 1440` / `mkfs.fat -s 1`.
+`mouse.bmp` cursor bitmap. `hda.img` additionally carries the `cc` compiler,
+its source `cc.c`, its runtime `prelude.c` and the compiler tests — and is
+16 MiB so a couple of generations of compiler output fit. The in-kernel FAT
+driver only handles one sector per cluster, so the images are made with
+`mkfs.fat -C … 1440` / `mkfs.fat -s 1` (16 MiB ⇒ ~32k clusters ⇒ FAT16).
 
 ### Run in QEMU
 

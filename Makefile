@@ -71,8 +71,12 @@ else
 endif
 
 QEMU ?= qemu-system-$(TARGET)
+# SMP=1 for a stable single-core boot (e.g. to run the cc compiler, which is
+# compute+syscall heavy and currently trips an SMP context-switch bug under
+# load); the default -smp 4 exercises the parallel scheduler.
+SMP ?= 4
 QEMUFLAGS += -vga std -m 256M -no-reboot
-QEMUFLAGS += -smp 4
+QEMUFLAGS += -smp $(SMP)
 QEMUFLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 QEMUFLAGS += -enable-kvm
 QEMUFLAGS += -audiodev id=pa,driver=pa -machine pcspk-audiodev=pa

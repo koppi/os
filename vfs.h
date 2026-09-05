@@ -32,6 +32,7 @@ typedef struct {
     file (*cd) (char *dir);              /**< Resolve a directory path. */
     int (*touch) (char *name);           /**< Create an empty file. */
     int (*delete) (char *name);          /**< Delete a file. */
+    void (*write_all) (file *f, char *buf, uint32_t len); /**< Replace contents. */
 } filesystem;
 
 #define FS_FILE     0  /**< file.type: regular file. */
@@ -58,6 +59,9 @@ file *vfs_file_open_user(char *name, char *mode);
 void vfs_file_read(file *f, char *str);
 /** @brief Write @p str to @p f. */
 void vfs_file_write(file *f, char *str);
+/** @brief Create/truncate the file at path @p name and write @p len bytes of
+ *         @p buf. @return bytes written, or -1 on failure. */
+int vfs_spit(char *name, char *buf, uint32_t len);
 /** @brief Close and free a kernel-side handle. */
 void vfs_file_close(file *f);
 /** @brief Close and free a user-heap handle. */

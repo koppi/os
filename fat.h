@@ -98,6 +98,9 @@ int fat_touch(char *name);
 void fat_read(file *f, char *buf);
 /** @brief Write @p str into @p f's first cluster. */
 void fat_write(file *f, char *str);
+/** @brief Replace @p f's contents with @p len bytes of @p buf (reallocs the
+ *         cluster chain and updates the directory entry). */
+void fat_write_all(file *f, char *buf, uint32_t len);
 /** @brief Delete file @p name (clears its directory entry). */
 int fat_delete(char *name);
 /** @brief Mark @p f closed. */

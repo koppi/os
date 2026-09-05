@@ -192,6 +192,47 @@ void vfs_file_write(file *f, char *str) {
     }
 }
 
+int vfs_spit(char *name, char *buf, uint32_t len) {
+    /* Normalise to a leading-slash device path ("/hda/foo"); the FAT hooks
+     * want the device-qualified tail ("hda/foo"), i.e. path + 1. */
+    char path[80];
+    if(name[0] == '/') {
+        strncpy(path, name, sizeof(path) - 1);
+    } else {
+        path[0] = '/';
+        strncpy(path + 1, name, sizeof(path) - 2);
+    }
+    path[sizeof(path) - 1] = 0;
+
+    if(nfs_is_mounted() && nfs_owns_path(path)) {
+        file f = nfs_vfs_open(path, "w");
+        if(f.type == FS_NULL)
+            return -1;
+        nfs_vfs_write(&f, buf);        /* NFS path: text record only */
+        nfs_vfs_close(&f);
+        return (int) len;
+    }
+
+    int device = get_dev_id_by_name(path);
+    if(device < 0 || !devs[device] || !devs[device]->write_all)
+        return -1;
+
+    int s = fs_enter();
+    file f = devs[device]->open(path + 1);
+    if(f.type == FS_NULL) {
+        devs[device]->touch(path + 1);
+        f = devs[device]->open(path + 1);
+    }
+    int ret = -1;
+    if(f.type == FS_FILE) {
+        devs[device]->write_all(&f, buf, len);
+        devs[device]->close(&f);
+        ret = (int) len;
+    }
+    fs_leave(s);
+    return ret;
+}
+
 void vfs_file_close(file *f) {
     if(f) {
         if(f->dev == NFS_DEV_ID) {

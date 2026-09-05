@@ -21,7 +21,7 @@
 #include <pit.h>
 
 /** One past the highest valid call number. */
-#define MAX_SYSCALL 16
+#define MAX_SYSCALL 17
 
 /** Set to 1 to log every syscall on the console (default 0: off). */
 #define SYSCALL_TRACE 0
@@ -65,6 +65,21 @@ static uint32_t sys_clock(void) {
     return pit_ms();
 }
 
+/**
+ * @brief `spit` syscall (#16): create/truncate the file at @p path and write
+ *        @p len bytes of @p buf to it.
+ *
+ * A one-shot whole-file write — the userspace side (@c write_file) hands the
+ * complete output buffer over in a single call, which is exactly what a
+ * program that generates a file (a compiler, say) needs and keeps the
+ * kernel side simple. @return bytes written, or -1.
+ */
+static uint32_t sys_spit(const char *path, const char *buf, uint32_t len) {
+    if(len > (8u * 1024u * 1024u))
+        return (uint32_t) -1;
+    return (uint32_t) vfs_spit((char *) path, (char *) buf, len);
+}
+
 /** Call number → implementation. NULL entries are unimplemented. */
 static void *syscalls[] = {
     &printf,                    // printf   0
@@ -82,7 +97,8 @@ static void *syscalls[] = {
     &sys_write,                 // write    12
     &sys_fread,                 // fread    13
     &sys_time,                  // time     14
-    &sys_clock                  // clock    15
+    &sys_clock,                 // clock    15
+    &sys_spit                   // spit     16
 };
 
 /**

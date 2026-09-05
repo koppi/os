@@ -312,6 +312,47 @@ static void console_rm(char *command) {
 }
 
 /**
+ * @brief Handle "sum <file>" — print an FNV-1a checksum and byte length of a
+ *        file. Used to check that two files are byte-identical (e.g. a
+ *        self-hosting compiler's output across bootstrap generations).
+ */
+static void console_sum(char *command) {
+    char *arg = get_argument(command, 1);
+    if(!arg || !*arg) {
+        printf("sum: missing file name\n");
+        return;
+    }
+    if(!resolve_path(senddir, sizeof(senddir), arg)) {
+        printf("sum: path too long\n");
+        return;
+    }
+    file *f = vfs_file_open(senddir, "r");
+    if(f->type != FS_FILE) {
+        printf("sum: %s: not found\n", senddir);
+        vfs_file_close(f);
+        return;
+    }
+    uint32_t total = f->len;
+    uint32_t hash = 2166136261u;
+    uint32_t done = 0;
+    while(f->eof != 1 && done < total) {
+        char buf[512];
+        memset(buf, 0, sizeof(buf));
+        vfs_file_read(f, buf);
+        uint32_t n = total - done;
+        if(n > 512)
+            n = 512;
+        for(uint32_t i = 0; i < n; i++) {
+            hash ^= (uint8_t) buf[i];
+            hash *= 16777619u;
+        }
+        done += 512;
+    }
+    vfs_file_close(f);
+    printf("%s  %x  %u bytes\n", senddir, hash, total);
+}
+
+/**
  * @brief Handle "write <file> <text>" — write one record of text to a file.
  */
 static void console_write(char *command) {
@@ -620,6 +661,7 @@ void console_exec(char *buf) {
                "touch    - creates an empty file\n"
                "rm       - deletes a file\n"
                "write    - write <file> <text>\n"
+               "sum      - sum <file> (checksum + byte length)\n"
                "beep     - plays a tone\n"
                "pci      - lists PCI devices\n"
                "net      - network interface status\n"
@@ -676,6 +718,8 @@ void console_exec(char *buf) {
         console_rm(buf);
     } else if(strncmp(buf, "write", 5) == 0) {
         console_write(buf);
+    } else if(strncmp(buf, "sum", 3) == 0) {
+        console_sum(buf);
     } else if(strncmp(buf, "beep", 4) == 0) {
         console_beep();
     } else {

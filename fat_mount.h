@@ -35,6 +35,8 @@ typedef struct fat_mount_info {
     uint32_t cluster_sectors;
     uint32_t first_data_sector;
     uint32_t data_sectors;
+    uint32_t n_fats;            /* number of FAT copies (from the BPB) */
+    uint32_t sector_bytes;      /* bytes per sector (from the BPB) */
 } fat_mount_info_t;
 
 #endif
