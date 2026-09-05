@@ -301,42 +301,50 @@ static int cu__head_line(const char *l, unsigned len, unsigned no, void *v) {
     return ++h->printed >= h->limit;
 }
 
-static void cmd_head(int argc, char **argv) {
-    int limit = 10, files = 0, multi = 0;
-    for (int i = 1; i < argc; i++)
-        if (argv[i][0] != '-') files++;
-    multi = files > 1;
-    int shown = 0;
+/**
+ * Pull a "-n N" / "-nN" / "-N" line count out of argv and collect the file
+ * operands into @p files. @return the file count; *limit holds the line count.
+ */
+static int ht_parse(int argc, char **argv, int *limit, char **files) {
+    int nf = 0;
     for (int i = 1; i < argc; i++) {
-        if (s_eq(argv[i], "-n") && i + 1 < argc) { limit = (int)s_num(argv[++i]); continue; }
-        if (argv[i][0] == '-' && is_digit(argv[i][1])) { limit = (int)s_num(argv[i] + 1); continue; }
+        if (s_eq(argv[i], "-n") && i + 1 < argc) { *limit = (int)s_num(argv[++i]); continue; }
+        if (argv[i][0] == '-' && argv[i][1] == 'n' && is_digit(argv[i][2])) { *limit = (int)s_num(argv[i] + 2); continue; }
+        if (argv[i][0] == '-' && is_digit(argv[i][1])) { *limit = (int)s_num(argv[i] + 1); continue; }
         if (argv[i][0] == '-') continue;
-        file *f = cu_fopen(argv[i]);
+        files[nf++] = argv[i];
+    }
+    return nf;
+}
+
+static void cmd_head(int argc, char **argv) {
+    int limit = 10;
+    char *files[CU_MAXARG];
+    int nf = ht_parse(argc, argv, &limit, files);
+    if (!nf) { printf("usage: head [-n N] FILE...\n"); return; }
+    for (int i = 0; i < nf; i++) {
+        file *f = cu_fopen(files[i]);
         if (!f) continue;
-        if (multi) printf("%s==> %s <==\n", shown++ ? "\n" : "", argv[i]);
+        if (nf > 1) printf("%s==> %s <==\n", i ? "\n" : "", files[i]);
         struct headctx h = { limit, 0 };
         cu_lines(f, cu__head_line, &h);
         vfs_file_close(f);
     }
-    if (!files) printf("usage: %s [-n N] FILE...\n", argv[0]);
 }
 
 static void cmd_tail(int argc, char **argv) {
-    int limit = 10, files = 0, shown = 0;
-    for (int i = 1; i < argc; i++)
-        if (argv[i][0] != '-') files++;
-    for (int i = 1; i < argc; i++) {
-        if (s_eq(argv[i], "-n") && i + 1 < argc) { limit = (int)s_num(argv[++i]); continue; }
-        if (argv[i][0] == '-' && is_digit(argv[i][1])) { limit = (int)s_num(argv[i] + 1); continue; }
-        if (argv[i][0] == '-') continue;
-        if (cu_slurp(argv[i], 1) < 0) continue;
-        if (files > 1) printf("%s==> %s <==\n", shown++ ? "\n" : "", argv[i]);
+    int limit = 10;
+    char *files[CU_MAXARG];
+    int nf = ht_parse(argc, argv, &limit, files);
+    if (!nf) { printf("usage: tail [-n N] FILE...\n"); return; }
+    for (int i = 0; i < nf; i++) {
+        if (cu_slurp(files[i], 1) < 0) continue;
+        if (nf > 1) printf("%s==> %s <==\n", i ? "\n" : "", files[i]);
         int start = cu_pool_n - limit;
         if (start < 0) start = 0;
         for (int k = start; k < cu_pool_n; k++) { o_str(cu_pool[k]); o_nl(); }
-        if (cu_pool_over) printf("tail: %s: only the first %d lines were considered\n", argv[i], CU_POOL_LINES);
+        if (cu_pool_over) printf("tail: %s: only the last of the first %d lines\n", files[i], CU_POOL_LINES);
     }
-    if (!files) printf("usage: %s [-n N] FILE...\n", argv[0]);
 }
 
 struct wcctx { unsigned l, w, c; int inword; };
@@ -1167,7 +1175,12 @@ static void cmd_yes(int argc, char **argv) {
     } else {
         s_cpy(msg, "y", sizeof msg);
     }
-    while (!keyboard_get_lastkey()) { o_str(msg); o_nl(); }
+    /* Stop on any keystroke; also cap it, since an SSH/exec caller has no
+     * keyboard to interrupt with and there is no job control. */
+    for (unsigned i = 0; i < 100000u && !keyboard_get_lastkey(); i++) {
+        o_str(msg);
+        o_nl();
+    }
     keyboard_invalidate_lastkey();
 }
 

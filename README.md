@@ -466,9 +466,36 @@ but no longer competes with the shell for keystrokes.)
 
 Paths are resolved against the working directory. A name that contains `/` is
 taken as device-qualified (`start hda/hello`); a bare name resolves against the
-working directory, or against `/fda` when none is set — so `start hello` runs
-`/fda/hello` and `read mouse.bmp` opens `/fda/mouse.bmp`. See
-**Storage & block devices** for the device names.
+working directory, or against `/hda` when none is set — so `start hello` runs
+`/hda/hello` and `read cc.c` opens `/hda/cc.c`. See **Storage & block devices**
+for the device names. (`/fda` is still reachable by an explicit path, but the
+floppy driver's read path can wedge on a cold motor, so it is not the default.)
+
+#### `coreutils` — a busybox-style toolbox ([`coreutils.c`](coreutils.c))
+
+`console_exec()` tries the built-ins above first, then hands anything else to a
+small toolbox of coreutils / util-linux commands. They are reachable the same
+three ways as everything else: the kernel console, `zsh` (via the `run`
+syscall), and an SSH channel. Filters take a **file argument** — there is no
+stdin, no pipe and no redirection — and, because the kernel heap is only
+~100 KiB, the whole-file commands (`sort`, `tac`, `tail`, `uniq`) cap at 64
+lines and `cp` / `base64` / `wget` stream through a right-sized heap block.
+
+| Group | Commands |
+| --- | --- |
+| view / slice | `cat` `head` `tail` `nl` `tac` `rev` `cut` `strings` `hexdump` (=`xxd` `od` `hd`) |
+| inspect | `wc` `grep` (`egrep` `fgrep`) `cmp` `cksum` `md5sum` `sha256sum` `du` |
+| transform | `tr` `sort` `uniq` `base64` |
+| files | `cp` `mv` `basename` `dirname` (no `mkdir` / `ln` — the FAT driver is root-directory-only) |
+| shell-ish | `echo` `printf` `pwd` `true` `false` `seq` `sleep` `usleep` `yes` `expr` `factor` `time` |
+| system | `uname` `arch` `hostname` `whoami` `id` `groups` `logname` `nproc` `uptime` `free` `date` `cal` `env` `printenv` `clear` (`reset`) `sync` `mount` `umount` `halt` |
+| net | `wget <url> [-O file]` |
+
+`grep` matches a fixed substring (not a regex); `-i` `-v` `-n` `-c` work.
+`expr` handles `+ - * / %`, the comparisons, and `length` / `substr` / `index`.
+`date +FORMAT` understands `%s %Y %m %d %H %M %S %%`. `yes` prints until a key
+is pressed. Commands that classically report status (`true`, `false`, `cmp`)
+just run — the console has no `$?`.
 
 ## Layout
 
