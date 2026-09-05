@@ -102,7 +102,23 @@ void main_proc() {
     //start_kernel_proc("demo_thread", &demo_thread);
     //start_kernel_proc("uart_read", &uart_read_proc);
 
-    // Hand control to the interactive console (does not return).
+    /*
+     * Hand control to the user-space shell (apps/zsh, staged on the disk
+     * images). It owns line editing, history and completion and reaches every
+     * command in commands.c through the `run` syscall. Fall back to the
+     * in-kernel debug console if the shell image is missing or fails to load,
+     * and again once the shell exits (Ctrl-D / `exit`).
+     */
+    int sh = start_proc("/hda/zsh", "");
+    if(sh != PROC_STOPPED) {
+        while(proc_state(sh) != PROC_STOPPED) {
+            console_spawn_service();   /* run programs the shell asks us to */
+            asm volatile("pause");
+        }
+        remove_proc(sh);
+    }
+
+    // Rescue console (does not return).
     kmain_console();
 }
 

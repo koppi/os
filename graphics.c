@@ -243,24 +243,16 @@ void paint_desktop() {
     }
 
     mouse_info.prev_button = mouse_info.curr_button;
-    
+
     mu_input_mousemove(&ctx, get_mouse_info()->x, get_mouse_info()->y);
 
-    char c = keyboard_get_lastkey();
-    if (c == 10) {
-        mu_input_keydown(&ctx, MU_KEY_RETURN);
-        keyboard_invalidate_lastkey();
-    } else if (c == 8) {
-        mu_input_keydown(&ctx, MU_KEY_BACKSPACE);
-        keyboard_invalidate_lastkey();
-    } else if (c != 0) {
-        char buf[2];
-        buf[0] = c;
-        buf[1] = 0;
-        keyboard_invalidate_lastkey();
-        mu_input_text(&ctx, buf);
-        // printf("key: %d\n", c);
-    }
+    /*
+     * The keyboard belongs to the interactive shell (the user-space apps/zsh, or
+     * the in-kernel console as a fallback), which drains the same single-consumer
+     * ring. Draining it here as well would split every keystroke between the two.
+     * The desktop is therefore mouse-only; the console window still shows the log
+     * output, and commands are typed at the shell prompt.
+     */
 
     mu_2();
 

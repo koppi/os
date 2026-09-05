@@ -166,6 +166,22 @@ char getchar() {
 }
 
 /**
+ * @brief Block until one key is buffered, then return and consume it.
+ *
+ * The quiet counterpart of @ref getchar for a userspace line editor (backs the
+ * getkey syscall): it neither logs nor toggles the interrupt flag — a syscall
+ * runs through a trap gate with interrupts already enabled — so it can be
+ * called once per keystroke without flooding the console.
+ */
+char keyboard_getkey(void) {
+    char c;
+    while((c = keyboard_get_lastkey()) == 0)
+        __asm__ volatile("pause");
+    keyboard_invalidate_lastkey();
+    return c;
+}
+
+/**
  * @brief Read an echoed line of at most @p size-1 bytes into @p str (backs the
  *        scanf syscall).
  *

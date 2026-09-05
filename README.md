@@ -302,8 +302,11 @@ for anything more (there is no TLS or resolver cache).
   `fopen`(6), `fclose`(7), `malloc`(9), `free`(10), `realloc`(11),
   `write`(12, length-delimited), `fread`(13, 512-byte block),
   `time`(14, RTC), `clock`(15, PIT), `spit`(16, whole-file write:
-  `spit(path, buf, len)` creates/truncates the file and writes `len` bytes) —
-  see [`syscall.c`](syscall.c). `write_file()` in [`lib/`](lib) wraps #16.
+  `spit(path, buf, len)` creates/truncates the file and writes `len` bytes),
+  `getkey`(17, one unechoed keystroke), `run`(18, run a console command line),
+  `getcwd`(19), `listdir`(20, newline-separated directory listing),
+  `spawn`(21, load+run a program, blocking) — see [`syscall.c`](syscall.c).
+  `write_file()` in [`lib/`](lib) wraps #16; 17-21 back [`apps/zsh`](apps/zsh).
 * The ELF loader ([`elf.c`](elf.c)) maps every page of a `PT_LOAD` segment to
   its own frame and covers the `.bss` tail, so multi-page ring-3 binaries load.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
@@ -320,6 +323,8 @@ for anything more (there is no TLS or resolver cache).
     (staged as `lua`); see below
   * [`apps/cc`](apps/cc) — **a self-hosting C compiler** (staged as `cc`);
     see below
+  * [`apps/zsh`](apps/zsh) — the interactive **zsh-flavoured shell** (staged as
+    `zsh`, launched at boot); see **Shell** above
 
 ### C compiler
 
@@ -388,10 +393,49 @@ start hda/lua /hda/t.lua      -- run a script; t.lua is the port's self-test
 There is no Ctrl-C, so a non-terminating script needs a `reboot`. See
 [`apps/lua/PORTING.md`](apps/lua/PORTING.md) for the full build and shim notes.
 
-### Console shell
-The kernel debug console ([`commands.c`](commands.c), `kmain_console`) runs as
-the scheduler's first process. It reads keystrokes from the ring-buffered
+### Shell
+
+The interactive shell is [`apps/zsh`](apps/zsh/main.c) — a small **zsh-flavoured
+shell that runs in ring 3**. The scheduler's first process (`main_proc`) launches
+`/hda/zsh` and blocks until it exits, falling back to the in-kernel console
+(`kmain_console`, below) if the image is missing or the shell leaves (Ctrl-D /
+`exit`).
+
+`zsh` owns the interactive surface — a line editor with history, tab-completion,
+aliases, `!` history expansion and `*`/`?` globbing — but it does not
+reimplement the commands. It classifies each line:
+
+* **shell builtins** (`cd`, `pwd`, `echo`, `history`, `alias`/`unalias`,
+  `which`, `help`, `source`, `clear`, `exit`) run in-process;
+* a name that matches a **program** on the current volume (or `/hda`) is loaded
+  and run via the `spawn` syscall — so `hello` works like `./hello`, and a file
+  argument (`lua t.lua`) is resolved against the working directory;
+* **everything else** is handed to the kernel console dispatcher through the
+  `run` syscall, so `ls`, `pci`, `date`, `poweroff` … behave exactly as they do
+  on the in-kernel console.
+
+Editor keys: `Tab` completes, `^P`/`^N` walk history, `^U`/`^W` kill,
+`^L` clears, `^C` abandons the line, `^D` on an empty line leaves the shell.
+Over a PS/2 keyboard only the printable set plus `Tab`/Backspace reach the
+shell, so history there is via `!!` / `!n` / `!prefix`; a serial console
+(`-serial mon:stdio`) delivers the control keys too. `/hda/zshrc` (and
+`/fda/zshrc`) is sourced at start-up — a place for aliases.
+
+New syscalls behind this: `getkey` (17, one unechoed keystroke), `run` (18,
+`console_exec` on behalf of ring 3), `getcwd` (19), `listdir` (20, for
+completion/globbing) and `spawn` (21). `spawn` is marshalled onto `main_proc`
+because the ELF loader stages the image at a fixed kernel address that a ring-3
+process's page directory does not map ([`commands.c`](commands.c)
+`console_spawn_request` / `console_spawn_service`).
+
+### Kernel console (`kmain_console`)
+
+The kernel debug console ([`commands.c`](commands.c), `kmain_console`) is the
+fallback shell and the command table that `zsh`'s `run` syscall and the SSH
+`shell` channel dispatch through. It reads keystrokes from the ring-buffered
 keyboard driver, echoes them, supports backspace, and executes a line on Enter.
+(The framebuffer desktop's console window is now output-only — it shows the log
+but no longer competes with the shell for keystrokes.)
 
 | Command | Effect |
 | --- | --- |
@@ -473,9 +517,10 @@ FAT volume with the compiled apps copied in.
 ./hda.sh       # 16M FAT16 hard-disk image
 ```
 
-Both scripts use mtools (no root / loop device) and stage `hello`, `tst`,
-`example`, `mem`, the `lua` interpreter (with `t.lua` and `mod.lua`), and the
-`mouse.bmp` cursor bitmap. `hda.img` additionally carries the `cc` compiler,
+Both scripts use mtools (no root / loop device) and stage the `zsh` shell (with
+its `zshrc`), `hello`, `tst`, `example`, `mem`, the `lua` interpreter (with
+`t.lua` and `mod.lua`), and the `mouse.bmp` cursor bitmap. `hda.img`
+additionally carries the `cc` compiler,
 its source `cc.c`, its runtime `prelude.c` and the compiler tests — and is
 16 MiB so a couple of generations of compiler output fit. The in-kernel FAT
 driver only handles one sector per cluster, so the images are made with
@@ -537,5 +582,7 @@ IDE block devices, mounts their FAT volumes, starts the framebuffer redraw threa
 the USB thread (`usb_thread` — enumerate, then poll HID endpoints and hub
 ports) and, if an e1000 was found, the `net` thread (`net_thread` — run the
 DHCP client, sync the RTC over NTP, then service the RX ring, retry the NFS
-mount and poll the SSH listener), and then runs the interactive console
-(`kmain_console`).
+mount and poll the SSH listener), and finally launches the ring-3 shell
+([`apps/zsh`](apps/zsh/main.c)) — servicing its `spawn` requests while it runs
+and dropping to the in-kernel console (`kmain_console`) if it is missing or
+exits.

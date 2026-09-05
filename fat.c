@@ -554,6 +554,38 @@ void fat_ls(char *dir) {
     kfree(normal_name);
 }
 
+int fat_listdir(char *dir, char *out, uint32_t outsz) {
+    if(outsz)
+        out[0] = 0;
+    device_t *dev = get_dev_by_name(dir);
+    if(!dev || outsz < 2)
+        return 0;
+
+    char normal[NAME_LEN + 1];
+    uint32_t w = 0;
+    int count = 0;
+    for(uint32_t i = 0; i < dev->minfo.root_size; i++) {
+        directory_t *e = (directory_t *) dev->read(dev->minfo.root_offset + i);
+        for(int j = 0; j < 16; j++, e++) {
+            uint8_t c0 = e->filename[0];
+            if(c0 == 0x00 || c0 == 0xE5)               /* free / deleted */
+                continue;
+            if((e->attrs & 0x0F) == 0x0F || (e->attrs & DIR_VOL_LABEL))
+                continue;                              /* LFN fragment / label */
+            to_normal_file_name((char *) e->filename, normal);
+            uint32_t l = (uint32_t) strlen(normal);
+            if(l == 0 || w + l + 1 >= outsz)
+                return count;
+            memcpy(out + w, normal, l);
+            w += l;
+            out[w++] = '\n';
+            out[w] = 0;
+            count++;
+        }
+    }
+    return count;
+}
+
 /* ------------------------------------------------------------------------- *
  *  Boot-time defragmentation
  *

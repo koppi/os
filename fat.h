@@ -122,5 +122,12 @@ file fat_cd(char *dir);
 file fat_search(char *name);
 /** @brief List the root directory of device @p dir (VFS `ls` hook). */
 void fat_ls(char *dir);
+/**
+ * @brief Machine-readable sibling of @ref fat_ls: write the root directory's
+ *        leaf names into @p out, one per line, NUL-terminated and never past
+ *        @p outsz. Backs the userspace shell's tab-completion and globbing.
+ * @return the number of names written.
+ */
+int fat_listdir(char *dir, char *out, uint32_t outsz);
 /** @brief Populate a @ref filesystem op vector with the FAT hooks. */
 void fat_init(filesystem *fs_fat);

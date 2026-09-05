@@ -6,6 +6,7 @@ all:
 	$(MAKE) -C lua
 	$(MAKE) -C fault
 	$(MAKE) -C cc
+	$(MAKE) -C zsh
 
 clean:
 	$(MAKE) -C 01 clean
@@ -15,5 +16,6 @@ clean:
 	$(MAKE) -C lua clean
 	$(MAKE) -C fault clean
 	$(MAKE) -C cc clean
+	$(MAKE) -C zsh clean
 
 .phony: all clean

@@ -73,6 +73,20 @@ void vfs_ls_dir(char *dir) {
     }
 }
 
+int vfs_listdir(char *dir, char *out, uint32_t outsz) {
+    if(outsz)
+        out[0] = 0;
+    if(nfs_is_mounted() && nfs_owns_path(dir))
+        return 0;                       /* NFS: no machine-readable listing */
+    int device = get_dev_id_by_name(dir);
+    if(device < 0 || !devs[device])
+        return 0;
+    int s = fs_enter();
+    int n = fat_listdir(dir, out, outsz);
+    fs_leave(s);
+    return n;
+}
+
 int vfs_cd(char *name) {
     if(nfs_is_mounted() && nfs_owns_path(name)) {
         if(strchr(name + 1, '/')) {

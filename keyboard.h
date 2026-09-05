@@ -21,6 +21,9 @@ char keyboard_get_lastkey();
 void keyboard_invalidate_lastkey();
 /** @brief Block until one key is available, then return and consume it. */
 char getchar();
+/** @brief Like @ref getchar but silent (no log, no `sti`): backs the getkey
+ *         syscall for the userspace line editor. */
+char keyboard_getkey(void);
 /**
  * @brief Read a line into @p str (used by the scanf syscall).
  * @param str  Destination buffer.

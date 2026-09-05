@@ -17,5 +17,6 @@ apps/cc/cc-native
 apps/cc/cc-dbg
 apps/cc/cc-asan
 apps/cc/cc.selfhost
+apps/zsh/zsh
 os.sublime-workspace
 docs/

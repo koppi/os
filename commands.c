@@ -31,6 +31,7 @@
 #include <keyboard.h>
 #include <percpu.h>
 #include <commands.h>
+#include <coreutils.h>
 
 /** Scratch buffer used to assemble an absolute path before a VFS call. */
 static char senddir[64];
@@ -131,6 +132,15 @@ static int resolve_path(char *out, size_t outsz, const char *name) {
 }
 
 /**
+ * @brief Public wrapper around resolve_path() for the coreutils commands
+ *        (coreutils.c), which need the same working-directory-relative name
+ *        resolution the native built-ins use.
+ */
+int console_resolve_path(char *out, size_t outsz, const char *name) {
+    return resolve_path(out, outsz, name);
+}
+
+/**
  * @brief Handle the "cd" command: change the console working directory.
  *
  * With no argument the working directory is reset to the filesystem root.
@@ -154,6 +164,15 @@ void console_cd(char *dir, char *command) {
     } else {
         printf("cd %s: directory not found\n", senddir);
     }
+}
+
+/**
+ * @brief The console working directory as an absolute path ("/" at the root).
+ *
+ * @see commands.h — used by the userspace shell (apps/zsh) for its prompt.
+ */
+const char *console_cwd(void) {
+    return dir[0] ? dir : "/";
 }
 
 /**
@@ -191,6 +210,63 @@ void console_start(char *command) {
         remove_proc(procn);
         printf("\n");
     }
+}
+
+/* ---- program launch on behalf of a ring-3 shell (apps/zsh) --------------- *
+ *
+ * load_elf() stages the executable at a fixed low kernel address and writes it
+ * through the *current* page directory, so it must run on the kernel directory.
+ * A `spawn` syscall from apps/zsh runs on that process's directory instead, so
+ * the request is marshalled here and executed by the init thread (main_proc),
+ * which does run on the kernel directory — the same context console_start()
+ * already uses. One request outstanding at a time; the caller blocks until the
+ * child exits.
+ */
+static volatile int spawn_state;      /* 0 idle, 1 filling, 2 ready to run */
+static volatile int spawn_result;
+static char         spawn_path[64];
+static char         spawn_args[128];
+
+/** @brief Bounded copy of a NUL-terminated string (const-source strncpy). */
+static void spawn_copy(char *dst, const char *src, size_t n) {
+    size_t i = 0;
+    for(; src && src[i] && i < n - 1; i++)
+        dst[i] = src[i];
+    for(; i < n; i++)
+        dst[i] = 0;
+}
+
+int console_spawn_request(const char *path, const char *args) {
+    while(!__sync_bool_compare_and_swap(&spawn_state, 0, 1))
+        asm volatile("pause");
+
+    spawn_copy(spawn_path, path, sizeof spawn_path);
+    spawn_copy(spawn_args, args, sizeof spawn_args);
+
+    __sync_synchronize();
+    spawn_state = 2;
+
+    while(spawn_state != 0)
+        asm volatile("pause");
+    return spawn_result;
+}
+
+void console_spawn_service(void) {
+    if(spawn_state != 2)
+        return;
+
+    int rc = -1;
+    int pid = start_proc(spawn_path, spawn_args);
+    if(pid != PROC_STOPPED) {
+        while(proc_state(pid) != PROC_STOPPED)
+            asm volatile("pause");
+        remove_proc(pid);
+        rc = 0;
+        printf("\n");
+    }
+    spawn_result = rc;
+    __sync_synchronize();
+    spawn_state = 0;
 }
 
 /**
@@ -674,6 +750,7 @@ void console_exec(char *buf) {
                "ntpdate  - sync the RTC from an NTP server\n"
                "poweroff - powers the machine off (ACPI)\n"
                "reboot   - reboots the machine\n");
+        coreutils_help();
     } else if(strcmp(buf, "pci") == 0) {
         console_pci();
     } else if(strcmp(buf, "net") == 0) {
@@ -722,6 +799,8 @@ void console_exec(char *buf) {
         console_sum(buf);
     } else if(strncmp(buf, "beep", 4) == 0) {
         console_beep();
+    } else if(coreutils_try(buf)) {
+        /* handled by the busybox-style toolbox in coreutils.c */
     } else {
         printf("Command '%s' not found.\n", buf);
     }

@@ -10,6 +10,8 @@ IMG=hda.img
 qemu-img create -f raw "$IMG" 16M
 /sbin/mkfs.fat -s 1 -R 1 "$IMG"
 
+mcopy -i "$IMG" -D o apps/zsh/zsh         ::zsh
+mcopy -i "$IMG" -D o apps/zsh/zshrc       ::zshrc
 mcopy -i "$IMG" -D o apps/hello/hello     ::hello
 mcopy -i "$IMG" -D o apps/01/01           ::tst
 mcopy -i "$IMG" -D o apps/example/example ::example

@@ -19,9 +19,10 @@
 #include <heap.h>
 #include <rtc.h>
 #include <pit.h>
+#include <commands.h>
 
 /** One past the highest valid call number. */
-#define MAX_SYSCALL 17
+#define MAX_SYSCALL 22
 
 /** Set to 1 to log every syscall on the console (default 0: off). */
 #define SYSCALL_TRACE 0
@@ -80,6 +81,56 @@ static uint32_t sys_spit(const char *path, const char *buf, uint32_t len) {
     return (uint32_t) vfs_spit((char *) path, (char *) buf, len);
 }
 
+/**
+ * @brief `run` syscall (#18): execute one command line through the same
+ *        dispatcher the in-kernel debug console uses (@ref console_exec).
+ *
+ * This is how the userspace shell (apps/zsh) reuses every command in
+ * commands.c — `ls`, `pci`, `ping`, `start <prog>`, `poweroff`, ... — while
+ * itself running in ring 3.
+ */
+static uint32_t sys_run(const char *line) {
+    if(line)
+        console_exec((char *) line);
+    return 0;
+}
+
+/**
+ * @brief `getcwd` syscall (#19): copy the console working directory (the path
+ *        `cd` maintains) into @p buf. @return the string length.
+ */
+static uint32_t sys_getcwd(char *buf, uint32_t n) {
+    if(!buf || !n)
+        return 0;
+    const char *d = console_cwd();
+    uint32_t i = 0;
+    for(; d[i] && i + 1 < n; i++)
+        buf[i] = d[i];
+    buf[i] = 0;
+    return i;
+}
+
+/**
+ * @brief `listdir` syscall (#20): write the newline-separated leaf names of
+ *        directory @p path into @p buf. @return the entry count.
+ */
+static uint32_t sys_listdir(const char *path, char *buf, uint32_t n) {
+    return (uint32_t) vfs_listdir((char *) path, buf, n);
+}
+
+/**
+ * @brief `spawn` syscall (#21): load and run the program at @p path with
+ *        argument string @p args, blocking until it exits. @return its status.
+ *
+ * Unlike `run("start ...")`, the ELF load is marshalled onto the init thread
+ * (@ref console_spawn_request), which runs on the kernel page directory — the
+ * loader stages the image at a fixed kernel address that a ring-3 process's
+ * directory does not map.
+ */
+static uint32_t sys_spawn(const char *path, const char *args) {
+    return (uint32_t) console_spawn_request(path ? path : "", args ? args : "");
+}
+
 /** Call number → implementation. NULL entries are unimplemented. */
 static void *syscalls[] = {
     &printf,                    // printf   0
@@ -98,7 +149,12 @@ static void *syscalls[] = {
     &sys_fread,                 // fread    13
     &sys_time,                  // time     14
     &sys_clock,                 // clock    15
-    &sys_spit                   // spit     16
+    &sys_spit,                  // spit     16
+    &keyboard_getkey,           // getkey   17  (blocking, unechoed keystroke)
+    &sys_run,                   // run      18  (console_exec on behalf of ring 3)
+    &sys_getcwd,                // getcwd   19
+    &sys_listdir,               // listdir  20
+    &sys_spawn                  // spawn    21  (load+run a program for ring 3)
 };
 
 /**

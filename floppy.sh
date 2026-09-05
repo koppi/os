@@ -9,6 +9,8 @@ IMG=floppy.img
 rm -f "$IMG"
 /sbin/mkfs.fat -C "$IMG" 1440
 
+mcopy -i "$IMG" -D o apps/zsh/zsh       ::zsh
+mcopy -i "$IMG" -D o apps/zsh/zshrc     ::zshrc
 mcopy -i "$IMG" -D o apps/hello/hello   ::hello
 mcopy -i "$IMG" -D o apps/01/01         ::tst
 mcopy -i "$IMG" -D o apps/example/example ::example

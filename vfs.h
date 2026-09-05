@@ -45,6 +45,9 @@ void vfs_init();
 void vfs_ls();
 /** @brief List the directory named by @p dir ("dev/..."). */
 void vfs_ls_dir(char *dir);
+/** @brief Write the leaf names under @p dir into @p out, one per line (for a
+ *         userspace shell's completion/globbing). @return the entry count. */
+int vfs_listdir(char *dir, char *out, uint32_t outsz);
 /** @brief Validate a directory path. @return non-zero if it is a directory. */
 int vfs_cd(char *name);
 /** @brief Create an empty file at path @p name. */
