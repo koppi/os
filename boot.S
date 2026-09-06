@@ -3,8 +3,11 @@
 #include <multiboot.h>
 #include <multiboot2.h>
 
-    .set CONFIG_BFB_WIDTH, 1280
-    .set CONFIG_BFB_HEIGHT, 1024
+    /* 0 = "no preference": take whatever mode the loader / firmware GOP is
+     * already in. A fixed 1280x1024 is not offered by a laptop panel's GOP
+     * (the X250 is 1366x768), and the kernel handles any width/pitch. */
+    .set CONFIG_BFB_WIDTH, 0
+    .set CONFIG_BFB_HEIGHT, 0
     .set CONFIG_BFB_BPP, 32
     
     .set ALIGN,    1 << 0

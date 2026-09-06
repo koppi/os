@@ -15,7 +15,12 @@ OVMF_CODE=/usr/share/OVMF/OVMF_CODE_4M.fd
 OVMF_VARS_SRC=/usr/share/OVMF/OVMF_VARS_4M.fd
 KVM=${KVM:--enable-kvm}
 
-COMMON=(-m 3G -smp 4 -no-reboot $KVM
+# VGA=std : legacy VBE, GRUB picks 800x600x24 (exercises the 24-bpp path;
+#           the on-screen software compositor is visible here)
+# VGA=qxl : GRUB drives it at 1280x800x32, closest to a real GOP framebuffer,
+#           but QXL's paravirtual FB does not show the software compositor
+VGA=${VGA:-std}
+COMMON=(-m 3G -smp 4 -no-reboot $KVM -vga "$VGA"
         -device qemu-xhci,id=xhci -device usb-kbd -device usb-tablet
         -netdev user,id=n0 -device e1000e,netdev=n0
         -drive id=sata,file="$OUT/sata.img",format=raw,if=none

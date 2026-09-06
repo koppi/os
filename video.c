@@ -1,13 +1,15 @@
 /**
  * @file video.c
- * @brief Linear-framebuffer graphics: maps the boot framebuffer, keeps a
- *        software back buffer, and provides pixel/line/rect/text/blit
- *        primitives plus the per-frame @ref refresh_screen swap.
+ * @brief Linear-framebuffer graphics.
  *
- * Also hosts @ref fbcon — a bare text console that renders straight to the
- * visible framebuffer with no heap and no scheduler. It is the only way to
- * see boot progress or a panic on a machine with no serial port (e.g. a
- * ThinkPad): kernel log output is fanned out to it by kconsole.c.
+ * All drawing goes to one 32-bpp software surface (the "shadow"). @ref
+ * fb_present copies a region of it to the real framebuffer, converting to the
+ * hardware pixel format (24- or 32-bpp, any channel order, any pitch) on the
+ * way. This keeps the SSFN text renderer -- which only does 32-bit pixel
+ * writes -- correct on a 24-bpp VBE mode.
+ *
+ * @ref fbcon is a bare text console rendered the same way: the only place boot
+ * progress or a panic shows on a machine with no serial port (a ThinkPad).
  */
 #include <video.h>
 
@@ -27,10 +29,15 @@ struct vbe_mem vbemem;
 
 extern ssfn_font_t _binary_unifont_sfn_start;
 
-/* Channel shifts into a native 32-bpp pixel (default: BGRX, the common GOP
- * layout). Overridden from the multiboot RGB field positions when given. */
-static uint32_t px_rsh = 16, px_gsh = 8, px_bsh = 0;
+/* Hardware framebuffer parameters (the shadow is always 32-bpp; vbemem.pitch
+ * is the *shadow* pitch so the draw primitives need no special-casing).
+ * fb_base is mapped PCD (uncached) so a plain pointer is fine. */
+static uint8_t *fb_base;
+static uint32_t fb_pitch;
+static uint32_t fb_bpp;
 static uint32_t fb_bytespp = 4;
+/* Channel shifts into a native pixel (default BGRX, the common GOP layout). */
+static uint32_t px_rsh = 16, px_gsh = 8, px_bsh = 0;
 
 /** @brief Pack an 0x00RRGGBB colour into the framebuffer's native pixel. */
 static inline uint32_t pack_color(uint32_t c) {
@@ -39,8 +46,44 @@ static inline uint32_t pack_color(uint32_t c) {
            (( c        & 0xFF) << px_bsh);
 }
 
+/** @return non-zero if the hardware framebuffer is mapped in the current CR3. */
+static int fb_reachable(void) {
+    return fb_base &&
+           get_phys_addr(get_page_directory(), (uint32_t) fb_base) != 0;
+}
+
+/**
+ * @brief Copy a rectangle of the 32-bpp shadow to the hardware framebuffer.
+ *        Clipped to the screen; converts pixel format and pitch.
+ */
+static void fb_present(int x, int y, int w, int h) {
+    if (!fb_reachable() || vbemem.buffer == (uint32_t *) fb_base)
+        return;
+    if (x < 0) { w += x; x = 0; }
+    if (y < 0) { h += y; y = 0; }
+    if (x + w > vbemem.xres) w = vbemem.xres - x;
+    if (y + h > vbemem.yres) h = vbemem.yres - y;
+    if (w <= 0 || h <= 0)
+        return;
+
+    for (int row = 0; row < h; row++) {
+        const uint32_t *src = (const uint32_t *)
+            ((const uint8_t *) vbemem.buffer + (uint32_t)(y + row) * vbemem.pitch) + x;
+        uint8_t *dst = (uint8_t *) fb_base + (uint32_t)(y + row) * fb_pitch
+                       + (uint32_t) x * fb_bytespp;
+        if (fb_bytespp == 4) {
+            memcpy(dst, (void *) src, (size_t) w * 4);
+        } else {
+            for (int i = 0; i < w; i++, dst += 3) {
+                uint32_t p = src[i];
+                dst[0] = p & 0xFF; dst[1] = (p >> 8) & 0xFF; dst[2] = (p >> 16) & 0xFF;
+            }
+        }
+    }
+}
+
 /* ------------------------------------------------------------------ *
- *  fbcon — direct-to-framebuffer text console                         *
+ *  fbcon — text console                                               *
  * ------------------------------------------------------------------ */
 #define FBCON_CW 8
 #define FBCON_CH 16
@@ -49,44 +92,30 @@ static int      fbcon_on;
 static uint32_t fbcon_cols, fbcon_rows, fbcon_cx, fbcon_cy;
 static uint32_t fbcon_fg = 0xC8C8C8, fbcon_bg = 0x000000;
 
-/** @return non-zero if the visible framebuffer is mapped in the current CR3. */
-static int fb_reachable(void) {
-    return vbemem.mem &&
-           get_phys_addr(get_page_directory(), (uint32_t) vbemem.mem) != 0;
-}
-
-/** @brief Paint one @ref FBCON_CH-tall band of the visible fb to @p colour. */
-static void fbcon_fill_row(uint32_t row, uint32_t colour) {
-    uint32_t native = pack_color(colour);
-    uint8_t *base = (uint8_t *) vbemem.mem + row * FBCON_CH * vbemem.pitch;
+/** @brief Fill one @ref FBCON_CH-tall band of the shadow with @p colour. */
+static void fbcon_fill_row(uint32_t row) {
+    uint32_t native = pack_color(fbcon_bg);
     for (uint32_t y = 0; y < FBCON_CH; y++) {
-        uint8_t *p = base + y * vbemem.pitch;
-        for (uint32_t x = 0; x < vbemem.xres; x++, p += fb_bytespp) {
-            if (fb_bytespp == 4) {
-                *(uint32_t *) p = native;
-            } else {
-                p[0] = native & 0xFF; p[1] = (native >> 8) & 0xFF;
-                p[2] = (native >> 16) & 0xFF;
-            }
-        }
+        uint32_t *p = (uint32_t *)
+            ((uint8_t *) vbemem.buffer + (row * FBCON_CH + y) * vbemem.pitch);
+        for (uint32_t x = 0; x < vbemem.xres; x++)
+            p[x] = native;
     }
 }
 
 static void fbcon_scroll(void) {
     uint32_t rowbytes = FBCON_CH * vbemem.pitch;
-    memmove(vbemem.mem, (uint8_t *) vbemem.mem + rowbytes,
+    memmove(vbemem.buffer, (uint8_t *) vbemem.buffer + rowbytes,
             (fbcon_rows - 1) * rowbytes);
-    fbcon_fill_row(fbcon_rows - 1, fbcon_bg);
+    fbcon_fill_row(fbcon_rows - 1);
     fbcon_cy = fbcon_rows - 1;
+    fb_present(0, 0, vbemem.xres, vbemem.yres);
 }
 
 /**
- * @brief Render one character to the visible framebuffer. Control characters
- *        (\n \r \b \t) are handled; the screen scrolls at the bottom.
- *
- * Silently does nothing until @ref fbcon_init has run or when the framebuffer
- * is not mapped in the running address space (a user process's CR3) — the
- * caller still gets the byte on every other console sink.
+ * @brief Render one character. Control characters (\n \r \b \t) are handled;
+ *        the screen scrolls at the bottom. No-op before @ref vbe_init or when
+ *        the framebuffer is unreachable from the running CR3.
  */
 void fbcon_putc(char c) {
     if (!fbcon_on || !fb_reachable())
@@ -102,7 +131,8 @@ void fbcon_putc(char c) {
         if ((unsigned char) c < 0x20) return;
         if (fbcon_cx >= fbcon_cols) { fbcon_cx = 0; fbcon_cy++; }
         if (fbcon_cy >= fbcon_rows) fbcon_scroll();
-        ssfn_dst_ptr   = (uint8_t *) vbemem.mem;
+        ssfn_font      = &_binary_unifont_sfn_start;
+        ssfn_dst_ptr   = (uint8_t *) vbemem.buffer;
         ssfn_dst_pitch = vbemem.pitch;
         ssfn_dst_w     = vbemem.xres;
         ssfn_dst_h     = vbemem.yres;
@@ -110,6 +140,7 @@ void fbcon_putc(char c) {
         ssfn_x         = fbcon_cx * FBCON_CW;
         ssfn_y         = fbcon_cy * FBCON_CH;
         ssfn_putc((unsigned char) c);
+        fb_present(fbcon_cx * FBCON_CW, fbcon_cy * FBCON_CH, FBCON_CW, FBCON_CH);
         fbcon_cx++;
         return;
     }
@@ -117,24 +148,20 @@ void fbcon_putc(char c) {
         fbcon_scroll();
 }
 
-/** @return non-zero once @ref fbcon_init has set up a usable framebuffer. */
 int fbcon_active(void) { return fbcon_on; }
 
-/** @brief Stop rendering kernel log to the framebuffer (the desktop compositor
- *         has taken over the screen; the log lives in its on-screen window now).
- *         A later panic() re-enables it so the fault is still visible. */
+/** @brief Stop / restart kernel-log rendering to the framebuffer. */
 void fbcon_suspend(void) { fbcon_on = 0; }
-void fbcon_resume(void)  { if (vbemem.mem) fbcon_on = 1; }
+void fbcon_resume(void)  { if (fb_base) fbcon_on = 1; }
 
-/** @brief Set up fbcon over the framebuffer already recorded in @ref vbemem. */
 static void fbcon_init(void) {
-    ssfn_font = &_binary_unifont_sfn_start;
     fbcon_cols = vbemem.xres / FBCON_CW;
     fbcon_rows = vbemem.yres / FBCON_CH;
     fbcon_cx = fbcon_cy = 0;
     for (uint32_t r = 0; r < fbcon_rows; r++)
-        fbcon_fill_row(r, fbcon_bg);
+        fbcon_fill_row(r);
     fbcon_on = 1;
+    fb_present(0, 0, vbemem.xres, vbemem.yres);
 }
 
 /* ------------------------------------------------------------------ *
@@ -143,9 +170,8 @@ static void fbcon_init(void) {
 
 /** @brief Find a free @p pages-long run of kernel virtual space (kern_dir). */
 static uint32_t kernel_va_hole(uint32_t pages) {
-    /* Search 0x40000000..0xC0000000: above every process image / heap / the
-     * relocated RAM disk, below where firmware puts MMIO and the framebuffer
-     * itself on real hardware. */
+    /* 0x40000000..0xC0000000: above every process image / heap / the relocated
+     * RAM disk, below where firmware puts MMIO and the framebuffer itself. */
     page_dir_t *kd = get_kern_directory();
     for (uint32_t va = 0x40000000; va < 0xC0000000; va += PAGE_SIZE) {
         uint32_t run = 0;
@@ -157,7 +183,7 @@ static uint32_t kernel_va_hole(uint32_t pages) {
         }
         if (run == pages)
             return va;
-        va += run * PAGE_SIZE;   /* skip the blocked span */
+        va += run * PAGE_SIZE;
     }
     return 0;
 }
@@ -168,72 +194,67 @@ void vbe_init() {
         return;
     }
 
-    uint32_t bpp   = bfb_bpp ? bfb_bpp : 32;
-    fb_bytespp     = (bpp + 7) / 8;
-    if (fb_bytespp < 3) fb_bytespp = 4;          /* we only render 24/32-bpp */
-    uint32_t pitch = bfb_scanline ? bfb_scanline : bfb_width * fb_bytespp;
-    uint32_t span  = pitch * bfb_height;
-    bfb_span = span;   /* so create_address_space() clones the fb mapping */
+    fb_bpp     = bfb_bpp ? bfb_bpp : 32;
+    fb_bytespp = (fb_bpp + 7) / 8;
+    if (fb_bytespp < 3) fb_bytespp = 4;      /* 15/16-bpp: treated as 32, garbled */
+    fb_pitch   = bfb_scanline ? bfb_scanline : bfb_width * fb_bytespp;
+    uint32_t fb_span = fb_pitch * bfb_height;
+    bfb_span = fb_span;                      /* so create_address_space() clones it */
 
-    if (bfb_red_size && bfb_blue_size) {         /* honour the loader's layout */
+    if (bfb_red_size && bfb_blue_size) {     /* honour the loader's channel layout */
         px_rsh = bfb_red_pos;
         px_gsh = bfb_green_pos;
         px_bsh = bfb_blue_pos;
     }
 
     klogf(LOG_INFO, "vbe: fb 0x%x %ux%u %u bpp, pitch %u, %u KiB, rgb %u/%u/%u\n",
-          (uint32_t) bfb_addr, bfb_width, bfb_height, bpp, pitch, span / 1024,
-          px_rsh, px_gsh, px_bsh);
+          (uint32_t) bfb_addr, bfb_width, bfb_height, fb_bpp, fb_pitch,
+          fb_span / 1024, px_rsh, px_gsh, px_bsh);
 
-    /* 1. Map the framebuffer 1:1, cache-disabled (write-back MMIO would leave
-     *    the panel showing stale pixels on real hardware). */
+    /* 1. Map the framebuffer 1:1, cache-disabled. */
     uint32_t fb_pa = (uint32_t) bfb_addr;
-    for (uint32_t off = 0; off < span + PAGE_SIZE; off += PAGE_SIZE)
+    for (uint32_t off = 0; off < fb_span + PAGE_SIZE; off += PAGE_SIZE)
         vmm_map_phys(get_kern_directory(), fb_pa + off, fb_pa + off,
                      PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
+    fb_base = (uint8_t *) fb_pa;
+
+    /* 2. The 32-bpp shadow surface. All drawing targets this; fb_present()
+     *    converts it to the hardware format. Scattered frames, contiguous VA. */
+    uint32_t sh_pitch = bfb_width * 4;
+    uint32_t sh_span  = sh_pitch * bfb_height;
+    uint32_t npages   = (sh_span + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint32_t shadow   = kernel_va_hole(npages);
+    int have_shadow = 0;
+    if (shadow) {
+        have_shadow = 1;
+        for (uint32_t i = 0; i < npages; i++)
+            if (!vmm_map(get_kern_directory(), shadow + i * PAGE_SIZE,
+                         PAGE_PRESENT | PAGE_RW)) { have_shadow = 0; break; }
+    }
 
     vbemem.mem         = (uint32_t *) fb_pa;
     vbemem.xres        = bfb_width;
     vbemem.yres        = bfb_height;
-    vbemem.bpp         = bpp;
-    vbemem.pitch       = pitch;
-    vbemem.buffer_size = span;
-
-    /* 2. Software back buffer: physically scattered frames mapped contiguously
-     *    into a free slice of kernel virtual space. If RAM is too tight, fall
-     *    back to compositing straight to the framebuffer. */
-    uint32_t npages = (span + PAGE_SIZE - 1) / PAGE_SIZE;
-    uint32_t shadow = kernel_va_hole(npages);
-    int have_shadow = 0;
-    if (shadow) {
-        have_shadow = 1;
-        for (uint32_t i = 0; i < npages; i++) {
-            if (!vmm_map(get_kern_directory(), shadow + i * PAGE_SIZE,
-                         PAGE_PRESENT | PAGE_RW)) {
-                have_shadow = 0;
-                break;
-            }
-        }
-    }
-    vbemem.buffer = have_shadow ? (uint32_t *) shadow : vbemem.mem;
-    if (!have_shadow)
+    vbemem.bpp         = 32;
+    if (have_shadow) {
+        vbemem.buffer      = (uint32_t *) shadow;
+        vbemem.pitch       = sh_pitch;
+        vbemem.buffer_size = sh_span;
+    } else {
+        /* Low RAM: draw straight to the hardware fb (24-bpp text will tint). */
         klogf(LOG_WARNING, "vbe: no back buffer (low RAM), compositing direct\n");
+        vbemem.buffer      = (uint32_t *) fb_pa;
+        vbemem.pitch       = fb_pitch;
+        vbemem.buffer_size = fb_span;
+        vbemem.bpp         = fb_bpp;
+    }
 
-    /* 3. Text console for boot messages / panics. */
     fbcon_init();
-
-    ssfn_font = &_binary_unifont_sfn_start;
-    ssfn_dst_ptr = (uint8_t *) vbemem.buffer;
-    ssfn_dst_pitch = vbemem.pitch;
-    ssfn_fg = 0xFFFF00;
-    ssfn_x = 0;
-    ssfn_y = 0;
 }
 
 void refresh_screen() {
-    /* Console/text boot: there is no framebuffer to composite, and
-     * paint_desktop() polls the shared keyboard ring - running it here would
-     * race the console for every keystroke. Park the thread instead. */
+    /* Text-mode boot: nothing to composite; parking here also keeps
+     * paint_desktop() from racing the console for the keyboard ring. */
     if (!bfb_addr) {
         for (;;)
             halt();
@@ -245,27 +266,20 @@ void refresh_screen() {
 
     for (;;) {
         paint_desktop();
-        if (vbemem.buffer != vbemem.mem)
-            memcpy(vbemem.mem, vbemem.buffer, vbemem.buffer_size);
+        fb_present(0, 0, vbemem.xres, vbemem.yres);
     }
 }
 
-/** @brief Base of the drawing surface (back buffer, or the fb itself). */
-static inline uint8_t *surf(void) { return (uint8_t *) vbemem.buffer; }
-
+/* ------------------------------------------------------------------ *
+ *  Drawing primitives (all write the 32-bpp shadow)                   *
+ * ------------------------------------------------------------------ */
 void draw_pixel(int x, int y, uint32_t color) {
     if (!bfb_addr) return;
     if (x < 0 || x >= vbemem.xres || y < 0 || y >= vbemem.yres)
         return;
-
-    uint8_t *p = surf() + (uint32_t) y * vbemem.pitch + (uint32_t) x * fb_bytespp;
-    uint32_t native = pack_color(color);
-    if (fb_bytespp == 4) {
-        *(uint32_t *) p = native;
-    } else {
-        p[0] = native & 0xFF; p[1] = (native >> 8) & 0xFF;
-        p[2] = (native >> 16) & 0xFF;
-    }
+    uint32_t *p = (uint32_t *)
+        ((uint8_t *) vbemem.buffer + (uint32_t) y * vbemem.pitch) + x;
+    *p = (vbemem.buffer == (uint32_t *) fb_base) ? pack_color(color) : color;
 }
 
 void draw_rect(int x, int y, int w, int h, uint32_t color) {
@@ -277,19 +291,12 @@ void draw_rect(int x, int y, int w, int h, uint32_t color) {
     if (x + w > vbemem.xres) w = vbemem.xres - x;
     if (y + h > vbemem.yres) h = vbemem.yres - y;
 
-    uint32_t native = pack_color(color);
+    uint32_t v = (vbemem.buffer == (uint32_t *) fb_base) ? pack_color(color) : color;
     for (int i = 0; i < h; i++) {
-        uint8_t *row = surf() + (uint32_t)(y + i) * vbemem.pitch + (uint32_t) x * fb_bytespp;
-        if (fb_bytespp == 4) {
-            uint32_t *d = (uint32_t *) row;
-            for (int j = 0; j < w; j++)
-                d[j] = native;
-        } else {
-            for (int j = 0; j < w; j++) {
-                row[j*3] = native & 0xFF; row[j*3+1] = (native >> 8) & 0xFF;
-                row[j*3+2] = (native >> 16) & 0xFF;
-            }
-        }
+        uint32_t *d = (uint32_t *)
+            ((uint8_t *) vbemem.buffer + (uint32_t)(y + i) * vbemem.pitch) + x;
+        for (int j = 0; j < w; j++)
+            d[j] = v;
     }
 }
 
@@ -302,7 +309,7 @@ void draw_string(uint32_t x, uint32_t y, const char *text, uint32_t color) {
     ssfn_dst_pitch = vbemem.pitch;
     ssfn_dst_w = vbemem.xres;
     ssfn_dst_h = vbemem.yres;
-    ssfn_fg = pack_color(color);
+    ssfn_fg = (vbemem.buffer == (uint32_t *) fb_base) ? pack_color(color) : color;
 
     while (*text) {
         switch (*text) {
