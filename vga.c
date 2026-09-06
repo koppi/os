@@ -148,6 +148,11 @@ static void vga_scroll(void) {
  * @param c Character to write.
  */
 void vga_putchar(char c) {
+	/* Only valid after vga_init() has pointed terminalBuffer at 0xB8000, which
+	 * happens only on a text-mode boot. With a framebuffer up this is NULL and
+	 * the write would land on physical page 0. */
+	if (!terminalBuffer)
+		return;
 	if (c == '\n') {
 		// Move to new line.
 		terminalColumn = 0;

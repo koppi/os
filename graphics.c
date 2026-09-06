@@ -199,12 +199,15 @@ unsigned long createRGB(int r, int g, int b) {
 
 /** @brief Render one frame of the desktop: starfield background then the UI. */
 void paint_desktop() {
-    draw_rect(0, 0, 1280, 1024, 0x2D);
-    
+    int scr_w = vbemem.xres ? vbemem.xres : 1280;
+    int scr_h = vbemem.yres ? vbemem.yres : 1024;
+
+    draw_rect(0, 0, scr_w, scr_h, 0x2D);
+
     if (stars_initialized == 0) {
         for (int i = 0;i<MAX_STARS;i++){
-            stars[i].x=rand() % 1280;
-            stars[i].y=rand() % 1024;
+            stars[i].x=rand() % scr_w;
+            stars[i].y=rand() % scr_h;
             stars[i].speed = 1 + rand() % 16; // change 16 for diff effects
         }
         stars_initialized = 1;
@@ -212,10 +215,10 @@ void paint_desktop() {
 
     for (int i=0;i<MAX_STARS;i++) {
         stars[i].x -= stars[i].speed;
-        
+
         if (stars[i].x <= 0)
-            stars[i].x = 1280;
-        
+            stars[i].x = scr_w;
+
         draw_rect(stars[i].x, stars[i].y, 1, 1, 0xffffff);
     }
 

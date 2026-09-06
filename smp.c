@@ -266,8 +266,12 @@ void smp_report(void) {
     }
 }
 
-/** @brief Stop every other CPU (INIT IPI) — best effort, used before poweroff. */
+/** @brief Stop every other CPU (INIT IPI) — best effort, used before poweroff
+ *         and on panic. No-op before the APs (and the LAPIC MMIO) are up, so it
+ *         is safe to call from an early-boot panic. */
 void smp_halt_others(void) {
+    if (ncpu <= 1)
+        return;
     int me = (int) this_cpu()->index;
     for (int i = 0; i < MAX_CPU; i++)
         if (cpus[i].online && i != me)

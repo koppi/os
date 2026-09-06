@@ -6,6 +6,7 @@
 #include <kconsole.h>
 #include <graphics.h>
 #include <vga.h>
+#include <video.h>
 
 /** The character device kernel output goes to (serial UART during boot). */
 chardev_t *kconsole;
@@ -27,7 +28,8 @@ void putchar_(char c) {
     buf[0] = c;
     buf[1] = 0;
     write_log(buf);
-    vga_putchar(c);
+    vga_putchar(c);     /* VGA text mode (no-op once a framebuffer is up) */
+    fbcon_putc(c);      /* framebuffer console: the only sink on a serial-less box */
     if (ssh_output_hook)
         ssh_output_hook(c);
 }

@@ -7,10 +7,16 @@
 
 #include <types.h>
 
-/** @brief Map the boot framebuffer and allocate the back buffer. */
+/** @brief Map the boot framebuffer, allocate the back buffer, start fbcon. */
 void vbe_init();
 /** @brief Blit the back buffer to the visible framebuffer (one frame). */
 void refresh_screen();
+
+/** @brief Render one char straight to the visible framebuffer (boot / panic).
+ *         No-op until @ref vbe_init has run. */
+void fbcon_putc(char c);
+/** @return non-zero once the framebuffer text console is usable. */
+int fbcon_active(void);
 /** @brief Plot one pixel in the back buffer. */
 void draw_pixel(int x, int y, uint32_t color);
 /** @brief Fill an axis-aligned rectangle. */

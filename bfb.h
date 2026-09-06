@@ -24,3 +24,11 @@ extern uint8_t bfb_green_size;  /**< Bit width of the green channel. */
 
 extern uint8_t bfb_blue_pos;    /**< Bit position of the blue channel. */
 extern uint8_t bfb_blue_size;   /**< Bit width of the blue channel. */
+
+extern uint32_t bfb_span;       /**< Framebuffer size in bytes (pitch*height), set by vbe_init. */
+
+/** @return First / last page-directory slot the framebuffer mapping spans, or
+ *          -1 when there is no framebuffer. Used by create_address_space() so a
+ *          panic from a user-process context can still paint the screen. */
+int bfb_pde_lo(void);
+int bfb_pde_hi(void);
