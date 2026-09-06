@@ -25,3 +25,29 @@ void hda_play_pcm(const int16_t *samples, uint32_t nframes, uint32_t rate);
 
 /** @brief Play a @p ms-long square-wave tone at @p freq Hz through the codec. */
 void hda_beep(uint32_t freq, uint32_t ms);
+
+/* ------------------------------------------------------------------ *
+ *  Continuous (streamed) playback                                     *
+ *                                                                    *
+ *  A cyclic double buffer the caller keeps refilling as it drains --  *
+ *  the path the MOD player uses on a real laptop (no SB16 there).     *
+ * ------------------------------------------------------------------ */
+
+/** @brief Interleaved stereo 16-bit frames the codec wants filled. */
+#define HDA_STREAM_HALF_FRAMES 4096
+
+/**
+ * @brief Start output stream 0 looping a silent cyclic buffer at @p rate Hz
+ *        (stereo, 16-bit). @return non-zero once the DMA engine is running.
+ */
+int  hda_stream_start(uint32_t rate);
+
+/** @brief Stop the streamed-playback DMA engine. */
+void hda_stream_stop(void);
+
+/**
+ * @brief Poll the DMA position and, for each half the codec has finished with,
+ *        call @p fill(dst, HDA_STREAM_HALF_FRAMES) to refill it (interleaved
+ *        stereo 16-bit). Cheap to call often; a no-op until a half drains.
+ */
+void hda_stream_service(void (*fill)(int16_t *dst, uint32_t nframes));

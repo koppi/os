@@ -8,6 +8,7 @@
 #include <lib/string.h>
 #include <idt.h>
 #include <log.h>
+#include <hda.h>
 
 #include <hxcmod.h>
 #include <modfile.h>
@@ -66,6 +67,11 @@ static uint8_t buffer_flip = 0;
 static modcontext modctx;
 
 static uint8_t sound_muted = 1;
+
+/* Set once MOD playback has been handed to the HD Audio codec (see
+ * sound_hda_thread). The SB16 DMA handler then feeds the card silence so the
+ * module is never heard twice on a box that has both. */
+static uint8_t hda_active = 0;
 
 /** @brief Render @p len samples of MOD audio into @p buf. */
 static void fill(short int *buf, size_t len) {
@@ -191,7 +197,7 @@ static void transfer(void *buf, uint32_t len) {
 void sb16_irq_handler() {
     buffer_flip = !buffer_flip;
 
-    if (!sound_muted) {
+    if (!sound_muted && !hda_active) {
         fill(
             &buffer[buffer_flip ? 0 : (BUFFER_SIZE / 2)],
             (BUFFER_SIZE / 2));
@@ -239,5 +245,51 @@ void sound_init() {
 
         printf("playing module '%s'.\n", modctx.song.title);
         klogf(LOG_DEBUG, "sound_init() ok.\n");
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ *  HD Audio path                                                      *
+ *                                                                    *
+ *  A real laptop has no Sound Blaster: when the PCI scan turns up an  *
+ *  Azalia controller with a working codec, MOD playback moves onto it.*
+ *  The hxcmod core still renders mono; we fan it out to both channels *
+ *  of the codec's stereo stream.                                      *
+ * ------------------------------------------------------------------ */
+
+/** @brief Refill one half of the HD Audio ring: render mono MOD audio, then
+ *         duplicate it across the interleaved stereo frames the codec wants. */
+static void hda_fill(int16_t *dst, uint32_t nframes) {
+    if (sound_muted) {
+        memset(dst, 0, nframes * 2 * sizeof(int16_t));
+        return;
+    }
+
+    static short mono[HDA_STREAM_HALF_FRAMES];
+    uint32_t n = nframes > HDA_STREAM_HALF_FRAMES ? HDA_STREAM_HALF_FRAMES
+                                                  : nframes;
+    hxcmod_fillbuffer(&modctx, mono, n, NULL);
+    for (uint32_t i = 0; i < n; i++)
+        dst[2 * i] = dst[2 * i + 1] = mono[i];
+}
+
+/**
+ * @brief Kernel thread: start the HD Audio output stream and keep its cyclic
+ *        buffer fed from the MOD player. Started from @ref main_proc only when
+ *        @ref hda_present, so a Sound Blaster box never gets here.
+ */
+void sound_hda_thread(void) {
+    if (!hda_stream_start(SAMPLE_RATE)) {
+        klogf(LOG_WARNING, "sound: HD Audio stream would not start\n");
+        while (1) sleep(1000);
+    }
+
+    hda_active = 1;                    /* hush the SB16 handler, if it is live */
+    klogf(LOG_INFO, "sound: MOD playback routed through HD Audio\n");
+    printf("playing module '%s' through HD Audio.\n", modctx.song.title);
+
+    for (;;) {
+        hda_stream_service(hda_fill);
+        sleep(5);                      /* one half is ~90 ms; poll well inside */
     }
 }

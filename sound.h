@@ -51,3 +51,6 @@ void sound_init();
 void sound_toggle();
 /** @brief SB16 DMA half/full-buffer interrupt handler. */
 void sb16_irq_handler();
+/** @brief Kernel thread: stream MOD playback through the HD Audio codec.
+ *         Start it (from @ref main_proc) only when @ref hda_present. */
+void sound_hda_thread(void);

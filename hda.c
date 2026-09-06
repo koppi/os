@@ -91,6 +91,14 @@ static uint32_t osd_base;
 static uint8_t  codec_addr, dac_nid, pin_nid;
 static uint8_t  corb_wp, rirb_rp;
 
+/* Streamed-playback state (see hda_stream_*). */
+static int      streaming;
+static int      stream_primed;
+static uint32_t stream_half_bytes;
+static int      stream_playing_half;
+static int16_t  stream_ring[HDA_STREAM_HALF_FRAMES * 2 /* ch */ * 2 /* halves */]
+                __attribute__((aligned(4096)));
+
 static uint16_t r16(uint32_t o)             { return *(volatile uint16_t *)(mmio + o); }
 static uint32_t r32(uint32_t o)             { return *(volatile uint32_t *)(mmio + o); }
 static void     w8 (uint32_t o, uint8_t v)  { *(volatile uint8_t  *)(mmio + o) = v; }
@@ -173,9 +181,28 @@ static uint16_t fmt_for_rate(uint32_t rate) {
     return (rate >= 44000 && rate < 48000) ? 0x4011 /* 44.1k */ : 0x0011 /* 48k */;
 }
 
+/** @brief Reset output stream 0 (SRST toggle) and wait for each edge. */
+static void osd_reset(uint32_t sd) {
+    w8(sd + SD_CTL, SDCTL_SRST);
+    for (int i = 0; i < 1000 && !(r32(sd + SD_CTL) & SDCTL_SRST); i++) io_wait();
+    w8(sd + SD_CTL, 0);
+    for (int i = 0; i < 1000 && (r32(sd + SD_CTL) & SDCTL_SRST); i++) io_wait();
+}
+
+/** @brief Point the DAC at stream @p strm / @p fmt and open the output pin. */
+static void codec_bind_output(uint16_t fmt, uint8_t strm) {
+    v4 (dac_nid, V4_SET_FORMAT, fmt);
+    v12(dac_nid, V_SET_STREAM_CHN, strm << 4);
+    v4 (dac_nid, V4_SET_AMP, 0xB000 | 0x7F);       /* out amp, L+R, gain 0x7F */
+    v12(pin_nid, V_SET_CONN_SEL, 0);
+    v12(pin_nid, V_SET_PIN_CTL, 0x40);             /* output enable */
+    v4 (pin_nid, V4_SET_AMP, 0xB000 | 0x7F);
+    v12(pin_nid, V_SET_EAPD, 0x02);                /* external amp / EAPD on */
+}
+
 void hda_play_pcm(const int16_t *samples, uint32_t nframes, uint32_t rate) {
-    if (!have_hda || !samples || !nframes)
-        return;
+    if (!have_hda || streaming || !samples || !nframes)
+        return;   /* streamed playback owns the one output stream */
 
     uint32_t bytes = nframes * 4;
     void *buf = kmalloc(bytes < 4096 ? 4096 : bytes);
@@ -187,10 +214,7 @@ void hda_play_pcm(const int16_t *samples, uint32_t nframes, uint32_t rate) {
     uint32_t sd = osd_base;
     uint8_t strm = 1;
 
-    w8(sd + SD_CTL, SDCTL_SRST);
-    for (int i = 0; i < 1000 && !(r32(sd + SD_CTL) & SDCTL_SRST); i++) io_wait();
-    w8(sd + SD_CTL, 0);
-    for (int i = 0; i < 1000 && (r32(sd + SD_CTL) & SDCTL_SRST); i++) io_wait();
+    osd_reset(sd);
 
     memset(bdl, 0, sizeof(bdl));
     bdl[0].addr  = (uint32_t) buf;
@@ -204,13 +228,7 @@ void hda_play_pcm(const int16_t *samples, uint32_t nframes, uint32_t rate) {
     w16(sd + SD_FMT, fmt);
     w32(sd + SD_CTL, (r32(sd + SD_CTL) & 0x000FFFFF) | ((uint32_t) strm << 20));
 
-    v4 (dac_nid, V4_SET_FORMAT, fmt);
-    v12(dac_nid, V_SET_STREAM_CHN, strm << 4);
-    v4 (dac_nid, V4_SET_AMP, 0xB000 | 0x7F);       /* out amp, L+R, gain 0x7F */
-    v12(pin_nid, V_SET_CONN_SEL, 0);
-    v12(pin_nid, V_SET_PIN_CTL, 0x40);             /* output enable */
-    v4 (pin_nid, V4_SET_AMP, 0xB000 | 0x7F);
-    v12(pin_nid, V_SET_EAPD, 0x02);               /* external amp / EAPD on */
+    codec_bind_output(fmt, strm);
 
     w8(sd + SD_STS, 0x1C);
     w32(sd + SD_CTL, r32(sd + SD_CTL) | SDCTL_RUN);
@@ -222,8 +240,8 @@ void hda_play_pcm(const int16_t *samples, uint32_t nframes, uint32_t rate) {
 }
 
 void hda_beep(uint32_t freq, uint32_t ms) {
-    if (!have_hda || !freq || !ms)
-        return;
+    if (!have_hda || streaming || !freq || !ms)
+        return;   /* the MOD stream has the output stream; skip the blip */
     uint32_t rate = 48000;
     uint32_t nframes = (rate * ms) / 1000;
     if (nframes > rate) nframes = rate;            /* cap at 1 s */
@@ -238,6 +256,90 @@ void hda_beep(uint32_t freq, uint32_t ms) {
     }
     hda_play_pcm(s, nframes, rate);
     kfree(s);
+}
+
+/* ------------------------------------------------------------------ *
+ *  Streamed playback (cyclic double buffer, polled)                   *
+ * ------------------------------------------------------------------ */
+#define STREAM_HALF   HDA_STREAM_HALF_FRAMES
+#define STREAM_FRAMES (STREAM_HALF * 2)
+#define STREAM_BYTES  (STREAM_FRAMES * 4)          /* stereo s16 */
+
+int hda_stream_start(uint32_t rate) {
+    if (!have_hda)
+        return 0;
+    if (streaming)
+        return 1;
+
+    uint16_t fmt = fmt_for_rate(rate);
+    uint32_t sd  = osd_base;
+    uint8_t  strm = 1;
+
+    memset(stream_ring, 0, sizeof(stream_ring));
+    stream_half_bytes   = STREAM_HALF * 4;
+    stream_playing_half = 0;
+    stream_primed       = 0;
+
+    osd_reset(sd);
+
+    /* Two BDL entries over one contiguous ring: the DMA engine loops back to
+     * entry 0 after entry 1, so the buffer plays forever while RUN is set. */
+    memset(bdl, 0, sizeof(bdl));
+    bdl[0].addr  = (uint32_t) &stream_ring[0];
+    bdl[0].len   = stream_half_bytes;
+    bdl[0].flags = 1;                              /* IOC */
+    bdl[1].addr  = (uint32_t) &stream_ring[STREAM_HALF * 2];
+    bdl[1].len   = stream_half_bytes;
+    bdl[1].flags = 1;                              /* IOC */
+
+    w32(sd + SD_BDLPL, (uint32_t) &bdl[0]);
+    w32(sd + SD_BDLPU, 0);
+    w32(sd + SD_CBL, STREAM_BYTES);
+    w16(sd + SD_LVI, 1);
+    w16(sd + SD_FMT, fmt);
+    w32(sd + SD_CTL, (r32(sd + SD_CTL) & 0x000FFFFF) | ((uint32_t) strm << 20));
+
+    codec_bind_output(fmt, strm);
+
+    w8(sd + SD_STS, 0x1C);
+    w32(sd + SD_CTL, r32(sd + SD_CTL) | SDCTL_RUN);
+
+    streaming = 1;
+    return 1;
+}
+
+void hda_stream_stop(void) {
+    if (!streaming)
+        return;
+    w32(osd_base + SD_CTL, r32(osd_base + SD_CTL) & ~SDCTL_RUN);
+    streaming = 0;
+}
+
+void hda_stream_service(void (*fill)(int16_t *dst, uint32_t nframes)) {
+    if (!streaming || !fill)
+        return;
+
+    /* Link position in buffer -> which half the DMA engine is reading now.
+     * Once it has crossed into the other half, the one it left is free to
+     * refill. We poll far faster than a half drains, so at most one crossing
+     * is pending per call. */
+    uint32_t lpib = r32(osd_base + SD_LPIB);
+    int cur = (lpib >= stream_half_bytes) ? 1 : 0;
+
+    if (!stream_primed) {
+        /* Get real audio into the half the engine has not reached yet, so
+         * only the first ~90 ms (one half) plays as silence. */
+        int ahead = !cur;
+        fill(&stream_ring[ahead * STREAM_HALF * 2], STREAM_HALF);
+        stream_playing_half = cur;
+        stream_primed = 1;
+        return;
+    }
+
+    if (cur != stream_playing_half) {
+        fill(&stream_ring[stream_playing_half * STREAM_HALF * 2], STREAM_HALF);
+        stream_playing_half = cur;
+    }
 }
 
 int hda_present(void) { return have_hda; }

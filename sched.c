@@ -43,6 +43,8 @@
 #include <usb.h>
 #include <e1000.h>
 #include <net.h>
+#include <sound.h>
+#include <hda.h>
 
 /** Master switch (pit.c): non-zero once the scheduler is live. */
 extern uint8_t sched_on;
@@ -116,6 +118,8 @@ void main_proc() {
     start_kernel_proc("usb", &usb_thread);
     if (e1000_present())
         start_kernel_proc("net", &net_thread);
+    if (hda_present())
+        start_kernel_proc("hda-mod", &sound_hda_thread);
     start_kernel_proc("ssh-worker", &ssh_worker_func);
     //start_kernel_proc("demo_thread", &demo_thread);
     //start_kernel_proc("uart_read", &uart_read_proc);

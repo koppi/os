@@ -23,6 +23,8 @@ VGA=${VGA:-std}
 COMMON=(-m 3G -smp 4 -no-reboot $KVM -vga "$VGA"
         -device qemu-xhci,id=xhci -device usb-kbd -device usb-tablet
         -netdev user,id=n0 -device e1000e,netdev=n0
+        -audiodev none,id=snd0
+        -device intel-hda -device hda-output,audiodev=snd0
         -drive id=sata,file="$OUT/sata.img",format=raw,if=none
         -device ich9-ahci,id=ahci -device ide-hd,drive=sata,bus=ahci.0)
 
