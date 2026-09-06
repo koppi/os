@@ -633,10 +633,12 @@ What comes up on the X250:
 | Ethernet    | Intel I218-LM ([`e1000.c`](e1000.c))      | shares the 8254x register model; PCH-LAN reset quirks handled |
 | Timers / IRQ | LAPIC timer + PIT ch.2 + i8259 virtual-wire | no dependency on IRQ 0 being delivered |
 | SMP         | ACPI MADT (RSDP from the multiboot2 tag under UEFI) | all cores |
+| Audio | Intel HD Audio ([`hda.c`](hda.c)) | analog codec `8086:9ca0`; one-shot PCM / `beep` |
 | RTC, ACPI power-off, PC speaker | as on QEMU | |
 
-Not supported: the Intel Wireless-AC 7265 WiFi, the SD-card reader, the
-fingerprint reader, HDA audio, and USB mass storage.
+Not supported: the Intel Wireless-AC 7265 WiFi, the Realtek RTS5227 SD-card
+reader, the fingerprint reader, and USB mass storage. Every device is named
+in the `pci` output regardless.
 
 `test/x250-boot.sh` boots `os.iso` in QEMU `q35` configurations that
 approximate the X250 (AHCI, xHCI, `e1000e`), under both SeaBIOS and OVMF
