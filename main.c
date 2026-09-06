@@ -30,6 +30,7 @@
 #include <printf.h>
 #include <commands.h>
 #include <cmdline.h>
+#include <pat.h>
 
 #include <acpi.h>
 #include <apic.h>
@@ -179,6 +180,7 @@ void kernel_main(unsigned long magic, unsigned long addr)
     kheap_init();
     if (cmdline_has("nofb"))
         bfb_addr = 0;               /* force VGA text mode */
+    pat_init();                     /* WC memory type -> a fast framebuffer */
     if (!bfb_addr) vga_init();
     else vbe_init();
     gdt_init();

@@ -626,7 +626,7 @@ What comes up on the X250:
 
 | Subsystem   | Driver                                    | Notes |
 |-------------|-------------------------------------------|-------|
-| Display     | multiboot2 GOP/VBE framebuffer ([`video.c`](video.c)) | any width/pitch/bpp; 32-bpp GOP is ideal, 24-bpp VBE works |
+| Display     | multiboot2 GOP/VBE framebuffer ([`video.c`](video.c)), write-combining via PAT ([`pat.c`](pat.c)) | any width/pitch/bpp; 32-bpp GOP is ideal, 24-bpp VBE works. No native modeset — the firmware sets the mode, the kernel just draws to it |
 | Keyboard / TrackPoint / touchpad | i8042 PS/2 ([`keyboard.c`](keyboard.c), [`mouse.c`](mouse.c)) | full controller bring-up, not firmware-dependent |
 | Storage     | AHCI / SATA ([`ahci.c`](ahci.c))          | the M.2 SSD, mounted `/hda` |
 | USB         | xHCI ([`xhci.c`](xhci.c))                 | external HID keyboards / mice (boot protocol) |
@@ -635,6 +635,16 @@ What comes up on the X250:
 | SMP         | ACPI MADT (RSDP from the multiboot2 tag under UEFI) | all cores |
 | Audio | Intel HD Audio ([`hda.c`](hda.c)) | analog codec `8086:9ca0`; one-shot PCM / `beep` |
 | RTC, ACPI power-off, PC speaker | as on QEMU | |
+
+The framebuffer is mapped **write-combining** (a WC entry programmed into
+IA32_PAT, [`pat.c`](pat.c)) rather than strong-uncacheable. On real hardware
+the panel lives across the display link, so an uncached mapping turned every
+pixel into its own bus transaction and the desktop crawled; WC lets the CPU
+burst a cache line at a time. There is no native Intel-graphics driver — no
+GEM, no GTT, no modesetting — the firmware brings up the panel and the kernel
+composites into the linear framebuffer it was handed. The compositor is
+capped at ~60 fps so it stops re-blitting the whole screen as fast as the bus
+allows.
 
 Not supported: the Intel Wireless-AC 7265 WiFi, the Realtek RTS5227 SD-card
 reader, the fingerprint reader, and USB mass storage. Every device is named
@@ -659,7 +669,7 @@ make clean        # remove build artifacts
 
 UART/log → parse multiboot → **relocate the initrd module** → physical MM
 (e820, initrd frames reserved) → VMM (initrd identity-mapped) → kernel heap →
-VGA or VBE → GDT → IDT → FPU → PIC → PIT (1 kHz) → VFS → floppy detect →
+PAT (WC memory type) → VGA or VBE → GDT → IDT → FPU → PIC → PIT (1 kHz) → VFS → floppy detect →
 keyboard → mouse → UART RX IRQ → sound → syscalls → TSS → RTC →
 PCI (enumerate + bind drivers) → **ACPI/MADT → Local APIC → AP bring-up** →
 scheduler.

@@ -20,6 +20,8 @@
 #include <lib/string.h>
 #include <bfb.h>
 #include <log.h>
+#include <pat.h>
+#include <io.h>
 
 #define SSFN_NOIMPLEMENTATION
 #define SSFN_CONSOLEBITMAP_TRUECOLOR
@@ -31,7 +33,8 @@ extern ssfn_font_t _binary_unifont_sfn_start;
 
 /* Hardware framebuffer parameters (the shadow is always 32-bpp; vbemem.pitch
  * is the *shadow* pitch so the draw primitives need no special-casing).
- * fb_base is mapped PCD (uncached) so a plain pointer is fine. */
+ * fb_base is mapped write-combining (or uncached, no PAT) so a plain pointer
+ * is fine -- but WC writes are weakly ordered, hence the sfence in fb_present. */
 static uint8_t *fb_base;
 static uint32_t fb_pitch;
 static uint32_t fb_bpp;
@@ -80,6 +83,9 @@ static void fb_present(int x, int y, int w, int h) {
             }
         }
     }
+    /* Drain the write-combining buffers so the pixels reach the panel now
+     * (a panic() screen must not linger half-written in a fill buffer). */
+    asm volatile("sfence" ::: "memory");
 }
 
 /* ------------------------------------------------------------------ *
@@ -211,12 +217,21 @@ void vbe_init() {
           (uint32_t) bfb_addr, bfb_width, bfb_height, fb_bpp, fb_pitch,
           fb_span / 1024, px_rsh, px_gsh, px_bsh);
 
-    /* 1. Map the framebuffer 1:1, cache-disabled. */
+    /* 1. Map the framebuffer 1:1. Write-combining if pat_init() gave us a WC
+     *    PAT slot -- the CPU then bursts a whole cache line of pixels per
+     *    transaction instead of one uncached word at a time, which is the
+     *    difference between a fluid and a crawling desktop on real hardware
+     *    (the X250's framebuffer is across the display link, not host RAM).
+     *    Fall back to strong-uncacheable where PAT is unavailable. */
+    int wc = pat_available();
+    uint32_t fb_flags = PAGE_PRESENT | PAGE_RW |
+                        (wc ? PAGE_WC : (PAGE_PCD | PAGE_PWT));
     uint32_t fb_pa = (uint32_t) bfb_addr;
     for (uint32_t off = 0; off < fb_span + PAGE_SIZE; off += PAGE_SIZE)
-        vmm_map_phys(get_kern_directory(), fb_pa + off, fb_pa + off,
-                     PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
+        vmm_map_phys(get_kern_directory(), fb_pa + off, fb_pa + off, fb_flags);
     fb_base = (uint8_t *) fb_pa;
+    klogf(LOG_INFO, "vbe: framebuffer mapped %s\n",
+          wc ? "write-combining" : "uncached");
 
     /* 2. The 32-bpp shadow surface. All drawing targets this; fb_present()
      *    converts it to the hardware format. Scattered frames, contiguous VA. */
@@ -267,6 +282,11 @@ void refresh_screen() {
     for (;;) {
         paint_desktop();
         fb_present(0, 0, vbemem.xres, vbemem.yres);
+        /* Cap the compositor to ~60 fps. Left unthrottled it redraws the whole
+         * desktop and re-blits the entire screen as fast as the memory bus
+         * allows, pinning a core and saturating the framebuffer link for no
+         * visible benefit. */
+        sleep(16);
     }
 }
 

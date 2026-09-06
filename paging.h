@@ -16,6 +16,8 @@
 #define PAGE_PWT            0x8        /**< Write-through (page-level). */
 #define PAGE_PCD            0x10       /**< Cache-disable (page-level) — for MMIO. */
 #define PAGE_ACCESSED       0x20       /**< Accessed. */
+#define PAGE_PAT            0x80       /**< PTE PAT bit — selects IA32_PAT slot 4..7. */
+#define PAGE_WC             PAGE_PAT   /**< Write-combining (once pat_init has run). */
 #define PAGE_FRAME_MASK     0x7FFFF000 /**< Frame-address field of a PTE/PDE. */
 
 typedef uint32_t page_dir_t; /**< A page-directory (or page-table) entry. */

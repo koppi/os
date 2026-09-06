@@ -26,6 +26,7 @@
 #include <tss.h>
 #include <lib/string.h>
 #include <cmdline.h>
+#include <pat.h>
 #include <log.h>
 
 cpu_t cpus[MAX_CPU];
@@ -211,6 +212,11 @@ void smp_init(void) {
  */
 void __attribute__((noreturn)) ap_main(void) {
     cpu_t *c = this_cpu();
+
+    /* Match the BSP's PAT before this CPU can touch the framebuffer (its first
+     * klogf below paints through fbcon). Without it slot 4 is still the
+     * power-on WB and this core would cache the framebuffer. */
+    pat_init();
 
     gdt_load_ap();
     idt_load();
