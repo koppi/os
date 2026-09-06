@@ -174,6 +174,32 @@ void delay_400ns() {
         inportb(ata_info.cur_hdd.status_reg);
 }
 
+/* Bound on the data-transfer status polls: enough for a slow real drive,
+ * short enough that a channel that stops responding mid-command fails the
+ * I/O instead of wedging the caller (and, through the VFS, the shell). */
+#define ATA_XFER_MAX 2000000
+
+/** @brief Spin until BSY clears and DRQ asserts. @return 0 on timeout / error. */
+static int ata_wait_drq(void) {
+    for (int i = 0; i < ATA_XFER_MAX; i++) {
+        uint8_t st = inportb(ata_info.cur_hdd.status_reg);
+        if (st == 0xFF)                 return 0;   /* channel floated away */
+        if (st & 0x01)                  return 0;   /* ERR */
+        if (!(st & 0x80) && (st & 0x08)) return 1;  /* !BSY && DRQ */
+    }
+    return 0;
+}
+
+/** @brief Spin until BSY clears. @return 0 on timeout. */
+static int ata_wait_ready(void) {
+    for (int i = 0; i < ATA_XFER_MAX; i++) {
+        uint8_t st = inportb(ata_info.cur_hdd.status_reg);
+        if (st == 0xFF) return 0;
+        if (!(st & 0x80)) return 1;
+    }
+    return 0;
+}
+
 char *ata_read_sector(int lba) {
     // Shared scratch sector, like floppy_read_sector(): the caller must consume
     // the data before the next read. Returning a fresh kmalloc() here leaked
@@ -185,15 +211,12 @@ char *ata_read_sector(int lba) {
     outportb(ata_info.cur_hdd.lba_mid_reg, (lba & 0x0000ff00) >> 8);
     outportb(ata_info.cur_hdd.lba_high_reg, (lba & 0x00ff0000) >> 16);
     outportb(ata_info.cur_hdd.status_reg, 0x20);
-    //ata_wait_for_irq();
     delay_400ns();
 
-    // Wait for BSY to clear and DRQ to assert on the *status* register.
-    // (Polling the data register here would consume bytes from the sector.)
-    uint8_t st;
-    do {
-        st = inportb(ata_info.cur_hdd.status_reg);
-    } while((st & 0x80) || !(st & 0x08));
+    if (!ata_wait_drq()) {
+        memset(ata_buf, 0, sizeof(ata_buf));
+        return (char *) ata_buf;
+    }
 
     for(int i = 0; i < 256; i++) {
         ((uint16_t *) ata_buf)[i] = inportw(ata_info.cur_hdd.data_reg);
@@ -212,27 +235,22 @@ int ata_write_sector(int lba) {
     outportb(ata_info.cur_hdd.status_reg, 0x30); // WRITE SECTORS
     delay_400ns();
 
-    uint8_t st;
-    do {
-        st = inportb(ata_info.cur_hdd.status_reg);
-    } while((st & 0x80) || !(st & 0x08));
+    if (!ata_wait_drq())
+        return 0;
 
     for(int i = 0; i < 256; i++) {
         outportw(ata_info.cur_hdd.data_reg, ((uint16_t *) ata_buf)[i]);
     }
     delay_400ns();
 
-    do {
-        st = inportb(ata_info.cur_hdd.status_reg);
-    } while(st & 0x80);
+    if (!ata_wait_ready())
+        return 0;
 
     // FLUSH CACHE, so the write actually reaches the (virtual) platter
     // before a caller assumes it's durable.
     outportb(ata_info.cur_hdd.status_reg, 0xE7);
     delay_400ns();
-    do {
-        st = inportb(ata_info.cur_hdd.status_reg);
-    } while(st & 0x80);
+    ata_wait_ready();
 
     return 1;
 }

@@ -8,6 +8,7 @@
 #include <kheap.h>
 #include <io.h>
 #include <printf.h>
+#include <spinlock.h>
 
 // Global var, store current date and time
 datetime_t current_datetime;
@@ -20,6 +21,14 @@ int is_updating_rtc() {
     outportb(CMOS_ADDR, 0x0A);
     uint32_t status = inportb(CMOS_DATA);
     return (status & 0x80);
+}
+
+/** @brief Spin (bounded) until the RTC is not mid-update. The UIP bit clears
+ *         within ~2 ms on real hardware; the bound stops a wedged/absent RTC
+ *         from hanging the caller (and the boot). */
+static void rtc_wait_ready(void) {
+    for (int i = 0; i < 1000000 && is_updating_rtc(); i++)
+        __asm__ volatile("pause");
 }
 
 /*
@@ -42,8 +51,10 @@ void set_rtc_register(uint16_t reg_num, uint8_t val) {
  * Read current date and time from rtc, store in global var current_datetime
  * */
 void rtc_read_datetime() {
-    // Wait until rtc is not updating
-    while(is_updating_rtc());
+    /* paint_desktop() reads the clock every frame while `date` / ntp may read
+     * it from another CPU: serialise the index+data port pair. */
+    uint32_t f = spin_lock(&cmos_lock);
+    rtc_wait_ready();
 
     current_datetime.second = get_rtc_register(0x00);
     current_datetime.minute = get_rtc_register(0x02);
@@ -63,6 +74,7 @@ void rtc_read_datetime() {
         current_datetime.month = (current_datetime.month & 0x0F) + ((current_datetime.month / 16) * 10);
         current_datetime.year = (current_datetime.year & 0x0F) + ((current_datetime.year / 16) * 10);
     }
+    spin_unlock(&cmos_lock, f);
 }
 
 /*
@@ -77,6 +89,7 @@ static uint8_t to_bcd(uint8_t v) {
 }
 
 void rtc_write_datetime(datetime_t * dt) {
+    uint32_t f = spin_lock(&cmos_lock);
     int bcd = !(get_rtc_register(0x0B) & 0x04);
 
     uint8_t sec = dt->second, min = dt->minute, hr = dt->hour;
@@ -86,8 +99,7 @@ void rtc_write_datetime(datetime_t * dt) {
         day = to_bcd(day); mon = to_bcd(mon); yr  = to_bcd(yr);
     }
 
-    // Wait until rtc is not updating
-    while(is_updating_rtc());
+    rtc_wait_ready();
 
     set_rtc_register(0x00, sec);
     set_rtc_register(0x02, min);
@@ -95,6 +107,7 @@ void rtc_write_datetime(datetime_t * dt) {
     set_rtc_register(0x07, day);
     set_rtc_register(0x08, mon);
     set_rtc_register(0x09, yr);
+    spin_unlock(&cmos_lock, f);
 }
 
 /* ------------------------------------------------------------------ *
