@@ -21,6 +21,7 @@ void smp_halt_others(void);
 void panic(const char *format, ...) {
     disable_int();
     smp_halt_others();
+    fbcon_resume();   /* make the fault visible even after the desktop is up */
 
     printf("\n\n*** KERNEL PANIC ***\n");
 

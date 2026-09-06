@@ -17,6 +17,10 @@ void refresh_screen();
 void fbcon_putc(char c);
 /** @return non-zero once the framebuffer text console is usable. */
 int fbcon_active(void);
+/** @brief Stop / restart kernel-log rendering to the framebuffer. The desktop
+ *         compositor suspends it; panic() resumes it. */
+void fbcon_suspend(void);
+void fbcon_resume(void);
 /** @brief Plot one pixel in the back buffer. */
 void draw_pixel(int x, int y, uint32_t color);
 /** @brief Fill an axis-aligned rectangle. */

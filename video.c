@@ -120,6 +120,12 @@ void fbcon_putc(char c) {
 /** @return non-zero once @ref fbcon_init has set up a usable framebuffer. */
 int fbcon_active(void) { return fbcon_on; }
 
+/** @brief Stop rendering kernel log to the framebuffer (the desktop compositor
+ *         has taken over the screen; the log lives in its on-screen window now).
+ *         A later panic() re-enables it so the fault is still visible. */
+void fbcon_suspend(void) { fbcon_on = 0; }
+void fbcon_resume(void)  { if (vbemem.mem) fbcon_on = 1; }
+
 /** @brief Set up fbcon over the framebuffer already recorded in @ref vbemem. */
 static void fbcon_init(void) {
     ssfn_font = &_binary_unifont_sfn_start;
@@ -232,6 +238,10 @@ void refresh_screen() {
         for (;;)
             halt();
     }
+
+    /* The compositor owns the screen now; boot log continues in the desktop's
+     * console window (write_log), so stop doubling it onto the framebuffer. */
+    fbcon_suspend();
 
     for (;;) {
         paint_desktop();

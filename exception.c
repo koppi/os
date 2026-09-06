@@ -13,6 +13,13 @@
 #include <proc.h>
 #include <mm.h>
 #include <paging.h>
+#include <video.h>
+
+/** @brief Kernel-mode fault: route the register dump to the framebuffer too. */
+static inline void diag_to_screen(uint32_t cs) {
+    if (!(cs & 3))
+        fbcon_resume();
+}
 
 /** Entry point jumped to in userspace to unwind a faulted process. */
 void (*return_error)() = (void *) RETURN_ADDR;
@@ -128,6 +135,7 @@ void ex_bounds_check() {
  *           unwinds the process.
  */
 void ex_invalid_opcode(struct regs *re) {
+    diag_to_screen(re->cs);
     printf("Invalid opcode\n");
     printf("eip: %x cs: %x\neax: %u ebx: %u ecx: %u edx: %u\nesp: %x ebp: %x esi: %u edi: %u\nds: %x es: %x fs: %x gs: %x\n", re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp, re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
     if(is_user_mode_cs(re->cs)) {
@@ -185,6 +193,7 @@ void ex_stack_fault() {
  * @param re Saved register/error-code frame.
  */
 void ex_gpf(struct regs_error *re) {
+    diag_to_screen(re->cs);
     printf("\nGeneral protection fault\nError code: %u\n", re->error);
     printf("eip: %x cs: %x\neax: %u ebx: %u ecx: %u edx: %u\nesp: %x ebp: %x esi: %u edi: %u\nds: %x es: %x fs: %x gs: %x\n", re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp, re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
     printf("cr2: %x cr3: %x\n", get_cr2(), get_pdbr());
@@ -202,6 +211,7 @@ void ex_gpf(struct regs_error *re) {
  * @param re Saved register/error-code frame.
  */
 void ex_page_fault(struct regs_error *re) {
+    diag_to_screen(re->cs);
     int virt_addr = get_cr2();
     mm_addr_t phys_addr = (mm_addr_t) get_phys_addr(get_page_directory(), virt_addr);
 
