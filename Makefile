@@ -134,6 +134,11 @@ qemu-nox: iso
 	@echo "QEMU .."
 	@$(QEMU) $(QEMUFLAGS) -boot d,menu=off -display none -serial 'mon:stdio'
 
+# Boot os.iso in X250-shaped QEMU configs (q35 + AHCI + xHCI + e1000e) under
+# both SeaBIOS and OVMF/UEFI; serial log + screenshot per config in /tmp/x250-boot.
+qemu-x250: iso
+	@bash test/x250-boot.sh all
+
 $(KERNEL): $(OBJS)
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -o $@ $^
@@ -174,6 +179,6 @@ clean::
 	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin *.d lib/*.d *~ os.iso iso initrd.img docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox cloc docs clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 cloc docs clean
 
 -include $(OBJS:.o=.d)

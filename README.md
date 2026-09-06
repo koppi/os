@@ -607,6 +607,41 @@ can be run back to back in one session. On real hardware, write `os.iso` to a
 USB stick (`sudo dd if=os.iso of=/dev/sdX bs=4M` — it is isohybrid) and boot
 it; the OS comes up the same way, with no disk required.
 
+### Booting on real hardware (ThinkPad X250 and similar)
+
+`os.iso` is a hybrid image: `grub-mkrescue` builds it with both a BIOS El
+Torito catalog and an EFI System Partition (`BOOTX64.EFI`), so the same USB
+stick boots under **UEFI** or **Legacy/CSM**. On a ThinkPad X250 either works
+— for CSM, set *Startup → UEFI/Legacy Boot* to `Both` or `Legacy Only` in the
+firmware setup.
+
+The X250 has no serial port, so **all boot output goes to the screen** via a
+framebuffer text console (`fbcon`, in [`video.c`](video.c)): the full kernel
+log scrolls during bring-up, and a panic paints the fault + register dump
+full-screen instead of triple-faulting into a reboot loop. Once the desktop
+compositor starts it takes over the screen and the log continues in the
+on-screen console window.
+
+What comes up on the X250:
+
+| Subsystem   | Driver                                    | Notes |
+|-------------|-------------------------------------------|-------|
+| Display     | multiboot2 GOP/VBE framebuffer ([`video.c`](video.c)) | any width/pitch/bpp; 32-bpp GOP is ideal, 24-bpp VBE works |
+| Keyboard / TrackPoint / touchpad | i8042 PS/2 ([`keyboard.c`](keyboard.c), [`mouse.c`](mouse.c)) | full controller bring-up, not firmware-dependent |
+| Storage     | AHCI / SATA ([`ahci.c`](ahci.c))          | the M.2 SSD, mounted `/hda` |
+| USB         | xHCI ([`xhci.c`](xhci.c))                 | external HID keyboards / mice (boot protocol) |
+| Ethernet    | Intel I218-LM ([`e1000.c`](e1000.c))      | shares the 8254x register model; PCH-LAN reset quirks handled |
+| Timers / IRQ | LAPIC timer + PIT ch.2 + i8259 virtual-wire | no dependency on IRQ 0 being delivered |
+| SMP         | ACPI MADT (RSDP from the multiboot2 tag under UEFI) | all cores |
+| RTC, ACPI power-off, PC speaker | as on QEMU | |
+
+Not supported: the Intel Wireless-AC 7265 WiFi, the SD-card reader, the
+fingerprint reader, HDA audio, and USB mass storage.
+
+`test/x250-boot.sh` boots `os.iso` in QEMU `q35` configurations that
+approximate the X250 (AHCI, xHCI, `e1000e`), under both SeaBIOS and OVMF
+(UEFI), capturing a serial log and a screenshot for each.
+
 ### Other targets
 
 ```bash
