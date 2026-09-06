@@ -150,6 +150,11 @@ qemu-x250: iso
 qemu-t470s: iso
 	@bash test/t470s-boot.sh all
 
+# Boot os.iso in X220-shaped QEMU configs (BIOS/CSM + AHCI + EHCI USB — no
+# xHCI — + an Intel e1000 NIC); logs + screenshots in /tmp/x220-boot.
+qemu-x220: iso
+	@bash test/x220-boot.sh all
+
 $(KERNEL): $(OBJS)
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -o $@ $^
@@ -190,6 +195,6 @@ clean::
 	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin *.d lib/*.d *~ os.iso iso initrd.img docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s cloc docs clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 cloc docs clean
 
 -include $(OBJS:.o=.d)

@@ -10,6 +10,7 @@
 #include <usb.h>
 #include <uhci.h>
 #include <xhci.h>
+#include <ehci.h>
 #include <usb_hid.h>
 #include <usb_hub.h>
 #include <cmdline.h>
@@ -211,8 +212,11 @@ void usb_init(void) {
     if(cmdline_has("nousb"))
         return;
 
-    /* xHCI first: it is the only controller on a recent machine. */
+    /* xHCI first: it is the only controller on a recent machine. EHCI next: the
+     * USB 2.0 controller on a Sandy/Ivy Bridge ThinkPad (X220), which has no
+     * xHCI. UHCI last: the USB 1.1 controller on the old QEMU `pc` machine. */
     xhci_init();
+    ehci_init();
 
     if(!uhci_init())
         return;
@@ -222,6 +226,7 @@ void usb_init(void) {
 
 void usb_poll(void) {
     xhci_poll();
+    ehci_poll();
     usb_hid_poll();
     usb_hub_poll();
 }

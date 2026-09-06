@@ -3,10 +3,12 @@
  * @brief USB subsystem: spec constants, standard descriptors, the per-device
  *        record and the core API used by the host-controller and class drivers.
  *
- * This is a deliberately small USB 1.1 stack: one UHCI host controller
- * (@ref uhci.c), synchronous control transfers, polled interrupt-IN transfers,
- * and a single HID boot-protocol class driver (@ref usb_hid.c). Enumeration is
- * driven from a kernel thread, not from an interrupt.
+ * This is a deliberately small USB stack: synchronous control transfers, polled
+ * interrupt-IN transfers and a single HID boot-protocol class driver
+ * (@ref usb_hid.c), over whichever host controller the machine has — UHCI
+ * (@ref uhci.c), EHCI (@ref ehci.c, the USB 2.0 controller on a Sandy/Ivy
+ * Bridge ThinkPad) or xHCI (@ref xhci.c). Enumeration is driven from a kernel
+ * thread, not from an interrupt.
  */
 #pragma once
 
