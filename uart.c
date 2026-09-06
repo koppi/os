@@ -33,12 +33,28 @@ extern void uart_int();
 #define DLAB_FLAG (0x80)
 #define MODE_8N1 (3)
 
+/* Bound on every "wait for the transmitter" spin. A modern ThinkPad (T470s and
+ * up) has no wired-out COM1, but the PCH still decodes 0x3F8 and the LSR reads
+ * back as something other than 0xFF with the THR-empty bit (0x20) stuck low --
+ * so the old "if LSR == 0xFF, no port" probe trusted it and the very first
+ * klogf() spun here forever, a black screen before anything could paint. */
+#define UART_TX_SPIN 200000
+
+/**
+ * @brief Probe for a real 16550 with a loopback test, then, if present,
+ *        program it for 9600 8N1 with FIFOs on.
+ *
+ * The loopback test (MCR bit 4) is the reliable "is a UART actually here"
+ * check: a dead/absent port does not echo the byte back. Only then is
+ * @ref uart_initialized set and klogf() output actually written.
+ */
 void uart_init(void) {
+  uart_initialized = 0;
 
   // We need to specify ratio between baud rate and the base crystal
   // oscillation rate of a 16550 UART serial chip.
   uint16_t ratio = BAUD_RATE / BASE_BAUD_RATE;
-	
+
   // Disable all interrupts.
   outportb(UART_PORT + 1, 0);
 
@@ -54,9 +70,20 @@ void uart_init(void) {
   // that arrives faster than the RX IRQ can drain it one byte at a time.
   outportb(UART_PORT + 2, 0xC7);
 
-  // If status is 0xFF, no serial port.
-  if (inportb(UART_PORT + 5) == 0xFF)
-    return;
+  // Loopback self-test: put the UART in loopback (MCR bit 4), send a pattern,
+  // and require it back. A port that reads 0xFF, or one the chipset half-
+  // decodes but does not clock, fails this and stays disabled.
+  outportb(UART_PORT + 4, 0x1E);            // LOOP | OUT2 | OUT1 | RTS
+  outportb(UART_PORT + 0, 0xAE);
+  int ok = 0;
+  for (int i = 0; i < 100000; i++)
+    if (inportb(UART_PORT + 5) & 0x01) { ok = (inportb(UART_PORT + 0) == 0xAE); break; }
+
+  // Restore normal operation (interrupts + DTR/RTS asserted).
+  outportb(UART_PORT + 4, 0x0B);
+
+  if (!ok)
+    return;                                 // no usable COM1 -- klogf is a no-op
 
   uart_initialized = 1;
 }
@@ -74,9 +101,12 @@ void uart_rx_ir(void) {
 }
 
 int uart_getc(void) {
-    while ((inportb(UART_PORT + 5) & 1) == 0)
-        __builtin_ia32_pause(); // rx empty?
-    return inportb(UART_PORT + 0);
+    if (!uart_initialized)
+        return -1;
+    for (int i = 0; i < UART_TX_SPIN; i++)
+        if (inportb(UART_PORT + 5) & 1)
+            return inportb(UART_PORT + 0);
+    return -1;   // rx stayed empty
 }
 
 void uart_handler(void) {
@@ -112,17 +142,21 @@ uint8_t uart_tx_empty(void) {
 }
 
 void uart_putc(char c) {
-    if (!uart_initialized) uart_init();
-    while (!uart_tx_empty())
+    if (!uart_initialized)
+        return;   // no COM1 -- do not touch the port, never spin
+    for (int i = 0; i < UART_TX_SPIN && !uart_tx_empty(); i++)
         __builtin_ia32_pause();
     outportb(UART_PORT, c);
 }
 
 static int uart_read(struct chardev_struct *dev, char *buf, size_t nbyte) {
     (void)dev;
-    
+
+    if (!uart_initialized)
+        return 0;   // no COM1 -- never block waiting for an RX IRQ that can't come
+
     size_t read = 0, rs;
-    
+
     while (1) {
         if (rbpos > 0) {
             if (rbpos <= (int)(nbyte - read)) {
