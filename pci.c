@@ -271,7 +271,10 @@ static const pci_driver_t drivers[] = {
     { "usb",       ANY,    ANY,    0x0C, 0x03, NULL /* USB thread */ },
     { "ahci",      ANY,    ANY,    0x01, 0x06, ahci_probe      },
     { "bochs-vga", 0x1234, 0x1111, ANY,  ANY,  bochs_vga_probe },
-    { "e1000",     0x8086, 0x100e, ANY,  ANY,  e1000_probe     },
+    /* Any Intel Ethernet controller (82540 'e1000', 82574L 'e1000e', the
+     * I217/I218 PCH-LAN in a ThinkPad, ...): the register model is shared and
+     * e1000_probe special-cases the PCH parts. */
+    { "e1000",     0x8086, ANY,    0x02, 0x00, e1000_probe     },
     { "ac97",      0x8086, 0x2415, ANY,  ANY,  ac97_probe      },
 };
 

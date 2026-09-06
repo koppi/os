@@ -17,6 +17,7 @@
  * ------------------------------------------------------------------ */
 #define E1000_CTRL     0x0000
 #define E1000_STATUS   0x0008
+#define E1000_CTRL_EXT 0x0018
 #define E1000_EERD     0x0014
 #define E1000_MDIC     0x0020
 #define E1000_ICR      0x00C0
@@ -148,9 +149,12 @@ static uint16_t phy_read(uint8_t reg) {
     return 0;
 }
 
+static int mac_from_eeprom = 1;   /* cleared for parts with no EERD interface */
+
 static void read_mac(void) {
     uint16_t w0, w1, w2;
-    if (eeprom_read(0, &w0) && eeprom_read(1, &w1) && eeprom_read(2, &w2)) {
+    if (mac_from_eeprom &&
+        eeprom_read(0, &w0) && eeprom_read(1, &w1) && eeprom_read(2, &w2)) {
         mac[0] = w0;      mac[1] = w0 >> 8;
         mac[2] = w1;      mac[3] = w1 >> 8;
         mac[4] = w2;      mac[5] = w2 >> 8;
@@ -243,6 +247,23 @@ int e1000_rx_poll(void (*cb)(const uint8_t *frame, uint16_t len)) {
 /* ------------------------------------------------------------------ *
  *  Probe                                                              *
  * ------------------------------------------------------------------ */
+/* Intel "PCH LAN" parts (I217/I218/...): the PHY hangs off the chipset over an
+ * internal link and needs a semaphore dance for a clean MAC reset. Firmware has
+ * already brought the PHY up, so we skip the disruptive reset and just arm the
+ * rings. Everything else in the register model is shared with the 8254x. */
+static int is_pch_lan(uint16_t dev) {
+    switch (dev) {
+    case 0x153A: case 0x153B:            /* I217-LM / I217-V           */
+    case 0x15A0: case 0x15A1: case 0x15A2: case 0x15A3:  /* I218 LM/V  */
+    case 0x1502: case 0x1503:            /* 82579LM / 82579V           */
+    case 0x15B7: case 0x15B8: case 0x15D7: case 0x15D8:  /* I219       */
+    case 0x15E3:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
 void e1000_probe(pci_device_t *d) {
     uint32_t base = 0, span = 0x20000;
     for (int i = 0; i < 6; i++)
@@ -257,6 +278,10 @@ void e1000_probe(pci_device_t *d) {
         return;
     }
 
+    int pch = is_pch_lan(d->device);
+    if (pch)
+        mac_from_eeprom = 0;   /* I217/I218 have no EERD EEPROM; MAC is in RAL/RAH */
+
     /* The register block sits in MMIO space above RAM and the low-4 MiB
      * identity map, so map it 1:1 into the kernel directory (cache-disabled,
      * PCD = 0x10, which matters on real hardware; QEMU ignores it). */
@@ -267,17 +292,25 @@ void e1000_probe(pci_device_t *d) {
 
     pci_enable(d, PCI_CMD_MEM | PCI_CMD_MASTER);
 
-    /* Mask interrupts, full reset, mask again. */
-    reg_wr(E1000_IMC, 0xFFFFFFFF);
-    reg_wr(E1000_CTRL, reg_rd(E1000_CTRL) | CTRL_RST);
-    spin(2000);
-    for (int i = 0; i < 1000 && (reg_rd(E1000_CTRL) & CTRL_RST); i++)
-        io_wait();
+    /* Mask interrupts. */
     reg_wr(E1000_IMC, 0xFFFFFFFF);
     (void)reg_rd(E1000_ICR);
 
-    /* Link up, auto speed/duplex. */
-    reg_wr(E1000_CTRL, CTRL_SLU | CTRL_ASDE | CTRL_FD);
+    if (!pch) {
+        /* Full MAC reset (safe on the 8254x / 82574). */
+        reg_wr(E1000_CTRL, reg_rd(E1000_CTRL) | CTRL_RST);
+        spin(2000);
+        for (int i = 0; i < 1000 && (reg_rd(E1000_CTRL) & CTRL_RST); i++)
+            io_wait();
+        reg_wr(E1000_IMC, 0xFFFFFFFF);
+        (void)reg_rd(E1000_ICR);
+    }
+
+    /* Link up, auto speed/duplex. Preserve the bits firmware set on PCH LAN. */
+    if (pch)
+        reg_wr(E1000_CTRL, reg_rd(E1000_CTRL) | CTRL_SLU | CTRL_ASDE);
+    else
+        reg_wr(E1000_CTRL, CTRL_SLU | CTRL_ASDE | CTRL_FD);
 
     /* Clear the multicast table. */
     for (int i = 0; i < 128; i++)
