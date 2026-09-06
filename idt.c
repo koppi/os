@@ -29,7 +29,7 @@ void idt_init(uint16_t code) {
     for(i = 0; i < NUM_INTERRUPTS; i++)
       install_ir(i, 0x80 | 0x0E, code, &default_ir_handler);
 
-    install_ir(0, 0x80 | 0x0E, code, &ex_divide_by_zero);
+    install_ir(0, 0x80 | 0x0E, code, &de_handle);
     install_ir(1, 0x80 | 0x0E, code, &ex_single_step);
     install_ir(2, 0x80 | 0x0E, code, &ex_nmi);
     install_ir(3, 0x80 | 0x0E, code, &ex_breakpoint);

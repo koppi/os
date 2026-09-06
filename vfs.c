@@ -17,6 +17,7 @@
 #include <kheap.h>
 #include <spinlock.h>
 #include <nfs.h>
+#include <log.h>
 
 static filesystem *devs[MAX_DEVICES];
 
@@ -295,6 +296,13 @@ void vfs_mount(char *name) {
      * defrag pass shuffles raw sectors and drives its own progress output, so
      * it has to run before any other thread can reach the filesystem. */
     fat_mount(dev);
+    if(!dev->minfo.mounted) {
+        /* Not a FAT volume (a partitioned disk with another OS on it, a blank
+         * device, ...). Leave the block device registered but don't expose a
+         * filesystem and don't defrag it. */
+        klogf(LOG_INFO, "vfs: %s is not a FAT volume, not mounted\n", dev->mount);
+        return;
+    }
     int s = fs_enter();
     fat_defrag(dev);
     fs_leave(s);

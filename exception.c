@@ -78,12 +78,16 @@ void default_ir_handler() {
     panic("");
 }
 
-/** @brief \#DE — divide error. Fatal in kernel, kills process in user. */
-void ex_divide_by_zero() {
-    if (is_user_mode()) {
+/** @brief \#DE — divide error. Dumps the register frame; kernel-mode is fatal,
+ *         user-mode unwinds the process. */
+void ex_divide_by_zero(struct regs *re) {
+    diag_to_screen(re->cs);
+    printf("\nDivision by zero\n");
+    printf("eip: %x cs: %x\neax: %x ebx: %x ecx: %x edx: %x\nesp: %x ebp: %x esi: %x edi: %x\nds: %x es: %x fs: %x gs: %x\n",
+           re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp,
+           re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
+    if (is_user_mode_cs(re->cs))
         return_exception();
-    }
-    printf("Division by zero\n");
     panic("");
 }
 

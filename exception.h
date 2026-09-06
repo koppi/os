@@ -15,6 +15,7 @@
 /** @brief Handler for any vector without a dedicated one. */
 void default_ir_handler();
 
+extern void de_handle();      /**< asm stub for \#DE (divide error). */
 extern void invop_handle();   /**< asm stub for \#UD (invalid opcode). */
 extern void gpf_handle();     /**< asm stub for \#GP (general protection). */
 extern void pf_handle();      /**< asm stub for \#PF (page fault). */

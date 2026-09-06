@@ -22,27 +22,47 @@ uint8_t FAT[SECTOR_SIZE * 2];
 
 int offset;
 
+/**
+ * @brief Reject anything that is not a plausible FAT BPB.
+ *
+ * The old check was just "starts with EB xx 90", which a GRUB MBR (its boot.img
+ * mimics the BPB layout) and various VBRs also pass -- and then fat_mount()
+ * divided the geometry by sector_bytes / cluster_sectors, which are code bytes
+ * there, usually zero: a #DE panic the moment a real disk with an OS on it is
+ * probed (e.g. the ThinkPad's SSD).
+ */
+static int bpb_looks_like_fat(const bootsector_t *bs) {
+    const bios_parameter_block_t *b = &bs->bpb;
+    const uint8_t *raw = (const uint8_t *) bs;
+
+    if (bs->ignore[0] != 0xEB && bs->ignore[0] != 0xE9)
+        return 0;
+    if (raw[510] != 0x55 || raw[511] != 0xAA)          /* boot signature */
+        return 0;
+
+    uint16_t sb = b->sector_bytes;
+    if (sb != 512 && sb != 1024 && sb != 2048 && sb != 4096)
+        return 0;
+    uint8_t sc = b->cluster_sectors;
+    if (sc == 0 || (sc & (sc - 1)) != 0)               /* must be a power of two */
+        return 0;
+    if (b->n_fats == 0 || b->n_fats > 2)
+        return 0;
+    if (b->reserved_sectors == 0)
+        return 0;
+    if (b->media != 0xF0 && b->media < 0xF8)
+        return 0;
+    if ((b->n_sectors == 0 ? b->long_sectors : b->n_sectors) == 0)
+        return 0;
+    return 1;
+}
+
 void fat_mount(device_t *dev) {
     // Trying with bootsector
     bootsector_t *bs = (bootsector_t *) dev->read(0);
-    if((bs->ignore[0] != 0xEB) || (bs->ignore[2] != 0x90)) // Not a FAT fs
-        return;
-    
-    // Scan for partitions
-    mbr_t *mbr = (mbr_t *) bs;
-    for(int i = 0; i < 4; i++) {
-        if(mbr->partition_table[i].sys_id != FAT32_SYSTEM_ID) {
-            continue;
-        } else {
-            //uint32_t lba = mbr->partition_table[i].lba_start;
-            //uint32_t totsec = mbr->partition_table[i].total_sectors;
-            //printf("lba: %d sects: %d\n", lba, totsec);
-            //bs = (bootsector_t *) dev->read(lba);
-            break;
-        }
-        return;
-    }
-        
+    if (!bpb_looks_like_fat(bs))
+        return;                 /* minfo stays zeroed, minfo.mounted == 0 */
+
     dev->minfo.n_sectors = (bs->bpb.n_sectors == 0) ? bs->bpb.long_sectors : bs->bpb.n_sectors;
     dev->minfo.fat_offset = bs->bpb.reserved_sectors;
     dev->minfo.fat_size = (bs->bpb.fat_sectors == 0) ? bs->bpb_ext.fat_sectors : bs->bpb.fat_sectors;
@@ -53,10 +73,17 @@ void fat_mount(device_t *dev) {
     dev->minfo.root_offset = dev->minfo.fat_offset + (bs->bpb.n_fats * dev->minfo.fat_size);
     dev->minfo.root_size = ((bs->bpb.n_dir_entries * 32) + (bs->bpb.sector_bytes - 1)) / bs->bpb.sector_bytes;
     dev->minfo.first_data_sector = dev->minfo.root_offset + dev->minfo.root_size;
-    dev->minfo.data_sectors = dev->minfo.n_sectors - dev->minfo.first_data_sector;
     dev->minfo.n_fats = bs->bpb.n_fats;
     dev->minfo.sector_bytes = bs->bpb.sector_bytes;
-    
+
+    /* Computed geometry must be self-consistent (a BPB can pass the field
+     * checks and still be nonsense). */
+    if (dev->minfo.first_data_sector >= dev->minfo.n_sectors) {
+        memset(&dev->minfo, 0, sizeof(dev->minfo));
+        return;
+    }
+    dev->minfo.data_sectors = dev->minfo.n_sectors - dev->minfo.first_data_sector;
+
     uint32_t total_clusters = dev->minfo.data_sectors / bs->bpb.cluster_sectors;
     if(total_clusters < 4085)
         dev->minfo.type = FAT12;
@@ -66,6 +93,8 @@ void fat_mount(device_t *dev) {
         dev->minfo.type = FAT32;
     else
         dev->minfo.type = EXFAT;
+
+    dev->minfo.mounted = 1;
 }
 
 void to_dos_file_name(char *name, char *str) {

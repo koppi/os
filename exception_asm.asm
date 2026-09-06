@@ -32,6 +32,24 @@ gpf_handle:
     call ex_gpf
     ret
 
+extern ex_divide_by_zero
+
+global de_handle
+de_handle:
+    pusha
+    push gs
+    push fs
+    push es
+    push ds
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    push esp
+    call ex_divide_by_zero
+    ret
+
 extern ex_invalid_opcode
 
 global invop_handle
