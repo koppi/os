@@ -71,9 +71,10 @@ else
 endif
 
 QEMU ?= qemu-system-$(TARGET)
-# SMP=1 for a stable single-core boot (e.g. to run the cc compiler, which is
-# compute+syscall heavy and currently trips an SMP context-switch bug under
-# load); the default -smp 4 exercises the parallel scheduler.
+# Number of CPUs. The default -smp 4 exercises the parallel scheduler; the
+# compute+syscall-heavy cc compiler self-hosts reliably under it. (It used to
+# corrupt user heaps: a cacheable LAPIC mapping made this_cpu() alias every
+# core onto CPU 0, so the per-CPU scheduler state went to the wrong cpu_t.)
 SMP ?= 4
 QEMUFLAGS += -vga std -m 256M -no-reboot
 QEMUFLAGS += -smp $(SMP)

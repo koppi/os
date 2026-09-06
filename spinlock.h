@@ -54,6 +54,7 @@ extern spinlock_t proc_lock;    /**< Process lifecycle: start/kernel/remove (pro
 extern spinlock_t fs_lock;      /**< Filesystem / block drivers (vfs.c, fat.c). */
 extern spinlock_t con_lock;     /**< Console output path (printf/uart/video). */
 extern spinlock_t tlb_lock;     /**< TLB-shootdown operation state (vmm.c/apic.c). */
+extern spinlock_t uheap_lock;   /**< User-process heap free lists (heap.c, vfs.c). */
 
 /*
  * Lock order (acquire outer first):

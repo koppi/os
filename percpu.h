@@ -74,8 +74,24 @@ cpu_t *cpu_by_apicid(uint32_t apicid);
 /** @brief Simple ABI used by @ref this_cpu. */
 uint32_t lapic_self_id(void);
 
-/** @brief The @ref cpu_t for the CPU we are running on. */
+/** GDT slot of cpus[0]'s TSS descriptor (see gdt.c). */
+#define PERCPU_GDT_TSS_BASE 5
+
+/**
+ * @brief The @ref cpu_t for the CPU we are running on.
+ *
+ * Uses the task register: each CPU runs @c ltr with its own TSS selector
+ * (@c PERCPU_GDT_TSS_BASE + index), so @c str reads back an id that is 100%
+ * reliable and needs no memory access. The LAPIC-id path is only a fallback
+ * for the sliver of AP bring-up before @c flush_tss_for() — a cacheable LAPIC
+ * mapping once let @c lapic_id() return another CPU's id.
+ */
 static inline cpu_t *this_cpu(void) {
+    uint16_t tr;
+    __asm__ volatile("str %0" : "=r"(tr));
+    int idx = (int) ((tr & 0xFFF8u) >> 3) - PERCPU_GDT_TSS_BASE;
+    if (idx >= 0 && idx < MAX_CPU && cpus[idx].present)
+        return &cpus[idx];
     return cpu_by_apicid(lapic_self_id());
 }
 

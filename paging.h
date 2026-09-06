@@ -13,6 +13,8 @@
 #define PAGE_PRESENT        0x1        /**< PTE/PDE present bit. */
 #define PAGE_RW             0x2        /**< Writable. */
 #define PAGE_USER           0x4        /**< Ring-3 accessible. */
+#define PAGE_PWT            0x8        /**< Write-through (page-level). */
+#define PAGE_PCD            0x10       /**< Cache-disable (page-level) — for MMIO. */
 #define PAGE_ACCESSED       0x20       /**< Accessed. */
 #define PAGE_FRAME_MASK     0x7FFFF000 /**< Frame-address field of a PTE/PDE. */
 

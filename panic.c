@@ -21,5 +21,6 @@ void panic(const char *format, ...) {
     vprintf(format, args);
 
     printf("\nHalting the system.\n");
-    halt();
+    for (;;)
+        asm volatile("cli; hlt");
 }
