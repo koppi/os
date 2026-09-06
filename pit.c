@@ -121,7 +121,44 @@ void reset_tick_count() {
     this_cpu()->sched_ticks = 0;
 }
 
-/** @brief @return Milliseconds since boot (free-running, 1 kHz tick). */
+/** @brief @return Milliseconds since boot (free-running 1 kHz tick).
+ *
+ * Advanced by the BSP's LAPIC timer once the scheduler is up (see
+ * lapic_timer_tick); before then it stays 0 and callers that need to wait use
+ * @ref pit_busywait_ms instead. */
 uint32_t pit_ms(void) {
     return pit_uptime;
+}
+
+/* PIT input clock: 1193182 Hz. */
+#define PIT_INPUT_HZ 1193182u
+
+/**
+ * @brief Busy-wait @p ms milliseconds against PIT channel 2 -- no interrupts.
+ *
+ * Used everywhere a delay is needed before the LAPIC timer is running (AP
+ * bring-up, APIC calibration). Channel 2's gate is port 0x61 bit 0 and its
+ * output is bit 5, so this works even on a machine whose firmware handed us a
+ * masked 8259 with no IRQ 0.
+ */
+void pit_busywait_ms(uint32_t ms) {
+    while (ms) {
+        uint32_t chunk = ms > 50 ? 50 : ms;
+        uint16_t count = (uint16_t) ((PIT_INPUT_HZ * chunk) / 1000u);
+
+        uint8_t p = inportb(0x61);
+        outportb(0x61, (uint8_t) ((p & ~0x02) | 0x01));  /* spkr off, gate on */
+        outportb(0x43, 0xB0);                            /* ch2 lo/hi mode 0 */
+        outportb(0x42, count & 0xFF);
+        outportb(0x42, count >> 8);
+        p = inportb(0x61);
+        outportb(0x61, (uint8_t) (p & ~0x01));           /* retrigger the gate */
+        outportb(0x61, (uint8_t) (p | 0x01));
+
+        uint32_t guard = 0;
+        while (!(inportb(0x61) & 0x20))
+            if (++guard > 200000000u)                    /* PIT itself is dead */
+                return;
+        ms -= chunk;
+    }
 }

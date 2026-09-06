@@ -74,6 +74,15 @@ cpu_t *cpu_by_apicid(uint32_t apicid) {
 uint64_t lapic_timer_tick(uint32_t esp) {
     cpu_t *c = this_cpu();
     c->sched_ticks++;
+
+    /* The BSP LAPIC timer is calibrated to 1 ms and is the single source for
+     * the free-running ms clock. IRQ 0 (pit_asm.asm) no longer advances it --
+     * a UEFI firmware can hand us a machine with the 8259 masked. */
+    if (c->index == 0) {
+        extern uint32_t pit_uptime;
+        pit_uptime++;
+    }
+
     if (!sched_on || c->preempt_disable)
         return esp;
     return schedule(esp);
@@ -108,14 +117,11 @@ void smp_register_bsp(uint32_t apicid) {
  *  AP bring-up (BSP side)                                             *
  * ------------------------------------------------------------------ */
 
-/** @brief A short IO-port delay. */
-static void io_delay(void) { inportb(0x80); }
-
-/** @brief Busy-wait @p ms using the free-running PIT clock (needs IF set). */
+/** @brief Busy-wait @p ms. Uses PIT channel 2 directly -- needs no interrupts,
+ *         so AP bring-up works even if IRQ 0 is dead (UEFI hand-off). */
 static void delay_ms(int ms) {
-    uint32_t start = pit_ms();
-    while ((int) (pit_ms() - start) < ms)
-        io_delay();
+    if (ms > 0)
+        pit_busywait_ms((uint32_t) ms);
 }
 
 /** @brief Copy the trampoline to 0x8000 and publish per-CPU boot info. */

@@ -86,3 +86,7 @@ void reset_tick_count();
  *        scheduler, unlike @ref get_tick_count). Wraps after ~49 days.
  */
 uint32_t pit_ms(void);
+
+/** @brief Busy-wait @p ms ms via PIT channel 2. Needs no interrupts; use it
+ *         for any delay before the LAPIC timer is running. */
+void pit_busywait_ms(uint32_t ms);

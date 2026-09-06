@@ -44,7 +44,8 @@ pit_int:
     mov gs, ax
 
     lock inc long [pit_ticks]    ; legacy tick counter (get_tick_count used it)
-    lock inc long [pit_uptime]   ; free-running ms counter (never reset)
+    ; pit_uptime is advanced by the BSP LAPIC timer now (see lapic_timer_tick):
+    ; IRQ 0 may never fire on a machine a UEFI firmware left with a masked 8259.
 
     mov al, 0x20                ; PIC acknowledge (PIT is on master IRQ0)
     out 0x20, al

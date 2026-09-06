@@ -27,7 +27,13 @@
 #define LAPIC_EOI       0xB0
 #define LAPIC_LVT_TIMER 0x320
 #define LAPIC_LVT_LINT0 0x350
+#define LAPIC_LVT_LINT1 0x360
 #define LAPIC_LVT_ERROR 0x370
+
+/* LVT delivery modes (bits 10:8) and the mask bit (16). */
+#define LVT_DM_EXTINT  (7 << 8)
+#define LVT_DM_NMI     (4 << 8)
+#define LVT_MASKED     (1 << 16)
 #define LAPIC_TIMER_INITCNT 0x380
 #define LAPIC_TIMER_CURCNT  0x390
 #define LAPIC_TIMER_DIV     0x3E0
@@ -153,37 +159,25 @@ void lapic_timer_start(void) {
 }
 
 void lapic_timer_calibrate(void) {
-    /* The PIT ms clock (pit_ms) only advances via its IRQ. During early boot
-     * interrupts are off, so briefly enable them for the measurement window:
-     * sched_on is 0 here and pit_int no longer calls schedule(), so no thread
-     * can be switched away mid-calibration. */
-    extern uint8_t sched_on;
-    asm volatile("sti");
-
     /* Divide by 16 for a finer granularity. */
     lapic_write(LAPIC_TIMER_DIV, 0x3);
-    lapic_write(LAPIC_LVT_TIMER, TIMER_ONESHOOT | VEC_LAPIC_TIMER);
+    lapic_write(LAPIC_LVT_TIMER, TIMER_ONESHOOT | VEC_LAPIC_TIMER | 0x10000);
 
-    /* Count ticks in a known PIT window (~100 ms). */
-    uint32_t pit_start = pit_ms();
-    /* Give the timer a large initial count. */
+    /* Count LAPIC ticks across a known 50 ms PIT window. No interrupts: the
+     * old code spun on pit_ms() (IRQ 0), which a UEFI firmware can leave dead. */
     lapic_write(LAPIC_TIMER_INITCNT, 0xFFFFFFFF);
-    while (pit_ms() - pit_start < 100) ;   /* Busy-wait ~100 ms. */
-
+    pit_busywait_ms(50);
     uint32_t count = lapic_read(LAPIC_TIMER_CURCNT);
-    uint32_t elapsed = 0xFFFFFFFF - count;
-    /* elapsed CPC in ~100 ms, at divide-by-16 -> ticks per ms. */
-    ticks_per_ms = elapsed / 100;
 
-    asm volatile("cli");
+    uint32_t elapsed = 0xFFFFFFFF - count;
+    ticks_per_ms = elapsed / 50;
+    if (ticks_per_ms == 0)
+        ticks_per_ms = 100000;   /* PIT unusable: a safe-ish default (~1.6 GHz/16) */
 
     klogf(LOG_INFO, "apic: LAPIC timer ~%u ticks/ms\n", (unsigned) ticks_per_ms);
 
     /* Mask the calibration timer until lapic_timer_start() re-arms it. */
     lapic_timer_mask(1);
-
-    /* sched_on is a global; make sure we leave IF restored for the caller. */
-    (void) sched_on;
 }
 
 void lapic_enable(void) {
@@ -192,6 +186,19 @@ void lapic_enable(void) {
     svr = (svr & ~0xFF) | VEC_SPURIOUS | LAPIC_SVR_ENABLE;
     lapic_write(LAPIC_SVR, svr);
     lapic_write(LAPIC_TPR, 0);        /* accept interrupts of every priority */
+
+    /* Route the two local interrupt pins. The kernel keeps the 8259 PICs in
+     * PC/AT (virtual-wire) mode: the master 8259's INTR reaches the BSP over
+     * LINT0 as ExtINT, and the NMI line over LINT1. Firmware normally sets
+     * this up, but a UEFI boot can leave the LVT masked -- program it here so
+     * legacy IRQs (PIT, i8042 keyboard/mouse, ATA) are actually delivered.
+     * Only CPU 0 fields ExtINT; the APs mask LINT0 so a stray 8259 assertion
+     * is not taken twice. */
+    if (this_cpu()->index == 0)
+        lapic_write(LAPIC_LVT_LINT0, LVT_DM_EXTINT);
+    else
+        lapic_write(LAPIC_LVT_LINT0, LVT_DM_EXTINT | LVT_MASKED);
+    lapic_write(LAPIC_LVT_LINT1, LVT_DM_NMI);
 
     /* Clear any pending errors. */
     lapic_write(LAPIC_ESR, 0);
