@@ -144,6 +144,15 @@ int vmm_map(page_dir_t *pdir, vmm_addr_t virt, uint32_t flags) {
     }
     ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] = phys | flags;
 
+    /* Real CPUs cache "PDE/PTE not present" in the paging-structure caches, so
+     * a not-present -> present transition needs a local invlpg too, not only a
+     * replacement (QEMU never cached the negative entry, which hid this). */
+    {
+        uint32_t cr3;
+        asm volatile("mov %%cr3, %0" : "=r"(cr3));
+        if(cr3 == (uint32_t)(uintptr_t)pdir)
+            asm volatile("invlpg (%0)" : : "r"(virt) : "memory");
+    }
     if(old & PAGE_PRESENT)
         tlb_shootdown(virt);
     spin_unlock(&vmm_lock, lf);
@@ -167,6 +176,12 @@ int vmm_map_phys(page_dir_t *pdir, vmm_addr_t virt, mm_addr_t phys, uint32_t fla
     }
     ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] = phys | flags;
 
+    {
+        uint32_t cr3;
+        asm volatile("mov %%cr3, %0" : "=r"(cr3));
+        if(cr3 == (uint32_t)(uintptr_t)pdir)
+            asm volatile("invlpg (%0)" : : "r"(virt) : "memory");
+    }
     if(old & PAGE_PRESENT)
         tlb_shootdown(virt);
     spin_unlock(&vmm_lock, lf);

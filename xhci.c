@@ -554,6 +554,11 @@ int xhci_init(void) {
     for (int i = 0; i < nscratch; i++) {
         void *pg = pmm_malloc();
         if (!pg) { nscratch = i; break; }
+        /* pmm frames past the low 4 MiB are not in the kernel's identity map,
+         * so the zeroing memset would #PF. Map it 1:1 first (the controller
+         * only ever DMAs to it after this, by physical address). */
+        vmm_map_phys(get_kern_directory(), (uint32_t) pg, (uint32_t) pg,
+                     PAGE_PRESENT | PAGE_RW);
         memset(pg, 0, PAGE_SIZE);
         scratch_arr[i] = (uint32_t) pg;
     }
