@@ -164,6 +164,9 @@ void kernel_main(unsigned long magic, unsigned long addr)
         pmm_deinit_reg(initrd_phys_start, initrd_phys_end - initrd_phys_start);
 
     pmm_init2();
+    /* Reserve the kernel-heap window so pmm_malloc() never hands out a frame
+     * that vmm_init() identity-maps for the heap. */
+    pmm_deinit_reg(KHEAP_BASE, KHEAP_SIZE);
     klogf(LOG_INFO, "pmm: mem_size=%u KiB  max_frames=%u  used=%u  free=%u KiB\n",
           (unsigned) multiboot2_mem_size, (unsigned) get_max_blocks(),
           (unsigned) get_used_blocks(),

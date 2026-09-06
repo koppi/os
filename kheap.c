@@ -1,7 +1,9 @@
 /**
  * @file kheap.c
- * @brief Kernel heap — one first-fit free list spanning from the end of the
- *        kernel image to the top of the identity-mapped low 4 MiB.
+ * @brief Kernel heap — one first-fit free list over the dedicated identity-
+ *        mapped window at @ref KHEAP_BASE (mapped by vmm_init, reserved by
+ *        main.c). It used to be squeezed between the page-table window and the
+ *        4 MiB line, which starved as the kernel image grew.
  */
 #include <kheap.h>
 #include <mm.h>
@@ -9,25 +11,14 @@
 #include <printf.h>
 #include <spinlock.h>
 
-extern uint32_t kernel_start;
-extern uint32_t kernel_end;
-
-/*
- * The kernel heap sits between the page-table storage window (which starts just
- * past the kernel image — see paging_init) and the top of the identity-mapped
- * low 4 MB. pmm_init2() reserves 0..KERNEL_SPACE_END, so nothing else hands
- * these frames out.
- */
-#define HEAP_END 0x400000
-
 heap_info_t heap_info;
 
 /**
  * Init the kernel heap memory
  */
 void kheap_init() {
-    uint8_t *base = (uint8_t *) paging_window_end();
-    size_t total = HEAP_END - (uint32_t) base;
+    uint8_t *base = (uint8_t *) KHEAP_BASE;
+    size_t total = KHEAP_SIZE;
 
     heap_info.start = (vmm_addr_t *) base;
     heap_info.size = total;

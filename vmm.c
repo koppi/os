@@ -52,6 +52,10 @@ void vmm_init() {
      * map_kernel() allocates the first table from it. */
     paging_init((uint32_t) &kernel_end);
     map_kernel(kern_dir);
+    /* Identity-map the kernel heap window (KHEAP_BASE, 4 MiB). main.c has
+     * already reserved these frames in the PMM. */
+    for (uint32_t va = KHEAP_BASE; va < KHEAP_BASE + KHEAP_SIZE; va += PAGE_SIZE)
+        vmm_map_phys(kern_dir, va, va, PAGE_PRESENT | PAGE_RW);
     initrd_map();   /* identity-map the relocated boot RAM disk (kern_dir only) */
     change_page_directory(kern_dir);
     enable_paging();
@@ -210,6 +214,9 @@ void vmm_share_kernel_range(uint32_t va, uint32_t span) {
 static int is_kernel_slot(int i) {
     if (i == 0 || i == 1 || i == (int) ((uint32_t) 0xFEE00000 >> 22))
         return 1;
+    if (i >= (int)(KHEAP_BASE >> 22) &&
+        i <= (int)((KHEAP_BASE + KHEAP_SIZE - 1) >> 22))
+        return 1;   /* kernel heap: a syscall path does kmalloc on the user CR3 */
     if (i >= initrd_pde_lo() && i <= initrd_pde_hi())
         return 1;
     if (i >= bfb_pde_lo() && i <= bfb_pde_hi())

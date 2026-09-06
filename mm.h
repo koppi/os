@@ -22,6 +22,18 @@
 /** Top of the identity-mapped low memory; also the pmm's reserved ceiling. */
 #define KERNEL_SPACE_END 0x401000
 
+/**
+ * The kernel heap. It used to be wedged between the page-table window and the
+ * 4 MiB line, which left ~100 KiB that shrank every time the kernel grew (and
+ * hit zero once the AHCI/xHCI drivers landed). It now lives in its own
+ * identity-mapped window at 96 MiB: above the highest address a user process
+ * reaches (image at 7 MiB + a 64 MiB PROC_HEAP_MAX ceiling), below the boot
+ * RAM disk at 128 MiB. Reserved in the PMM and shared into every address space
+ * (a syscall path does kmalloc on the caller's CR3).
+ */
+#define KHEAP_BASE 0x06000000u
+#define KHEAP_SIZE 0x00400000u   /* 4 MiB */
+
 typedef uint32_t mm_addr_t;   /**< A physical address. */
 typedef uint32_t vmm_addr_t;  /**< A virtual address. */
 
