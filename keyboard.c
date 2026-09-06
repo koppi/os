@@ -176,6 +176,29 @@ void keyboard_init() {
 }
 
 /**
+ * @brief Re-assert the keyboard half of the 8042 config after something else
+ *        may have disturbed it.
+ *
+ * A USB-controller BIOS->OS handoff ([`ehci.c`](ehci.c)) can make the firmware's
+ * "USB legacy support" SMM tear down and leave the 8042 with translation turned
+ * off or IRQ 1 masked -- which kills an already-working PS/2 keyboard mid-run.
+ * This re-writes the config byte (only the keyboard bits, so a live Synaptics /
+ * TrackPoint session is left alone) and re-enables scanning. It does *not*
+ * reset the device -- that would race the live IRQ handler. Safe to call with
+ * interrupts enabled.
+ */
+void keyboard_reinit(void) {
+    uint8_t cfg = kbd_cmd_read(0x20);
+    if (cfg == 0xFF)
+        return;                              /* no controller / trapped */
+    cfg |=  (1 << 0) | (1 << 6);             /* keyboard IRQ 1, translation on */
+    cfg &= ~(1 << 4);                        /* keyboard clock enabled         */
+    kbd_cmd_write(0x60, cfg);
+    kbd_cmd(0xAE);                           /* enable the keyboard port       */
+    kbd_wait_write(); outportb(KBD_IN, 0xF4);/* enable scanning                */
+}
+
+/**
  * @brief IRQ-context: read one scancode, track shift, and buffer the ASCII
  *        value of make codes that map to a printable character.
  */

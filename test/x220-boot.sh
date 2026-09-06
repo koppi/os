@@ -1,8 +1,9 @@
 #!/bin/bash
-# x220-boot.sh — boot os.iso in QEMU configs that approximate a ThinkPad X220
-# (Sandy Bridge / Cougar Point: a BIOS/CSM machine, AHCI SATA, EHCI USB — no
-# xHCI — and an Intel 82579LM NIC). Captures a serial log and a framebuffer
-# screenshot for each.
+# x220-boot.sh — boot the kernel in QEMU configs that approximate a ThinkPad
+# X220 (Sandy Bridge / Cougar Point: a BIOS/CSM machine, AHCI SATA, EHCI USB —
+# no xHCI — and an Intel 82579LM NIC). Boots via `-kernel` with `ehci` on the
+# command line so the opt-in USB 2.0 driver is exercised. Captures a serial log
+# and a framebuffer screenshot for each.
 #
 #   test/x220-boot.sh [bios|q35|all]      (default: all)
 #   SHOT_DELAY=12   seconds to wait before the screenshot
@@ -59,20 +60,19 @@ run() {
     echo
 }
 
+KERN=(-kernel kernel.elf -initrd initrd.img -append ehci)
+
 do_bios() {
     run bios qemu-system-i386 -machine pc -m 3G -smp 4 -no-reboot $KVM -vga "$VGA" \
-        "${USB[@]}" "${STORAGE[@]}" \
+        "${KERN[@]}" "${USB[@]}" "${STORAGE[@]}" \
         -netdev user,id=n0 -device e1000,netdev=n0 \
-        -audiodev none,id=snd0 -device intel-hda -device hda-output,audiodev=snd0 \
-        -cdrom os.iso -boot d
+        -audiodev none,id=snd0 -device intel-hda -device hda-output,audiodev=snd0
 }
 do_q35() {
     run q35 qemu-system-x86_64 -machine q35 -m 3G -smp 4 -no-reboot $KVM -vga "$VGA" \
-        "${USB[@]}" "${STORAGE[@]}" \
+        "${KERN[@]}" "${USB[@]}" "${STORAGE[@]}" \
         -netdev user,id=n0 -device e1000e,netdev=n0 \
-        -audiodev none,id=snd0 -device intel-hda -device hda-output,audiodev=snd0 \
-        -drive file=os.iso,if=none,id=cd0,media=cdrom,format=raw \
-        -device ide-cd,drive=cd0,bus=ahci.1 -boot d
+        -audiodev none,id=snd0 -device intel-hda -device hda-output,audiodev=snd0
 }
 
 case "${1:-all}" in

@@ -19,6 +19,7 @@
 #include <pci.h>
 #include <usb.h>
 #include <usb_hid.h>
+#include <keyboard.h>
 #include <io.h>
 #include <mm.h>
 #include <paging.h>
@@ -117,7 +118,11 @@ typedef struct __attribute__((aligned(32))) {
 #define MAX_DEV   8    /* USB addresses 1..7                     */
 #define MAX_INT   4    /* concurrently polled interrupt endpoints */
 
-static volatile uint32_t periodic_list[1024] __attribute__((aligned(4096)));
+/* 1024-entry periodic frame list. Allocated from a pmm frame (4 KiB, page
+ * aligned) and identity-mapped rather than a static aligned .bss array — the
+ * kernel image already sits right against the 4 MiB identity-map line on a real
+ * laptop (see the T470s "black screen" fix), so keep 4 KiB out of .bss. */
+static volatile uint32_t *periodic_list;
 
 static ehci_qh_t  async_qh;                 /* H-bit head of the async ring   */
 static ehci_qh_t  ctrl_qh;                  /* control-transfer work QH       */
@@ -617,6 +622,16 @@ int ehci_init(void) {
         klogf(LOG_INFO, "ehci: disabled on the command line\n");
         return 0;
     }
+    /* Opt-in for now. Taking the controller from the firmware (the USBLEGSUP
+     * handoff below) can, on a real ThinkPad, knock the BIOS "USB legacy" SMM
+     * out from under the 8042 and kill the already-working PS/2 keyboard. The
+     * X220's internal keyboard / TrackPoint are PS/2, so external USB HID is a
+     * bonus, not load-bearing -- enable it with `ehci` on the boot line. */
+    if (!cmdline_has("ehci")) {
+        klogf(LOG_INFO, "ehci: not enabled (add `ehci` to the boot line for "
+                        "external USB keyboards / mice)\n");
+        return 0;
+    }
 
     pci_device_t *pd = find_ehci();
     if (!pd) {
@@ -659,6 +674,9 @@ int ehci_init(void) {
     if (nports < 1 || nports > 15) nports = 1;
 
     bios_handoff(pd, hcc);
+    /* The handoff can knock the firmware's PS/2-keyboard SMM out from under the
+     * 8042; put translation + IRQ 1 back. */
+    keyboard_reinit();
 
     /* Stop, then reset. */
     opw(OP_USBCMD, opr(OP_USBCMD) & ~CMD_RS);
@@ -706,6 +724,13 @@ int ehci_init(void) {
         int_qh[i].ov_alt   = PTR_TERM;
         int_qh[i].ov_token = QTD_HALTED;
     }
+    if (!periodic_list) {
+        void *pl = pmm_malloc();
+        if (!pl) { klogf(LOG_WARNING, "ehci: no frame for the periodic list\n"); return 0; }
+        vmm_map_phys(get_kern_directory(), (uint32_t)pl, (uint32_t)pl,
+                     PAGE_PRESENT | PAGE_RW);
+        periodic_list = (volatile uint32_t *)pl;
+    }
     for (int i = 0; i < 1024; i++)
         periodic_list[i] = (uint32_t)&int_qh[0] | PTR_QH;
     opw(OP_PERIODICLB, (uint32_t)periodic_list);
@@ -730,6 +755,8 @@ int ehci_init(void) {
         if (v & PORT_CCS)
             port_reset_enum(p);
     }
+
+    keyboard_reinit();   /* once more, after all the port resets */
     return 1;
 }
 

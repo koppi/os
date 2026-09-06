@@ -150,9 +150,10 @@ qemu-x250: iso
 qemu-t470s: iso
 	@bash test/t470s-boot.sh all
 
-# Boot os.iso in X220-shaped QEMU configs (BIOS/CSM + AHCI + EHCI USB — no
-# xHCI — + an Intel e1000 NIC); logs + screenshots in /tmp/x220-boot.
-qemu-x220: iso
+# Boot the kernel (via -kernel, with `ehci` on the command line) in X220-shaped
+# QEMU configs (BIOS/CSM + AHCI + EHCI USB — no xHCI — + an Intel e1000 NIC);
+# logs + screenshots in /tmp/x220-boot.
+qemu-x220: $(KERNEL) initrd.img
 	@bash test/x220-boot.sh all
 
 $(KERNEL): $(OBJS)

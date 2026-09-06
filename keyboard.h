@@ -9,6 +9,9 @@
 
 /** @brief Install the keyboard IRQ handler and enable the PS/2 port. */
 void keyboard_init();
+/** @brief Re-assert the keyboard's 8042 config (translation + IRQ 1) after an
+ *         EHCI BIOS->OS handoff may have disturbed it. Safe to call live. */
+void keyboard_reinit(void);
 /** @brief (declared, unused) whether the keyboard is enabled. */
 uint8_t keyboard_enabled();
 /** @brief IRQ-context handler: decode one scancode into the ring buffer. */

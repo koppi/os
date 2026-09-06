@@ -112,8 +112,10 @@ every PC from the QEMU `pc` machine to a modern ThinkPad:
   Bridge ThinkPad (X220), which has no xHCI. BIOS→OS handoff via `USBLEGSUP`,
   an async schedule for control transfers and a periodic schedule for
   interrupt-IN, plus one or two levels of hub with the split-transaction
-  fields for the full-speed devices behind a PCH Rate-Matching Hub. Same
-  static-`.bss` discipline as the others.
+  fields for the full-speed devices behind a PCH Rate-Matching Hub.
+  **Opt-in** (`ehci` on the boot line): the handoff can disturb a real
+  ThinkPad's PS/2 keyboard, so it stays off unless asked for. See
+  **Booting on real hardware (ThinkPad X220 and similar)**.
 * **xHCI** (USB 3.x) — [`xhci.c`](xhci.c). The only controller on a recent
   laptop (X250 / T470s). Controller bring-up, root-port reset, Enable Slot /
   Address Device / Configure Endpoint, then polled interrupt-IN. EHCI and
@@ -726,45 +728,51 @@ serial port, so boot output goes to the screen (`fbcon`).
 
 Electrically the X220 is an older, simpler X250. The one thing it does
 differently is **USB**: the 6-series chipset has *no xHCI* — USB is **EHCI**
-(USB 2.0) only — so the kernel now has an EHCI driver. Its 82579LM Ethernet
-was already covered by `e1000.c`'s PCH-LAN path, its SATA is AHCI, and its
-audio is Intel HD Audio, so everything else carries over unchanged.
+(USB 2.0) only — so the kernel has an EHCI driver. Its 82579LM Ethernet was
+already covered by `e1000.c`'s PCH-LAN path, its SATA is AHCI, and its audio is
+Intel HD Audio, so everything else carries over unchanged.
 
 | Subsystem | Driver | Notes |
 |-----------|--------|-------|
 | Display | multiboot2 GOP/VBE framebuffer ([`video.c`](video.c)), WC via PAT ([`pat.c`](pat.c)) | HD Graphics 3000 (`8086:0126`); the CSM VBIOS sets a 1366×768 linear mode (24- or 32-bpp), no native modeset |
 | Keyboard / TrackPoint / touchpad | i8042 PS/2 ([`keyboard.c`](keyboard.c), [`mouse.c`](mouse.c)) | Synaptics absolute + TrackPoint pass-through; `nosyn` forces the plain 3-byte protocol |
 | Storage | AHCI ([`ahci.c`](ahci.c)) | the 2.5" SATA SSD/HDD (`8086:1c03`), mounted `/hda`. Set the BIOS SATA mode to `AHCI` |
-| USB | **EHCI** ([`ehci.c`](ehci.c)) | `8086:1c26` / `8086:1c2d`; external HID keyboards / mice (boot protocol) |
+| USB (opt-in) | **EHCI** ([`ehci.c`](ehci.c)) | `8086:1c26` / `8086:1c2d`; external HID keyboards / mice. **Off by default** — add `ehci` to the boot line |
 | Ethernet | Intel 82579LM ([`e1000.c`](e1000.c)) | `8086:1502`; `is_pch_lan()` skips the disruptive MAC reset and reads the MAC from `RAL0`/`RAH0` |
 | Audio | Intel HD Audio ([`hda.c`](hda.c)) | Cougar Point `8086:1c20` |
 | Timers / IRQ / SMP / RTC / power-off | as on the X250 | LAPIC timer, ACPI MADT (RSDP from the BIOS scan), no IRQ-0 dependency |
 
-The EHCI driver ([`ehci.c`](ehci.c)) is deliberately minimal, the same shape
-as [`xhci.c`](xhci.c): a BIOS→OS handoff through the `USBLEGSUP` extended
-capability (which also disables the firmware's SMI traps), a controller reset,
-an **async schedule** (one queue head, one control transfer in flight) for
-enumeration, and a **periodic schedule** (a 1024-entry frame list feeding a
-chain of interrupt queue heads, one persistent transfer descriptor per HID
-endpoint, re-armed after each poll) for the boot reports. Structures live in
-identity-mapped `.bss`; a 64-bit BAR a UEFI firmware parked above 4 GiB is
-re-homed into the low PCI hole. The 6-series PCH sits a **Rate-Matching Hub**
-between the EHCI root ports and the physical connectors, so a full-speed
-keyboard is reached through a transaction translator — `ehci.c` walks one or
-two levels of hub and fills in the split-transaction fields, but that path has
-no QEMU equivalent and is unverified on real hardware.
+**USB is opt-in on the X220.** Taking the EHCI controller from the firmware
+(the `USBLEGSUP` BIOS→OS handoff) knocks the BIOS "USB legacy support" SMM out
+from under the 8042 on a real X220 and kills the *internal* PS/2 keyboard —
+which the machine needs, since its keyboard and TrackPoint are PS/2. So
+`ehci_init()` does nothing unless `ehci` is on the boot line (there is an "os
+(USB 2.0 / EHCI enabled)" GRUB entry for it), and when it does run it calls
+`keyboard_reinit()` after the handoff to put the 8042's translation + IRQ 1
+back. The default boot leaves USB alone and the built-in keyboard works.
 
-Escape hatches on the GRUB line (press `e`): `noehci` `nousb` `noahci`
-`nonet` `nosmp` `nofb` `nosyn`. The internal keyboard and TrackPoint are PS/2,
-so `noehci` leaves the machine fully usable.
+When enabled, the EHCI driver ([`ehci.c`](ehci.c)) is the same shape as
+[`xhci.c`](xhci.c): the `USBLEGSUP` handoff, a controller reset, an **async
+schedule** (one queue head, one control transfer in flight) for enumeration,
+and a **periodic schedule** (a 1024-entry frame list feeding a chain of
+interrupt queue heads, one persistent transfer descriptor per HID endpoint,
+re-armed after each poll) for the boot reports. The 6-series PCH sits a
+**Rate-Matching Hub** between the EHCI root ports and the connectors, so a
+full-speed keyboard is reached through a transaction translator — `ehci.c`
+walks one or two levels of hub and fills in the split-transaction fields, but
+that path has no QEMU equivalent and is unverified on real hardware.
+
+Escape hatches on the GRUB line (press `e`): `nousb` `noahci` `nonet` `nosmp`
+`nofb` `nosyn` to disable, `ehci` to enable USB 2.0.
 
 Not supported: the Intel Centrino Advanced-N 6205 WiFi, the SD-card reader,
 the fingerprint reader, and USB mass storage — every device is still named in
 the `pci` output.
 
-`test/x220-boot.sh` (`make qemu-x220`) boots `os.iso` in a BIOS
-(`qemu-system-i386 -machine pc`) and a `q35` config, each with an EHCI
-controller, a USB keyboard and a USB tablet, capturing a serial log and a
+`test/x220-boot.sh` (`make qemu-x220`) boots the kernel (via `-kernel`, with
+`ehci` on the command line) in a BIOS (`qemu-system-i386 -machine pc`) and a
+`q35` config, each with an EHCI controller, a USB keyboard and a USB tablet,
+capturing a serial log and a
 screenshot for each.
 
 ### Other targets
