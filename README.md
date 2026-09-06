@@ -100,12 +100,25 @@ each is on.
 * ELF loading helpers — [`elf.c`](elf.c)
 
 ### USB
-A small USB 1.1 stack, driven from a kernel thread (no USB interrupts):
+A small polled USB stack, driven from a kernel thread (no USB interrupts).
+Whichever host controller the machine has is brought up — the three cover
+every PC from the QEMU `pc` machine to a modern ThinkPad:
 
-* **UHCI** host-controller driver — [`uhci.c`](uhci.c). Found on the PCI bus,
-  reset and started; its 1024-entry frame list, queue heads, transfer
-  descriptors and data buffers are static and live in the identity-mapped low
-  memory so `&x == phys(x)`.
+* **UHCI** (USB 1.1) — [`uhci.c`](uhci.c). Found on the PCI bus, reset and
+  started; its 1024-entry frame list, queue heads, transfer descriptors and
+  data buffers are static and live in the identity-mapped low memory so
+  `&x == phys(x)`.
+* **EHCI** (USB 2.0) — [`ehci.c`](ehci.c). The controller on a Sandy/Ivy
+  Bridge ThinkPad (X220), which has no xHCI. BIOS→OS handoff via `USBLEGSUP`,
+  an async schedule for control transfers and a periodic schedule for
+  interrupt-IN, plus one or two levels of hub with the split-transaction
+  fields for the full-speed devices behind a PCH Rate-Matching Hub. Same
+  static-`.bss` discipline as the others.
+* **xHCI** (USB 3.x) — [`xhci.c`](xhci.c). The only controller on a recent
+  laptop (X250 / T470s). Controller bring-up, root-port reset, Enable Slot /
+  Address Device / Configure Endpoint, then polled interrupt-IN. EHCI and
+  xHCI both do their own enumeration and feed reports straight to the HID
+  driver rather than going through `usb.c`.
 * **USB core** — [`usb.c`](usb.c). Synchronous EP0 control transfers, port
   reset, and single-device-per-port enumeration (device descriptor →
   `SET_ADDRESS` → configuration → `SET_CONFIGURATION`). The same routine
@@ -272,7 +285,7 @@ for anything more (there is no TLS or resolver cache).
 | Floppy disk (+ DMA) | [`floppy.c`](floppy.c), [`dma.c`](dma.c) |
 | PS/2 keyboard (IRQ-driven, ring-buffered) | [`keyboard.c`](keyboard.c), [`keyboard_asm.asm`](keyboard_asm.asm) |
 | PS/2 mouse | [`mouse.c`](mouse.c), [`mouse_asm.asm`](mouse_asm.asm) |
-| USB 1.1 host controller (UHCI, polled) | [`uhci.c`](uhci.c) |
+| USB host controllers, polled (UHCI 1.1 / EHCI 2.0 / xHCI 3.x) | [`uhci.c`](uhci.c), [`ehci.c`](ehci.c), [`xhci.c`](xhci.c) |
 | USB core (enumeration, control/interrupt transfers) | [`usb.c`](usb.c) |
 | USB hub (recursive enumeration + hot-plug polling) | [`usb_hub.c`](usb_hub.c) |
 | USB HID boot devices (keyboard, mouse) | [`usb_hid.c`](usb_hid.c) |
@@ -703,6 +716,56 @@ named in the `pci` output.
 `test/t470s-boot.sh` (`make qemu-t470s`) boots `os.iso` in QEMU `q35` configs
 that approximate the T470s (NVMe, xHCI, `e1000e`, Intel HD Audio) under both
 SeaBIOS and OVMF/UEFI, capturing a serial log and a screenshot for each.
+
+### Booting on real hardware (ThinkPad X220 and similar)
+
+The same hybrid `os.iso` boots a **Sandy Bridge** ThinkPad (X220 / X220i /
+T420 / T520 — 6-series "Cougar Point" PCH). The X220 is a BIOS/CSM machine —
+set *Startup → Boot Mode* to `Legacy` — and, like the newer ThinkPads, has no
+serial port, so boot output goes to the screen (`fbcon`).
+
+Electrically the X220 is an older, simpler X250. The one thing it does
+differently is **USB**: the 6-series chipset has *no xHCI* — USB is **EHCI**
+(USB 2.0) only — so the kernel now has an EHCI driver. Its 82579LM Ethernet
+was already covered by `e1000.c`'s PCH-LAN path, its SATA is AHCI, and its
+audio is Intel HD Audio, so everything else carries over unchanged.
+
+| Subsystem | Driver | Notes |
+|-----------|--------|-------|
+| Display | multiboot2 GOP/VBE framebuffer ([`video.c`](video.c)), WC via PAT ([`pat.c`](pat.c)) | HD Graphics 3000 (`8086:0126`); the CSM VBIOS sets a 1366×768 linear mode (24- or 32-bpp), no native modeset |
+| Keyboard / TrackPoint / touchpad | i8042 PS/2 ([`keyboard.c`](keyboard.c), [`mouse.c`](mouse.c)) | Synaptics absolute + TrackPoint pass-through; `nosyn` forces the plain 3-byte protocol |
+| Storage | AHCI ([`ahci.c`](ahci.c)) | the 2.5" SATA SSD/HDD (`8086:1c03`), mounted `/hda`. Set the BIOS SATA mode to `AHCI` |
+| USB | **EHCI** ([`ehci.c`](ehci.c)) | `8086:1c26` / `8086:1c2d`; external HID keyboards / mice (boot protocol) |
+| Ethernet | Intel 82579LM ([`e1000.c`](e1000.c)) | `8086:1502`; `is_pch_lan()` skips the disruptive MAC reset and reads the MAC from `RAL0`/`RAH0` |
+| Audio | Intel HD Audio ([`hda.c`](hda.c)) | Cougar Point `8086:1c20` |
+| Timers / IRQ / SMP / RTC / power-off | as on the X250 | LAPIC timer, ACPI MADT (RSDP from the BIOS scan), no IRQ-0 dependency |
+
+The EHCI driver ([`ehci.c`](ehci.c)) is deliberately minimal, the same shape
+as [`xhci.c`](xhci.c): a BIOS→OS handoff through the `USBLEGSUP` extended
+capability (which also disables the firmware's SMI traps), a controller reset,
+an **async schedule** (one queue head, one control transfer in flight) for
+enumeration, and a **periodic schedule** (a 1024-entry frame list feeding a
+chain of interrupt queue heads, one persistent transfer descriptor per HID
+endpoint, re-armed after each poll) for the boot reports. Structures live in
+identity-mapped `.bss`; a 64-bit BAR a UEFI firmware parked above 4 GiB is
+re-homed into the low PCI hole. The 6-series PCH sits a **Rate-Matching Hub**
+between the EHCI root ports and the physical connectors, so a full-speed
+keyboard is reached through a transaction translator — `ehci.c` walks one or
+two levels of hub and fills in the split-transaction fields, but that path has
+no QEMU equivalent and is unverified on real hardware.
+
+Escape hatches on the GRUB line (press `e`): `noehci` `nousb` `noahci`
+`nonet` `nosmp` `nofb` `nosyn`. The internal keyboard and TrackPoint are PS/2,
+so `noehci` leaves the machine fully usable.
+
+Not supported: the Intel Centrino Advanced-N 6205 WiFi, the SD-card reader,
+the fingerprint reader, and USB mass storage — every device is still named in
+the `pci` output.
+
+`test/x220-boot.sh` (`make qemu-x220`) boots `os.iso` in a BIOS
+(`qemu-system-i386 -machine pc`) and a `q35` config, each with an EHCI
+controller, a USB keyboard and a USB tablet, capturing a serial log and a
+screenshot for each.
 
 ### Other targets
 
