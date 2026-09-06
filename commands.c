@@ -18,6 +18,7 @@
 #include <pci.h>
 #include <pci_acpi.h>
 #include <pci_ac97.h>
+#include <hda.h>
 #include <e1000.h>
 #include <net.h>
 #include <dhcp.h>
@@ -463,6 +464,11 @@ static void console_write(char *command) {
  * @brief Play a short square-wave tone through the AC97 codec ("beep").
  */
 static void console_beep(void) {
+    /* Prefer HD Audio (the codec on a real laptop), then AC'97, then nothing. */
+    if (hda_present()) {
+        hda_beep(800, 150);
+        return;
+    }
     uint16_t *audio_buffer = (uint16_t *)kmalloc(BEEP_SAMPLES * sizeof(uint16_t));
     for(int i = 0; i < BEEP_SAMPLES; i++) {
         audio_buffer[i] = (i % 100 < 50) ? 10000 : -10000;

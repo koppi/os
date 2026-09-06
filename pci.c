@@ -22,6 +22,7 @@
 #include <pci_ac97.h>
 #include <e1000.h>
 #include <ahci.h>
+#include <hda.h>
 
 #define PCI_CONFIG  0xCF8
 #define PCI_DATA    0xCFC
@@ -298,6 +299,7 @@ static const pci_driver_t drivers[] = {
      * e1000_probe special-cases the PCH parts. */
     { "e1000",     0x8086, ANY,    0x02, 0x00, e1000_probe     },
     { "ac97",      0x8086, 0x2415, ANY,  ANY,  ac97_probe      },
+    { "hda",       ANY,    ANY,    0x04, 0x03, hda_probe       },
 };
 
 /** @brief Match @p d against the driver table and run the first probe. */

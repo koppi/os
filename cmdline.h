@@ -5,7 +5,7 @@
  *
  * Escape hatches for real-hardware bring-up: append a word to the GRUB
  * `multiboot2` line to skip a driver that misbehaves. Recognised words:
- *   noxhci  nousb  noahci  nonet  nosmp  nofb
+ *   noxhci  nousb  noahci  nonet  nosmp  nofb  nohda / nosound
  */
 #pragma once
 
