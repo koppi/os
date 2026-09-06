@@ -14,6 +14,8 @@
 
 #include <bfb.h>
 #include <initrd.h>
+#include <cmdline.h>
+#include <lib/string.h>
 
 /** Multiboot 2 tags are padded to an 8-byte boundary. */
 #define MULTIBOOT2_TAG_ALIGN  8
@@ -43,9 +45,9 @@ const char * tag_names[] = {
     "LOAD_BASE_ADDR"
 };
 
-static void multiboot2_cmdline(const multiboot2_cmdline_t *module) {
-    (void)module;
-	//multiboot_cmdline(module->string);
+static void multiboot2_cmdline(const multiboot2_cmdline_t *cmd) {
+    strncpy(kernel_cmdline, (char *) cmd->string, sizeof(kernel_cmdline) - 1);
+    kernel_cmdline[sizeof(kernel_cmdline) - 1] = 0;
 }
 
 static void multiboot2_module(const multiboot2_module_t *module) {

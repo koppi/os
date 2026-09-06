@@ -25,6 +25,7 @@
 #include <gdt.h>
 #include <tss.h>
 #include <lib/string.h>
+#include <cmdline.h>
 #include <log.h>
 
 cpu_t cpus[MAX_CPU];
@@ -159,6 +160,10 @@ void smp_init(void) {
     int n = acpi_cpu_count();
     if (n < 1) n = 1;
     if (n > MAX_CPU) n = MAX_CPU;
+    if (cmdline_has("nosmp")) {
+        klogf(LOG_INFO, "smp: disabled on the command line, 1 CPU\n");
+        return;
+    }
 
     if (n == 1) {
         klogf(LOG_INFO, "smp: 1/1 CPU online\n");

@@ -16,6 +16,7 @@
 #include <io.h>
 #include <paging.h>
 #include <lib/string.h>
+#include <cmdline.h>
 #include <log.h>
 #include <pit.h>
 
@@ -229,6 +230,10 @@ static int port_has_disk(hba_port_t *p) {
 }
 
 void ahci_init(void) {
+    if (cmdline_has("noahci")) {
+        klogf(LOG_INFO, "ahci: disabled on the command line\n");
+        return;
+    }
     if (!ahci_pci) {
         const pci_device_t *d = pci_get_by_class(0x01, 0x06);
         if (!d) return;

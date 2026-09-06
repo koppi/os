@@ -6,6 +6,8 @@
 #include <multiboot.h>
 #include <bfb.h>
 #include <initrd.h>
+#include <cmdline.h>
+#include <lib/string.h>
 #include <stddef.h>
 
 /** Extract command name from the multiboot module command line.
@@ -64,9 +66,12 @@ static void multiboot_memmap(uint32_t length, multiboot_memmap_t *memmap)
  * @param info Multiboot information structure passed by the loader.
  */
 void multiboot_info_parse(const multiboot_info_t *info) {
-	/* Copy command line. */
-	/*if ((info->flags & MULTIBOOT_INFO_FLAGS_CMDLINE) != 0)
-      multiboot_cmdline((char *) MULTIBOOT_PTR(info->cmd_line));*/
+	/* Command line. */
+	if ((info->flags & MULTIBOOT_INFO_FLAGS_CMDLINE) != 0 && info->cmd_line) {
+		strncpy(kernel_cmdline, (char *) MULTIBOOT_PTR(info->cmd_line),
+		        sizeof(kernel_cmdline) - 1);
+		kernel_cmdline[sizeof(kernel_cmdline) - 1] = 0;
+	}
 
 	/* Copy modules information. */
 	if ((info->flags & MULTIBOOT_INFO_FLAGS_MODS) != 0)

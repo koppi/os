@@ -19,6 +19,7 @@
 #include <mm.h>
 #include <paging.h>
 #include <pit.h>
+#include <cmdline.h>
 #include <lib/string.h>
 #include <log.h>
 
@@ -476,6 +477,10 @@ void xhci_probe(struct pci_device *d) {
 int xhci_present(void) { return have_hc; }
 
 int xhci_init(void) {
+    if (cmdline_has("noxhci") || cmdline_has("nousb")) {
+        klogf(LOG_INFO, "xhci: disabled on the command line\n");
+        return 0;
+    }
     if (!xhci_pci) {
         const pci_device_t *d = pci_get_by_class(0x0C, 0x03);
         if (!d || d->progif != 0x30) {

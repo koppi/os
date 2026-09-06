@@ -12,6 +12,7 @@
 #include <xhci.h>
 #include <usb_hid.h>
 #include <usb_hub.h>
+#include <cmdline.h>
 #include <log.h>
 #include <lib/string.h>
 #include <io.h>
@@ -207,6 +208,9 @@ static usb_device_t *alloc_device(void) {
 }
 
 void usb_init(void) {
+    if(cmdline_has("nousb"))
+        return;
+
     /* xHCI first: it is the only controller on a recent machine. */
     xhci_init();
 

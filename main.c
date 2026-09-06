@@ -29,6 +29,7 @@
 #include <pci.h>
 #include <printf.h>
 #include <commands.h>
+#include <cmdline.h>
 
 #include <acpi.h>
 #include <apic.h>
@@ -115,6 +116,9 @@ void kernel_main(unsigned long magic, unsigned long addr)
         exit_qemu(1);
     }
 
+    if (kernel_cmdline[0])
+        klogf(LOG_INFO, "  cmdline: %s\n", kernel_cmdline);
+
     /* The loader's memory-size fields are unreliable (a UEFI GRUB reports a
      * token ~7 MiB); the E820 map is authoritative, so use the top of RAM it
      * reports whenever that is larger. */
@@ -173,6 +177,8 @@ void kernel_main(unsigned long magic, unsigned long addr)
           (unsigned) ((get_max_blocks() - get_used_blocks()) * 4));
     vmm_init();
     kheap_init();
+    if (cmdline_has("nofb"))
+        bfb_addr = 0;               /* force VGA text mode */
     if (!bfb_addr) vga_init();
     else vbe_init();
     gdt_init();

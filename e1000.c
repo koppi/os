@@ -8,6 +8,7 @@
 #include <pci.h>
 
 #include <io.h>
+#include <cmdline.h>
 #include <log.h>
 #include <paging.h>
 #include <lib/string.h>
@@ -265,6 +266,9 @@ static int is_pch_lan(uint16_t dev) {
 }
 
 void e1000_probe(pci_device_t *d) {
+    if (cmdline_has("nonet"))
+        return;
+
     uint32_t base = 0, span = 0x20000;
     for (int i = 0; i < 6; i++)
         if (!d->bar[i].is_io && d->bar[i].addr) {
