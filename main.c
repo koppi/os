@@ -95,24 +95,41 @@ void kernel_main(unsigned long magic, unsigned long addr)
     klogf(LOG_INFO, "-- os %u.%u.%u --\n", os_ver.maj, os_ver.min, os_ver.rev);
     klogf(LOG_INFO, "  kernel ELF size = %u\n", size);
 
+    uint32_t mem_kib = 0;
     if (magic == MULTIBOOT_LOADER_MAGIC)
     {
         klogf(LOG_INFO, "MultiBoot 1 addr: 0x%x magic: 0x%x size: 0x%x\n", (uintptr_t)addr, (unsigned)magic, size);
         multiboot_info_parse((const multiboot_info_t*)addr);
         multiboot_info_t* info = (multiboot_info_t*)addr;
-        pmm_init(info->mem_upper + info->mem_lower);
+        mem_kib = info->mem_upper + info->mem_lower;
     }
     else if (magic == MULTIBOOT2_LOADER_MAGIC)
     {
         klogf(LOG_INFO, "MultiBoot 2 addr: 0x%x magic: 0x%x size: 0x%x\n", (uintptr_t)addr, (unsigned)magic, size);
         multiboot2_info_parse((const multiboot2_info_t*)addr);
-        pmm_init(multiboot2_mem_size);
+        mem_kib = multiboot2_mem_size;
     }
     else
     {
         klogf(LOG_EMERG, "Error: no multiboot, magic: 0x%lx. Exiting.", magic);
         exit_qemu(1);
     }
+
+    /* The loader's memory-size fields are unreliable (a UEFI GRUB reports a
+     * token ~7 MiB); the E820 map is authoritative, so use the top of RAM it
+     * reports whenever that is larger. */
+    {
+        uint64_t top = 0;
+        for (int i = 0; i < e820counter; i++)
+            if (e820table[i].type == 1) {
+                uint64_t e = e820table[i].base_address + e820table[i].size;
+                if (e > 0xFFFFF000ULL) e = 0xFFFFF000ULL;
+                if (e > top) top = e;
+            }
+        if ((uint32_t)(top / 1024) > mem_kib)
+            mem_kib = (uint32_t)(top / 1024);
+    }
+    pmm_init(mem_kib);
 
     /* Move the boot RAM disk out of the bootloader's scratch area (which GRUB
      * packs right behind the kernel) before pmm/vmm claim that memory. Must
@@ -122,14 +139,24 @@ void kernel_main(unsigned long magic, unsigned long addr)
     for (int i = 0; i < e820counter; i++)
     {
         struct e820memmap map = e820table[i];
-        if (map.type == 1)
-        {
-            klogf(LOG_INFO, " BIOS-e820 [addr: 0x%x%x, size: 0x%x%x] %s\n",
-                  (unsigned)(map.base_address >> 32), (unsigned)(map.base_address & 0xffffffff),
-                  (unsigned)(map.size >> 32), (unsigned)(map.size & 0xffffffff),
-                  e820_type_to_string((unsigned)map.type));
-            pmm_init_reg(map.base_address & 0xffffffff, map.size & 0xffffffff);
-        }
+        if (map.type != 1)
+            continue;
+
+        klogf(LOG_INFO, " BIOS-e820 [addr: 0x%x%x, size: 0x%x%x] %s\n",
+              (unsigned)(map.base_address >> 32), (unsigned)(map.base_address & 0xffffffff),
+              (unsigned)(map.size >> 32), (unsigned)(map.size & 0xffffffff),
+              e820_type_to_string((unsigned)map.type));
+
+        /* The 32-bit PMM only tracks the low 4 GiB: drop ranges that start
+         * above it and clip one that crosses it, so no wrap-around frees the
+         * wrong frames. */
+        uint64_t base = map.base_address;
+        uint64_t end  = base + map.size;
+        if (base >= 0xFFFFF000ULL)
+            continue;
+        if (end > 0xFFFFF000ULL)
+            end = 0xFFFFF000ULL;
+        pmm_init_reg((uint32_t) base, (uint32_t) (end - base));
     }
 
     /* Keep the relocated RAM disk out of the frame allocator's reach. */
@@ -137,6 +164,10 @@ void kernel_main(unsigned long magic, unsigned long addr)
         pmm_deinit_reg(initrd_phys_start, initrd_phys_end - initrd_phys_start);
 
     pmm_init2();
+    klogf(LOG_INFO, "pmm: mem_size=%u KiB  max_frames=%u  used=%u  free=%u KiB\n",
+          (unsigned) multiboot2_mem_size, (unsigned) get_max_blocks(),
+          (unsigned) get_used_blocks(),
+          (unsigned) ((get_max_blocks() - get_used_blocks()) * 4));
     vmm_init();
     kheap_init();
     if (!bfb_addr) vga_init();

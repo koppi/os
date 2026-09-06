@@ -82,6 +82,8 @@ static uint32_t cpu_apicids[MAX_CPU];
 static int      cpu_count       = 0;
 static uint32_t lapic_base      = 0xFEE00000;   /* x86 default. */
 static uint32_t bsp_apicid      = 0;
+static const void *g_madt       = 0;            /* mapped MADT, for the IOAPIC code */
+static const void *g_rsdp       = 0;            /* mapped, validated RSDP */
 
 /**
  * @brief Identity-map a physically-located ACPI table so it can be read.
@@ -114,25 +116,44 @@ static int checksum_ok(const uint8_t *p, size_t len) {
     return sum == 0;
 }
 
+/** Physical address of the RSDP GRUB handed us via a multiboot2 tag (0 if none).
+ *  Set by the multiboot2 parser; the only way to find the RSDP under UEFI. */
+extern uint32_t multiboot2_acpi_rsdp;
+
+/** @brief Validate a candidate RSDP at @p addr. @return the mapped struct or 0. */
+static const rsdp_t *check_rsdp(uint32_t addr) {
+    const rsdp_t *r = (const rsdp_t *) acpi_map(addr, sizeof(rsdp_t));
+    if (bytecmp(r->signature, RSDP_SIG, 8) != 0)
+        return 0;
+    if (!checksum_ok((const uint8_t *) r, 20))          /* v1 checksum */
+        return 0;
+    if (r->revision >= 2 && !checksum_ok((const uint8_t *) r, 36))
+        return 0;                                       /* v2 extended checksum */
+    return r;
+}
+
 /** @brief Validate the RSDP and return it if usable, else NULL. */
 static const rsdp_t *find_rsdp(void) {
-    /* The RSDP lives either in the EBDA (first KiB) or 0xE0000-0xFFFFF. Scan
-     * both on 16-byte boundaries. */
-    for (uint32_t addr = 0xE0000; addr < 0x100000; addr += 16) {
-        const rsdp_t *r = (const rsdp_t *) acpi_map(addr, sizeof(rsdp_t));
-        if (bytecmp(r->signature, RSDP_SIG, 8) == 0 &&
-            checksum_ok((const uint8_t *) r, 20))
+    const rsdp_t *r;
+
+    /* 1. The pointer GRUB copied in from the EFI system table, if we booted
+     *    via UEFI. The legacy scan below finds nothing there. */
+    if (multiboot2_acpi_rsdp && (r = check_rsdp(multiboot2_acpi_rsdp)))
+        return r;
+
+    /* 2. Legacy BIOS: the RSDP lives in the EBDA (first KiB) or 0xE0000-0xFFFFF,
+     *    on a 16-byte boundary. */
+    for (uint32_t addr = 0xE0000; addr < 0x100000; addr += 16)
+        if ((r = check_rsdp(addr)))
             return r;
-    }
+
     /* EBDA: paragraph pointer at 0x40E, then scan the first 1 KiB. */
     uint32_t ebda_seg = *(uint16_t *) acpi_map(0x40E, 2);
     uint32_t ebda = (ebda_seg << 4) & 0xFFFFF;
-    for (uint32_t addr = ebda; addr < ebda + 1024; addr += 16) {
-        const rsdp_t *r = (const rsdp_t *) acpi_map(addr, sizeof(rsdp_t));
-        if (bytecmp(r->signature, RSDP_SIG, 8) == 0 &&
-            checksum_ok((const uint8_t *) r, 20))
+    for (uint32_t addr = ebda; addr < ebda + 1024; addr += 16)
+        if ((r = check_rsdp(addr)))
             return r;
-    }
+
     return 0;
 }
 
@@ -166,24 +187,66 @@ static void parse_madt(const madt_t *madt) {
     }
 }
 
-/**
- * @brief Locate the MADT by walking the RSDT, then parse it.
- */
-static void locate_madt(const rsdp_t *rsdp) {
-    rsdt_t *rsdt = (rsdt_t *) acpi_map(rsdp->rsdt_addr,
-                                       sizeof(sdt_t));
-    if (bytecmp(rsdt->header.signature, "RSDT", 4) != 0)
-        return;
+typedef struct __attribute__((packed)) {
+    sdt_t    header;
+    uint64_t entry[];       /* 64-bit physical addresses of other SDTs. */
+} xsdt_t;
 
-    uint32_t count = (rsdt->header.length - sizeof(sdt_t)) / 4;
-    for (uint32_t i = 0; i < count; i++) {
-        sdt_t *tbl = (sdt_t *) acpi_map(rsdt->entry[i], sizeof(sdt_t));
-        if (bytecmp(tbl->signature, MADT_SIG, 4) == 0) {
-            parse_madt((madt_t *) tbl);
-            return;
+/**
+ * @brief Locate an ACPI table by signature, walking the XSDT (ACPI 2.0+) when
+ *        the RSDP advertises it, else the 32-bit RSDT.
+ */
+static sdt_t *acpi_find_table(const rsdp_t *rsdp, const char *sig) {
+    if (rsdp->revision >= 2 && rsdp->xsdt_addr &&
+        (rsdp->xsdt_addr >> 32) == 0) {
+        xsdt_t *xsdt = (xsdt_t *) acpi_map((uint32_t) rsdp->xsdt_addr, sizeof(sdt_t));
+        if (bytecmp(xsdt->header.signature, "XSDT", 4) == 0) {
+            xsdt = (xsdt_t *) acpi_map((uint32_t) rsdp->xsdt_addr, xsdt->header.length);
+            uint32_t count = (xsdt->header.length - sizeof(sdt_t)) / 8;
+            for (uint32_t i = 0; i < count; i++) {
+                uint64_t e = xsdt->entry[i];
+                if (e == 0 || (e >> 32) != 0)
+                    continue;
+                sdt_t *tbl = (sdt_t *) acpi_map((uint32_t) e, sizeof(sdt_t));
+                if (bytecmp(tbl->signature, sig, 4) == 0)
+                    return (sdt_t *) acpi_map((uint32_t) e, tbl->length);
+            }
         }
     }
+
+    if (rsdp->rsdt_addr) {
+        rsdt_t *rsdt = (rsdt_t *) acpi_map(rsdp->rsdt_addr, sizeof(sdt_t));
+        if (bytecmp(rsdt->header.signature, "RSDT", 4) == 0) {
+            rsdt = (rsdt_t *) acpi_map(rsdp->rsdt_addr, rsdt->header.length);
+            uint32_t count = (rsdt->header.length - sizeof(sdt_t)) / 4;
+            for (uint32_t i = 0; i < count; i++) {
+                if (!rsdt->entry[i])
+                    continue;
+                sdt_t *tbl = (sdt_t *) acpi_map(rsdt->entry[i], sizeof(sdt_t));
+                if (bytecmp(tbl->signature, sig, 4) == 0)
+                    return (sdt_t *) acpi_map(rsdt->entry[i], tbl->length);
+            }
+        }
+    }
+    return 0;
 }
+
+/**
+ * @brief Locate the MADT (via XSDT/RSDT) and parse it.
+ */
+static void locate_madt(const rsdp_t *rsdp) {
+    sdt_t *madt = acpi_find_table(rsdp, MADT_SIG);
+    if (madt) {
+        g_madt = madt;
+        parse_madt((madt_t *) madt);
+    }
+}
+
+/** @return The mapped MADT (ACPI "APIC" table), or 0 if none was found. */
+const void *acpi_madt(void) { return g_madt; }
+
+/** @return The validated RSDP, or 0. */
+const void *acpi_rsdp(void) { return g_rsdp; }
 
 void acpi_init(void) {
     const rsdp_t *rsdp = find_rsdp();
@@ -193,6 +256,7 @@ void acpi_init(void) {
         cpu_apicids[0] = 0;
         return;
     }
+    g_rsdp = rsdp;
     locate_madt(rsdp);
     if (cpu_count == 0) {
         klogf(LOG_WARN, "acpi: no MADT CPUs found, assuming 1 CPU\n");

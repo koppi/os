@@ -56,6 +56,11 @@ static void multiboot2_module(const multiboot2_module_t *module) {
     }
 }
 
+/** Highest usable RAM address seen in the memory map (bytes), capped at 4 GiB.
+ *  Used as the PMM size when no basic-meminfo tag is present, which is the
+ *  normal case when GRUB boots us from UEFI firmware. */
+uint32_t multiboot2_ram_top = 0;
+
 static void multiboot2_memmap(uint32_t length, const multiboot2_memmap_t *memmap)
 {
     multiboot2_memmap_entry_t *entry = (multiboot2_memmap_entry_t *)
@@ -66,6 +71,14 @@ static void multiboot2_memmap(uint32_t length, const multiboot2_memmap_t *memmap
         e820table[e820counter].base_address = entry->base_address;
         e820table[e820counter].size = entry->size;
         e820table[e820counter].type = entry->type;
+
+        if (entry->type == 1) {
+            uint64_t top = entry->base_address + entry->size;
+            if (top > 0xFFFFF000ULL)
+                top = 0xFFFFF000ULL;
+            if ((uint32_t) top > multiboot2_ram_top)
+                multiboot2_ram_top = (uint32_t) top;
+        }
 
         /* Compute address of next entry. */
         entry = (multiboot2_memmap_entry_t *)
@@ -97,6 +110,18 @@ static void multiboot2_fbinfo(const multiboot2_fbinfo_t *fbinfo)
 }
 
 uint32_t multiboot2_mem_size = 0;
+
+/** Physical address of the ACPI RSDP GRUB copied in for us, or 0. Under UEFI
+ *  the RSDP is not in the legacy 0xE0000-0xFFFFF window, so this tag is the
+ *  only way to find it. */
+uint32_t multiboot2_acpi_rsdp = 0;
+
+static void multiboot2_acpi(const multiboot2_tag_t *tag) {
+    /* The RSDP copy follows the 8-byte tag header. Prefer the first (v1) or
+     * v2 copy we see; acpi.c re-validates the checksum. */
+    if (!multiboot2_acpi_rsdp)
+        multiboot2_acpi_rsdp = (uint32_t) (uintptr_t) ((const uint8_t *) tag + 8);
+}
 
 void multiboot2_info_parse(const multiboot2_info_t *info) {
     (void)tag_names;
@@ -133,6 +158,10 @@ void multiboot2_info_parse(const multiboot2_info_t *info) {
         case MULTIBOOT2_TAG_FBINFO:
             multiboot2_fbinfo(&tag->fbinfo);
             break;
+        case MULTIBOOT2_TAG_ACPI_OLD:
+        case MULTIBOOT2_TAG_ACPI_NEW:
+            multiboot2_acpi(tag);
+            break;
         default:
             //printf("\n");
             break;
@@ -141,4 +170,12 @@ void multiboot2_info_parse(const multiboot2_info_t *info) {
 		tag = (const multiboot2_tag_t *)
 		    ALIGN_UP((uintptr_t) tag + tag->size, MULTIBOOT2_TAG_ALIGN);
 	}
+
+    /* Trust the memory map over the basic-meminfo tag: GRUB books us via UEFI
+     * with a token basic-meminfo (~7 MiB, since there is no BIOS INT 15h),
+     * which would leave the PMM with almost no frames. The E820 map is
+     * authoritative -- use the top of RAM it reports whenever that is larger. */
+    uint32_t from_map = multiboot2_ram_top / 1024;
+    if (from_map > multiboot2_mem_size)
+        multiboot2_mem_size = from_map;
 }

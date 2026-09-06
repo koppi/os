@@ -24,3 +24,9 @@ uint32_t acpi_lapic_base(void);
 
 /** @return The BSP's own LAPIC id as reported by ACPI (or 0). */
 uint32_t acpi_bsp_apicid(void);
+
+/** @return The mapped MADT ("APIC" table), or 0 if ACPI was not found. */
+const void *acpi_madt(void);
+
+/** @return The validated RSDP, or 0. */
+const void *acpi_rsdp(void);

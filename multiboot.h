@@ -20,6 +20,7 @@
 #define MULTIBOOT_INFO_FLAGS_SYMS1	0x10
 #define MULTIBOOT_INFO_FLAGS_SYMS2	0x20
 #define MULTIBOOT_INFO_FLAGS_MMAP	0x40
+#define MULTIBOOT_INFO_FLAGS_FB		0x1000  /**< framebuffer_* fields are valid. */
 
 #ifndef __ASSEMBLER__
 

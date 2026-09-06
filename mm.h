@@ -10,7 +10,14 @@
 #define BLOCKS_PER_BYTE 8          /**< Frames tracked per bitmap byte. */
 #define BLOCKS_LEN 4096            /**< Frame size in bytes. */
 #define BYTE_SET 0xFFFFFFFF        /**< All-ones word (frame group fully used). */
-#define BITMAP_LEN 0x8000          /**< Bitmap size in bytes (covers up to 4 GiB). */
+#define BITMAP_LEN 0x8000          /**< Frame bitmap: uint32_t words (covers 4 GiB). */
+
+/** Frames the static bitmap can describe (@ref BITMAP_LEN words * 32 bits).
+ *  A real machine may report more RAM than fits the low 4 GiB a 32-bit kernel
+ *  can address; @ref pmm_init clamps to this and ignores the rest. */
+#define PMM_MAX_FRAMES (BITMAP_LEN * 32u)
+/** Highest physical address the 32-bit PMM tracks (one past the last frame). */
+#define PMM_PHYS_LIMIT 0xFFFFF000u
 
 /** Top of the identity-mapped low memory; also the pmm's reserved ceiling. */
 #define KERNEL_SPACE_END 0x401000

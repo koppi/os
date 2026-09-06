@@ -24,12 +24,20 @@ static uint32_t bitmap[BITMAP_LEN] __attribute__((aligned(BLOCKS_LEN)));
  * @param mem_size Total physical memory in KiB.
  */
 void pmm_init(uint32_t mem_size) {
-    // Get the blocks number
-    pmm.max_blocks = pmm.used_blocks = mem_size / 4;
+    // Get the blocks number (mem_size is in KiB, one block per 4 KiB frame).
+    uint32_t blocks = mem_size / 4;
+    // Never describe more frames than the static bitmap can hold: real
+    // machines report several GiB of RAM and the old code walked
+    // pmm.map[max_blocks/32] straight off the end of .bss.
+    if (blocks > PMM_MAX_FRAMES)
+        blocks = PMM_MAX_FRAMES;
+    pmm.max_blocks = pmm.used_blocks = blocks;
     // Set the address for the memory map
     pmm.map = bitmap;
-    // Set all the blocks as used
-    memset(pmm.map, BYTE_SET, BITMAP_LEN);
+    // Set every frame used. memset takes a byte count: the old code passed
+    // BITMAP_LEN (the word count), clearing only the first quarter of the map
+    // and leaving frames above 1 GiB reading as free .bss zeros.
+    memset(pmm.map, BYTE_SET, sizeof(bitmap));
 }
 
 /**
@@ -76,12 +84,19 @@ int pmm_first_free() {
  * @param size Region size in bytes.
  */
 void pmm_init_reg(mm_addr_t addr, uint32_t size) {
-    uint32_t i;
-    uint32_t blocks = size / BLOCKS_LEN;
     uint32_t align = addr / BLOCKS_LEN;
-    for(i = 0; i < blocks; i++) {
+    uint32_t blocks = size / BLOCKS_LEN;
+    /* Clamp to what the bitmap can hold: a RAM range that runs past the 4 GiB
+     * the 32-bit PMM tracks (common on real hardware) must not walk the map
+     * off the end of .bss. */
+    if (align >= pmm.max_blocks)
+        return;
+    if (blocks > pmm.max_blocks - align)
+        blocks = pmm.max_blocks - align;
+    for(uint32_t i = 0; i < blocks; i++) {
+        if (pmm.map[align / 32] & (1u << (align % 32)))
+            pmm.used_blocks--;
         pmm_unset_bit(align++);
-        pmm.used_blocks--;
     }
     pmm_set_bit(0);
 }
@@ -92,17 +107,16 @@ void pmm_init_reg(mm_addr_t addr, uint32_t size) {
  * @param size Region size in bytes.
  */
 void pmm_deinit_reg(mm_addr_t addr, uint32_t size) {
-    uint32_t i;
-    uint32_t blocks = size / BLOCKS_LEN;
-    uint32_t align;
-    if(addr == 0) {
-        align = 0;
-    } else {
-        align = addr / BLOCKS_LEN;
-    }
-    for(i = 0; i < blocks; i++) {
+    uint32_t align = (addr == 0) ? 0 : addr / BLOCKS_LEN;
+    uint32_t blocks = (size + BLOCKS_LEN - 1) / BLOCKS_LEN;
+    if (align >= pmm.max_blocks)
+        return;
+    if (blocks > pmm.max_blocks - align)
+        blocks = pmm.max_blocks - align;
+    for(uint32_t i = 0; i < blocks; i++) {
+        if (!(pmm.map[align / 32] & (1u << (align % 32))))
+            pmm.used_blocks++;
         pmm_set_bit(align++);
-        pmm.used_blocks++;
     }
 }
 

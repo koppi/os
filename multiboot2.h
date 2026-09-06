@@ -32,6 +32,9 @@
 #define MULTIBOOT2_TAG_MEMMAP  6
 #define MULTIBOOT2_TAG_VBE     7
 #define MULTIBOOT2_TAG_FBINFO  8
+#define MULTIBOOT2_TAG_ACPI_OLD 14   /**< ACPI 1.0 RSDP (needed under UEFI). */
+#define MULTIBOOT2_TAG_ACPI_NEW 15   /**< ACPI 2.0+ RSDP (needed under UEFI). */
+#define MULTIBOOT2_TAG_EFI64    12   /**< EFI 64-bit system table pointer. */
 
 #define MULTIBOOT2_VISUAL_INDEXED  0
 #define MULTIBOOT2_VISUAL_RGB      1

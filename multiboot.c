@@ -78,10 +78,16 @@ void multiboot_info_parse(const multiboot_info_t *info) {
 		multiboot_memmap(info->mmap_length,
 		    (multiboot_memmap_t *) MULTIBOOT_PTR(info->mmap_addr));
 
-    /* Boot framebuffer. */
-    bfb_addr   = (uint32_t)MULTIBOOT_PTR(info->framebuffer_addr);
-    bfb_width  = (uint32_t)MULTIBOOT_PTR(info->framebuffer_width);
-    bfb_height = (uint32_t)MULTIBOOT_PTR(info->framebuffer_height);
-    bfb_bpp    = (uint32_t)MULTIBOOT_PTR(info->framebuffer_bpp);
-    bfb_scanline = (uint32_t)MULTIBOOT_PTR(info->framebuffer_pitch);
+    /* Boot framebuffer -- only if the loader actually set one up and it is a
+     * linear RGB mode. A missing FB flag (console boot) or an EGA-text "mode"
+     * would otherwise feed garbage / 0xB8000 into vbe_init(). */
+    if ((info->flags & MULTIBOOT_INFO_FLAGS_FB) != 0 &&
+        info->framebuffer_type == MULTIBOOT_FRAMEBUFFER_TYPE_RGB &&
+        info->framebuffer_addr != 0) {
+        bfb_addr     = (uint32_t) info->framebuffer_addr;
+        bfb_width    = info->framebuffer_width;
+        bfb_height   = info->framebuffer_height;
+        bfb_bpp      = info->framebuffer_bpp;
+        bfb_scanline = info->framebuffer_pitch;
+    }
 }
