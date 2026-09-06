@@ -71,10 +71,9 @@ else
 endif
 
 QEMU ?= qemu-system-$(TARGET)
-# Number of CPUs. The default -smp 4 exercises the parallel scheduler; the
-# compute+syscall-heavy cc compiler self-hosts reliably under it. (It used to
-# corrupt user heaps: a cacheable LAPIC mapping made this_cpu() alias every
-# core onto CPU 0, so the per-CPU scheduler state went to the wrong cpu_t.)
+# Number of CPUs. -smp 4 is the tested default: the whole userland, including
+# repeated self-hosting builds of the cc compiler (compute- and syscall-heavy),
+# runs reliably under it. Set SMP=1 only to bisect a suspected SMP regression.
 SMP ?= 4
 QEMUFLAGS += -vga std -m 256M -no-reboot
 QEMUFLAGS += -smp $(SMP)
