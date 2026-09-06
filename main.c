@@ -75,17 +75,25 @@ extern uint32_t multiboot2_mem_size;
  * ------------------------------------------------------------------ */
 static int bootdiag_on;
 
-static void bd_delay(volatile uint32_t n) { while (n--) __asm__ volatile("pause"); }
+/* A tuning-free spin: `pause` retires in wildly different times across CPUs
+ * (~5 cycles on Broadwell, ~140 on Kaby Lake), so a "unit" here is only
+ * roughly a few ms. bootdiag multiplies it up into clearly human-scale beeps
+ * and holds -- exact duration does not matter, only that they are countable. */
+static void bd_spin(volatile uint32_t units) {
+    while (units--)
+        for (volatile int i = 0; i < 20000; i++)
+            __asm__ volatile("pause");
+}
 
-static void bd_beep(int freq, uint32_t hold) {
+static void bd_tone(int freq, uint32_t on_units, uint32_t off_units) {
     uint32_t c = 1193182u / (uint32_t) freq;
     outportb(0x43, 0xB6);
     outportb(0x42, c & 0xFF);
     outportb(0x42, (c >> 8) & 0xFF);
     outportb(0x61, inportb(0x61) | 3);
-    bd_delay(hold);
+    bd_spin(on_units);
     outportb(0x61, inportb(0x61) & 0xFC);
-    bd_delay(hold / 3);
+    bd_spin(off_units);
 }
 
 /** @param stage 1..N checkpoint number. @param paging_off non-zero while the
@@ -93,18 +101,27 @@ static void bd_beep(int freq, uint32_t hold) {
 static void bootdiag(int stage, int paging_off) {
     if (!bootdiag_on)
         return;
+
+    /* N rising beeps == checkpoint N reached. */
     for (int i = 0; i < stage; i++)
-        bd_beep(760 + stage * 90, 900000);
+        bd_tone(560 + stage * 120, 12, 6);
+
+    /* While paging is off the framebuffer GRUB handed over is at its physical
+     * address -- flood it so the checkpoint is visible too, and hold it long
+     * enough to read. Once paging is on the fb is not mapped here; the beeps
+     * carry the signal. */
     if (paging_off && bfb_addr && bfb_bpp >= 24) {
         static const uint32_t hue[] = {
-            0x330000, 0x333300, 0x003300, 0x003333, 0x000033, 0x330033, 0x333333
+            0x00440000, 0x00444400, 0x00004400, 0x00004444, 0x00000066,
+            0x00440044, 0x00444444
         };
-        uint32_t col = hue[(stage - 1) % 7];
+        uint32_t col   = hue[(stage - 1) % 7];
         uint32_t pitch = bfb_scanline ? bfb_scanline : bfb_width * 4;
         volatile uint8_t *fb = (volatile uint8_t *) (uintptr_t) bfb_addr;
         for (uint32_t y = 0; y < bfb_height; y++)
             for (uint32_t x = 0; x < bfb_width; x++)
                 *(volatile uint32_t *) (fb + y * pitch + x * 4) = col;
+        bd_spin(120);   /* ~1-2 s so the colour is readable */
     }
 }
 
