@@ -255,10 +255,13 @@ void tlb_shootdown(uint32_t va) {
 void apic_init(void) {
     lapic_base = acpi_lapic_base();
 
-    /* Map the LAPIC MMIO block 1:1 into the kernel directory. */
+    /* Map the LAPIC MMIO block 1:1 into the kernel directory. It MUST be
+     * uncacheable (PCD): the LAPIC ID register is CPU-local, and a cacheable
+     * mapping let one CPU read another's id (0 = BSP) from a shared cache line,
+     * which sent this_cpu() -- and the whole per-CPU scheduler -- off the rails. */
     for (uint32_t off = 0; off < 0x1000; off += PAGE_SIZE)
         vmm_map_phys(get_kern_directory(), lapic_base + off, lapic_base + off,
-                     PAGE_PRESENT | PAGE_RW);
+                     PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
     lapic_ready = 1;
 
     /* Enable this (BSP) CPU's LAPIC. */

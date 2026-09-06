@@ -157,9 +157,9 @@ file *vfs_file_open(char *name, char *mode) {
 }
 
 file *vfs_file_open_user(char *name, char *mode) {
-    process_t *cur = get_cur_proc();
+    process_t *cur = current_user_proc();
     if(cur && cur->thread_list) {
-        file *f = (file *) umalloc(sizeof(file), (vmm_addr_t *) cur->thread_list->heap);
+        file *f = (file *) umalloc_locked(sizeof(file), cur->thread_list, cur->pdir);
         if(nfs_is_mounted() && nfs_owns_path(name)) {
             file fil = nfs_vfs_open(name, mode);
             memcpy(f, &fil, sizeof(file));
@@ -269,9 +269,9 @@ void vfs_file_close_user(file *f) {
             int s = fs_enter();
             devs[f->dev]->close(f);
             fs_leave(s);
-            process_t *cur = get_cur_proc();
+            process_t *cur = current_user_proc();
             if(cur && cur->thread_list) {
-                ufree(f, (vmm_addr_t *) cur->thread_list->heap);
+                ufree_locked(f, cur->thread_list);
             }
         }
     }

@@ -70,6 +70,20 @@ process_t *get_proc_by_id(int id) {
     return found;
 }
 
+process_t *proc_by_cr3(uint32_t cr3) {
+    page_dir_t *kd = get_kern_directory();
+    if ((page_dir_t *) cr3 == kd)
+        return 0;
+    uint32_t f = spin_lock(&sched_lock);
+    process_t *found = 0;
+    process_t *p = list;
+    for (int i = 0; i < n_proc; i++, p = p->next) {
+        if ((uint32_t) (uintptr_t) p->pdir == cr3) { found = p; break; }
+    }
+    spin_unlock(&sched_lock, f);
+    return found;
+}
+
 void uart_read_proc() {
     char ch[2];
 
@@ -376,17 +390,26 @@ uint64_t schedule(uint32_t esp) {
         return esp;
     }
 
+    /* Defensive: c->current must be one of c->current_proc's own threads. If
+     * they have desynced (a foreign thread pointer) fall back to the process's
+     * own current thread, so the context save below never lands in a kernel
+     * thread's control block. */
+    if (!idle_now && out_t && (process_t *) out_t->parent != out_p)
+        out_t = out_p->thread_list;
+
     /* Save the outgoing context. */
     c->sched_ticks = 0;
     if (out_t)
         out_t->esp_kernel = esp;
     if (!idle_now) {
         out_p->cpu = -1;
-        thread_t *t = out_t;
+        thread_t *start = out_t ? out_t : out_p->thread_list;
+        thread_t *t = start;
         do {
             t = t->next;
-        } while (t != out_t && t->state != PROC_ACTIVE);
-        out_p->thread_list = t;
+        } while (t != start && t->state != PROC_ACTIVE);
+        if ((process_t *) t->parent == out_p)   /* never rotate out of the ring */
+            out_p->thread_list = t;
     }
 
     /* Pick the next process: highest priority, then least-recently-run. */

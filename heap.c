@@ -10,6 +10,7 @@
 #include <proc.h>
 #include <printf.h>
 #include <lib/string.h>
+#include <spinlock.h>
 
 /** Round an allocation size up so headers stay 4-byte aligned. */
 static size_t heap_align(size_t len) {
@@ -139,7 +140,11 @@ static int heap_grow(thread_t *t, page_dir_t *pdir, size_t need) {
                 vmm_unmap(pdir, base + i * PAGE_SIZE);
             return 0;
         }
-        flush_tlb(va);
+        /* No TLB shootdown: `va` sits above the old heap limit and has never
+         * been mapped in this address space, so no CPU can hold a stale
+         * translation for it (x86 does not cache not-present entries). The
+         * write below faults it straight in on this CPU. Broadcasting a
+         * shootdown per page here was the bulk of the SMP TLB-IPI storm. */
         memset((void *) va, 0, PAGE_SIZE);
     }
 
@@ -164,27 +169,73 @@ static int heap_grow(thread_t *t, page_dir_t *pdir, size_t need) {
     return 1;
 }
 
-void *umalloc_sys(size_t len) {
-    process_t *cur = get_cur_proc();
-    if(!cur || !cur->thread_list)
-        return 0;
-
-    thread_t *t = cur->thread_list;
+/*
+ * A user process's heap free list is a shared mutable structure reached from
+ * more than one kernel entry point: the process's own malloc/free/realloc
+ * syscalls and vfs.c, which umalloc()s the `file` handle a fopen() returns into
+ * that same heap. int 0x72 is a trap gate, so those paths are preemptible and,
+ * on SMP, can be resumed on another CPU. uheap_lock serialises every user-heap
+ * mutation (and, because spin_lock() clears IF, pins the thread for it).
+ */
+void *umalloc_locked(size_t len, struct thread *t, page_dir_t *pdir) {
+    uint32_t f = spin_lock(&uheap_lock);
     void *p = umalloc(len, (vmm_addr_t *) t->heap);
-    if(!p && heap_grow(t, cur->pdir, len))
+    if(!p && heap_grow(t, pdir, len))
         p = umalloc(len, (vmm_addr_t *) t->heap);
+    spin_unlock(&uheap_lock, f);
     return p;
 }
 
-void ufree_sys(void *ptr) {
+void ufree_locked(void *ptr, struct thread *t) {
+    uint32_t f = spin_lock(&uheap_lock);
+    ufree(ptr, (vmm_addr_t *) t->heap);
+    spin_unlock(&uheap_lock, f);
+}
+
+/**
+ * @brief The process on whose behalf the running user-heap syscall executes.
+ *
+ * A syscall enters through a trap gate (interrupts stay on) and can be re-picked
+ * on another CPU mid-flight; there is a narrow window in the SMP scheduler where
+ * the per-CPU @c current_proc still points at a foreign (kernel/idle) thread,
+ * whose heap is 0. Trusting that would make heap_grow() map pages over virtual
+ * address 0, or hand back a pointer that is not mapped in the address space the
+ * caller will return to.
+ *
+ * CR3 is the ground truth: the trap gate does not switch address spaces, so the
+ * live page directory *is* the caller's. Take the fast path when @c current_proc
+ * already agrees with it; otherwise recover the real caller from the run queue
+ * by matching CR3. Give up (rather than corrupt memory) only if nothing matches.
+ */
+process_t *current_user_proc(void) {
+    uint32_t cr3 = get_pdbr();
+
     process_t *cur = get_cur_proc();
-    if(cur && cur->thread_list)
-        ufree(ptr, (vmm_addr_t *) cur->thread_list->heap);
+    if (!(cur && cur->pdir && (uint32_t) (uintptr_t) cur->pdir == cr3))
+        cur = proc_by_cr3(cr3);
+
+    if (cur && cur->thread_list && cur->pdir != get_kern_directory() &&
+        cur->thread_list->heap >= 0x400000)
+        return cur;
+    return 0;
+}
+
+void *umalloc_sys(size_t len) {
+    process_t *cur = current_user_proc();
+    if(!cur)
+        return 0;
+    return umalloc_locked(len, cur->thread_list, cur->pdir);
+}
+
+void ufree_sys(void *ptr) {
+    process_t *cur = current_user_proc();
+    if(cur)
+        ufree_locked(ptr, cur->thread_list);
 }
 
 void *urealloc_sys(void *ptr, size_t nsize) {
-    process_t *cur = get_cur_proc();
-    if(!cur || !cur->thread_list)
+    process_t *cur = current_user_proc();
+    if(!cur)
         return 0;
     if(!ptr)
         return umalloc_sys(nsize);

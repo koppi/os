@@ -48,6 +48,25 @@ process_t *get_cur_proc();
 /** @return The process owning thread id @p id, or NULL. */
 process_t *get_proc_by_id(int id);
 /**
+ * @brief Look up the run-queue process whose page directory is @p cr3.
+ *
+ * CR3 is hardware ground truth for "which address space is executing"; a syscall
+ * runs with the caller's CR3 still loaded (the trap gate does not switch it), so
+ * this recovers the calling process even when the per-CPU @c current_proc has
+ * briefly desynced under the SMP scheduler. The kernel directory is never
+ * matched. @return the process, or NULL.
+ */
+process_t *proc_by_cr3(uint32_t cr3);
+/**
+ * @brief The process on whose behalf the running user-space syscall executes,
+ *        resolved against the live CR3 so an SMP scheduler desync cannot make a
+ *        user-heap allocation land in the wrong address space.
+ *
+ * @return A ring-3 process with an initialised heap, or NULL if the caller
+ *         cannot be identified (in which case the syscall must fail safe).
+ */
+process_t *current_user_proc(void);
+/**
  * @brief Timer/IPI scheduler tick: save @p esp, pick the next runnable
  *        process/thread and hand the asm stub what it needs to resume it.
  *

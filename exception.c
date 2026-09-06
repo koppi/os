@@ -32,22 +32,36 @@ static inline int is_user_mode(void) {
 }
 
 /**
- * @brief Return non-zero if @p cs belongs to ring 3.
+ * @brief Return non-zero if the saved code selector @p cs belongs to ring 3.
+ *
+ * The kernel code selector is 0x08 (RPL 0); ring-3 code runs with 0x1B (RPL 3).
+ * Test the RPL bits, not equality against the *data* selector 0x10 — a kernel
+ * fault carries cs 0x08, and treating that as user mode sends an unrecoverable
+ * fault down @ref return_exception instead of panicking.
  */
 static inline int is_user_mode_cs(uint32_t cs) {
-    return cs != 0x10;
+    return (cs & 3) != 0;
 }
 
 /**
  * @brief Hand control to the userspace return stub with status 1.
  *
  * Used by the exception handlers when a ring-3 fault should kill the process
- * rather than panic the kernel.
+ * rather than panic the kernel. Never returns — the stub at @ref RETURN_ADDR
+ * issues the exit syscall.
+ *
+ * EAX must hold the status (1) at the indirect call: load it in the same asm
+ * block that performs the call and mark EAX clobbered, so the compiler does not
+ * stage the call target (a PIC base register) in EAX across the load.
  */
 void return_exception() {
-    int error = 1;
-    asm volatile("mov %0, %%eax" : : "r" (error));
-    (*return_error)();
+    void (*stub)(void) = return_error;
+    asm volatile("movl $1, %%eax\n\t"
+                 "call *%0\n\t"
+                 :
+                 : "r"(stub)
+                 : "eax", "ecx", "edx", "memory");
+    __builtin_unreachable();
 }
 
 /** @brief Handler for an unexpected vector — always fatal. */
@@ -208,6 +222,10 @@ void ex_page_fault(struct regs_error *re) {
 
     //printf("\nPage fault at addr: 0x%x\n", (unsigned)virt_addr);
     printf("Phys addr: 0x%x\n", phys_addr);
+    printf("eip: %x cs: %x\neax: %x ebx: %x ecx: %x edx: %x\nesp: %x ebp: %x esi: %x edi: %x\nds: %x es: %x fs: %x gs: %x\n",
+           re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp,
+           re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
+    printf("cr3: %x\n", get_pdbr());
     if(is_user_mode_cs(re->cs)) {
         return_exception();
     } else {

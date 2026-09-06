@@ -296,12 +296,19 @@ void remove_proc(int pid) {
     for(;;) {
         int busy = 0;
         for(int i = 0; i < ncpu; i++)
-            if(cpus[i].current_proc == cur)
+            if(cpus[i].current_proc == cur || cpus[i].current_dir == cur->pdir)
                 busy = 1;
         if(!busy)
             break;
         asm volatile("pause");
     }
+    /* current_proc/current_dir are cleared inside schedule() a few instructions
+     * before the tick stub actually reloads CR3, so a CPU can still be running
+     * on cur->pdir here. A full cross-CPU TLB shootdown is a barrier: another
+     * CPU only services the IPI once it is between instructions with IF set,
+     * i.e. its context-switch stub (which runs with IF clear) has completed and
+     * it has left cur's address space. After this it is safe to free. */
+    flush_tlb(0);
 
     // Remove the executable
     for(uint32_t page = 0; page < cur->thread_list->image_size / PAGE_SIZE; page++) {

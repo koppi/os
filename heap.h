@@ -34,6 +34,18 @@ void *umalloc(size_t len, vmm_addr_t *heap);
 /** @brief Free a block from the process heap at @p heap. */
 void ufree(void *ptr, vmm_addr_t *heap);
 
+struct thread;
+/**
+ * @brief @ref umalloc for @p t's heap under @c uheap_lock (grows it if needed).
+ *
+ * Every kernel path that mutates a *user* process's heap must go through this
+ * (or @ref ufree_locked) so the process's own preemptible malloc/free syscalls
+ * cannot race a fopen()'s handle allocation on SMP.
+ */
+void *umalloc_locked(size_t len, struct thread *t, page_dir_t *pdir);
+/** @brief @ref ufree for @p t's heap under @c uheap_lock. */
+void ufree_locked(void *ptr, struct thread *t);
+
 /** @brief `malloc` syscall: allocate from the current process's heap, growing it if needed. */
 void *umalloc_sys(size_t len);
 /** @brief `free` syscall: release into the current process's heap. */

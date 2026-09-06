@@ -20,6 +20,7 @@ spinlock_t proc_lock  = SPINLOCK_INIT;
 spinlock_t fs_lock    = SPINLOCK_INIT;
 spinlock_t con_lock   = SPINLOCK_INIT;
 spinlock_t tlb_lock   = SPINLOCK_INIT;
+spinlock_t uheap_lock = SPINLOCK_INIT;
 
 /** @brief Read the interrupt flag without touching it. */
 static inline uint32_t save_if(void) {
