@@ -73,6 +73,31 @@ static uint8_t sound_muted = 1;
  * module is never heard twice on a box that has both. */
 static uint8_t hda_active = 0;
 
+/* Set once the SB16 DSP has been reset successfully (sound_init). Gates the
+ * mixer writes so a box without a Sound Blaster never pokes ports 0x224/0x225. */
+static uint8_t sb16_ok = 0;
+
+/* Master playback level, 0..SOUND_VOL_MAX. The volume keys (keyboard.c) step
+ * it. sound.c drives the SB16 mixer inline (cheap port writes, IRQ-safe) and
+ * raises sound_vol_dirty so the HD Audio thread re-applies the codec amp — a
+ * CORB/RIRB verb must not be issued from the keyboard IRQ. */
+#define SOUND_VOL_MAX 16
+static int          sound_vol       = 12;   /* ~75 % at boot */
+static volatile int sound_vol_dirty = 1;
+
+/** @return the master level as a 0..100 percentage. */
+static int sound_vol_pct(void) { return sound_vol * 100 / SOUND_VOL_MAX; }
+
+/** @brief Write the current level to the SB16 master mixer (reg 0x22: 4-bit
+ *         left | 4-bit right). Muted or level 0 -> silent. IRQ-safe. */
+static void sb16_apply_mixer(void) {
+    if (!sb16_ok)
+        return;
+    int v = (sound_muted || sound_vol == 0) ? 0 : (sound_vol * 15 / SOUND_VOL_MAX);
+    outportb(DSP_MIXER, DSP_VOLUME);
+    outportb(DSP_MIXER_DATA, (uint8_t) ((v << 4) | v));
+}
+
 /** @brief Render @p len samples of MOD audio into @p buf. */
 static void fill(short int *buf, size_t len) {
     //printf("sound: fill len: %d\n", len);
@@ -81,11 +106,34 @@ static void fill(short int *buf, size_t len) {
 
 /** @brief Toggle MOD playback on/off (a muted transfer sends silence). */
 void sound_toggle() {
-    if (sound_muted) {
-        sound_muted = 0;
-    } else {
-        sound_muted = 1;
-    }
+    sound_muted = !sound_muted;
+    sound_vol_dirty = 1;
+    sb16_apply_mixer();
+}
+
+/** @brief Volume-Up key: raise the master level one step (and unmute). */
+void sound_volume_up(void) {
+    if (sound_vol < SOUND_VOL_MAX)
+        sound_vol++;
+    sound_muted = 0;
+    sound_vol_dirty = 1;
+    sb16_apply_mixer();
+    klogf(LOG_INFO, "sound: volume %d%%\n", sound_vol_pct());
+}
+
+/** @brief Volume-Down key: lower the master level one step. */
+void sound_volume_down(void) {
+    if (sound_vol > 0)
+        sound_vol--;
+    sound_vol_dirty = 1;
+    sb16_apply_mixer();
+    klogf(LOG_INFO, "sound: volume %d%%\n", sound_vol_pct());
+}
+
+/** @brief Mute key: same effect as the desktop's sound on/off button. */
+void sound_mute_toggle(void) {
+    sound_toggle();
+    klogf(LOG_INFO, "sound: %s\n", sound_muted ? "muted" : "unmuted");
 }
 
 /** @brief Wait for the DSP write buffer to drain, then send command byte @p b. */
@@ -229,10 +277,12 @@ void sound_init() {
     install_ir(32 + MIXER_IRQ, 0x80 | 0x0E, 0x8, &sound_int);
     if (reset() == 0)
     {
+        sb16_ok = 1;
         configure();
 
         transfer(buffer, BUFFER_SIZE);
         set_sample_rate(SAMPLE_RATE);
+        sb16_apply_mixer();
 
         uint16_t sample_count = (BUFFER_SIZE / 2) - 1;
         dsp_write(DSP_PLAY | DSP_PROG_16 | DSP_AUTO_INIT);
@@ -289,6 +339,10 @@ void sound_hda_thread(void) {
     printf("playing module '%s' through HD Audio.\n", modctx.song.title);
 
     for (;;) {
+        if (sound_vol_dirty) {
+            sound_vol_dirty = 0;       /* apply the codec amp off the IRQ path */
+            hda_set_volume(sound_muted ? 0 : sound_vol_pct());
+        }
         hda_stream_service(hda_fill);
         sleep(5);                      /* one half is ~90 ms; poll well inside */
     }

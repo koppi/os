@@ -12,6 +12,7 @@
 #include <idt.h>
 #include <pit.h>
 #include <printf.h>
+#include <sound.h>
 
 enum KBD_PORTS {
 	KBD_CHECK = 0x64,   /* status (read) / command (write) */
@@ -92,6 +93,12 @@ static const uint8_t shifted_keyboard_map[] =
 #define SC_LSHIFT 0x2A
 #define SC_RSHIFT 0x36
 
+/* Multimedia keys arrive as a 0xE0 prefix byte followed by these make codes
+ * (ThinkPad EC / QEMU PS/2 both send set-1 extended scancodes). */
+#define SC_E0_MUTE     0x20
+#define SC_E0_VOLDOWN  0x2E
+#define SC_E0_VOLUP    0x30
+
 /*
  * Decoded keystrokes are pushed here by the keyboard IRQ and drained by the
  * console. Without it a key that arrives (make + break) between two polls is
@@ -109,6 +116,9 @@ static volatile uint32_t kbd_tail = 0; // next read slot   (consumer only)
 
 /* bit 0: left shift held, bit 1: right shift held */
 static volatile uint8_t shift_state = 0;
+
+/* Set for one scancode after the 0xE0 prefix byte (extended-key marker). */
+static volatile uint8_t kbd_e0 = 0;
 
 /** asm IRQ stub (keyboard_asm) that calls @ref keyboard_read_key. */
 extern void keyboard_int();
@@ -174,6 +184,24 @@ void keyboard_read_key() {
         return;
 
     uint8_t code = inportb(KBD_IN);
+
+    if(code == 0xE0) {          /* extended-key prefix: the next byte is the key */
+        kbd_e0 = 1;
+        return;
+    }
+
+    if(kbd_e0) {
+        kbd_e0 = 0;
+        if(!(code & 0x80)) {   /* extended make code (break codes ignored) */
+            switch(code) {
+                case SC_E0_VOLUP:   sound_volume_up();   break;
+                case SC_E0_VOLDOWN: sound_volume_down(); break;
+                case SC_E0_MUTE:    sound_mute_toggle(); break;
+                default: break;   /* arrows, nav cluster, ... not decoded yet */
+            }
+        }
+        return;
+    }
 
     if(code & 0x80) {
         // Break (release) code.

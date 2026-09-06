@@ -72,6 +72,7 @@ static void io_wait(void) { inportb(0x80); }
 #define P_FN_TYPE     0x05
 #define P_WIDGET_CAP  0x09
 #define P_PIN_CAP     0x0C
+#define P_AMP_OUT_CAP 0x12
 
 #define WTYPE(cap)  (((cap) >> 20) & 0xF)
 #define WT_DAC 0x0
@@ -88,8 +89,13 @@ static struct { uint64_t addr; uint32_t len; uint32_t flags; }
 
 static int      have_hda;
 static uint32_t osd_base;
-static uint8_t  codec_addr, dac_nid, pin_nid;
+static uint8_t  codec_addr, afg_nid, dac_nid, pin_nid;
 static uint8_t  corb_wp, rirb_rp;
+
+/* Output-amp the volume keys drive: the node with an adjustable gain/mute amp
+ * (DAC first, then the output pin) and its step count from AMP_OUT_CAP. */
+static uint8_t  vol_nid;
+static uint8_t  vol_steps;
 
 /* Streamed-playback state (see hda_stream_*). */
 static int      streaming;
@@ -165,6 +171,7 @@ static int find_output_path(void) {
                     pin = w;
             }
             if (dac >= 0 && pin >= 0) {
+                afg_nid = fg;
                 dac_nid = dac;
                 pin_nid = pin;
                 return 1;
@@ -198,6 +205,48 @@ static void codec_bind_output(uint16_t fmt, uint8_t strm) {
     v12(pin_nid, V_SET_PIN_CTL, 0x40);             /* output enable */
     v4 (pin_nid, V4_SET_AMP, 0xB000 | 0x7F);
     v12(pin_nid, V_SET_EAPD, 0x02);                /* external amp / EAPD on */
+}
+
+/** @brief NumSteps of a node's output amp (0 = fixed / no output amp).
+ *  Honours the widget's own AMP_OUT_CAP only when it overrides the AFG default
+ *  (WIDGET_CAP bit 2 = out amp present, bit 3 = amp caps override). */
+static uint8_t amp_out_steps(uint8_t nid) {
+    uint32_t wc = param(nid, P_WIDGET_CAP);
+    if (!(wc & (1u << 2)))
+        return 0;
+    uint32_t cap = (wc & (1u << 3)) ? param(nid, P_AMP_OUT_CAP)
+                                    : param(afg_nid, P_AMP_OUT_CAP);
+    return (cap >> 8) & 0x7F;                       /* NumSteps */
+}
+
+/** @brief Choose the node the volume keys will attenuate: the DAC if its output
+ *  amp is adjustable, else the output pin. Called once, after the path is found. */
+static void pick_volume_node(void) {
+    vol_steps = amp_out_steps(dac_nid);
+    vol_nid   = dac_nid;
+    if (!vol_steps) {
+        vol_steps = amp_out_steps(pin_nid);
+        vol_nid   = pin_nid;
+    }
+}
+
+void hda_set_volume(int pct) {
+    if (!have_hda)
+        return;
+    if (pct < 0)   pct = 0;
+    if (pct > 100) pct = 100;
+
+    /* SET_AMP payload: bit15 output amp, bit13/12 left/right, bit7 mute,
+     * bits6-0 gain index (0 = most attenuated). */
+    uint16_t amp = 0xB000;
+    if (pct == 0)
+        amp |= (1u << 7);                          /* mute */
+    else if (vol_steps)
+        amp |= (pct * vol_steps + 50) / 100;       /* scaled gain index */
+    else
+        amp |= 0x7F;                               /* fixed amp: just unmute */
+
+    v4(vol_nid, V4_SET_AMP, amp);
 }
 
 void hda_play_pcm(const int16_t *samples, uint32_t nframes, uint32_t rate) {
@@ -410,7 +459,9 @@ void hda_probe(struct pci_device *dev) {
         return;
     }
 
+    pick_volume_node();
+
     have_hda = 1;
-    klogf(LOG_INFO, "hda: codec %u  DAC %u -> pin %u  osd 0x%x\n",
-          codec_addr, dac_nid, pin_nid, osd_base);
+    klogf(LOG_INFO, "hda: codec %u  DAC %u -> pin %u  osd 0x%x  vol nid %u/%u steps\n",
+          codec_addr, dac_nid, pin_nid, osd_base, vol_nid, vol_steps);
 }

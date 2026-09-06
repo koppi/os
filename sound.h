@@ -51,6 +51,14 @@ void sound_init();
 void sound_toggle();
 /** @brief SB16 DMA half/full-buffer interrupt handler. */
 void sb16_irq_handler();
+
+/** @name Volume / mute keys (driven from the keyboard IRQ, keyboard.c).
+ *  Each adjusts the SB16 mixer inline and flags the HD Audio thread to
+ *  re-apply the codec amp. @{ */
+void sound_volume_up(void);
+void sound_volume_down(void);
+void sound_mute_toggle(void);
+/** @} */
 /** @brief Kernel thread: stream MOD playback through the HD Audio codec.
  *         Start it (from @ref main_proc) only when @ref hda_present. */
 void sound_hda_thread(void);

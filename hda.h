@@ -26,6 +26,10 @@ void hda_play_pcm(const int16_t *samples, uint32_t nframes, uint32_t rate);
 /** @brief Play a @p ms-long square-wave tone at @p freq Hz through the codec. */
 void hda_beep(uint32_t freq, uint32_t ms);
 
+/** @brief Set the codec's output volume, 0..100 % (0 mutes), by writing the
+ *         DAC (or output-pin) gain/mute amp. No-op if no codec came up. */
+void hda_set_volume(int pct);
+
 /* ------------------------------------------------------------------ *
  *  Continuous (streamed) playback                                     *
  *                                                                    *
