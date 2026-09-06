@@ -94,6 +94,15 @@ static void multiboot2_memmap(uint32_t length, const multiboot2_memmap_t *memmap
 static void multiboot2_fbinfo(const multiboot2_fbinfo_t *fbinfo)
 {
     if (fbinfo->visual == MULTIBOOT2_VISUAL_RGB) {
+        /* A UEFI GOP framebuffer can sit above 4 GiB, where a 32-bit kernel
+         * cannot map it -- truncating the address would scribble into RAM and
+         * leave a black panel. Refuse it instead (falls back to VGA text). */
+        if (fbinfo->addr >> 32) {
+            klogf(LOG_WARNING,
+                  "mb2: framebuffer at 0x%x%x is above 4 GiB, ignoring\n",
+                  (uint32_t)(fbinfo->addr >> 32), (uint32_t)fbinfo->addr);
+            return;
+        }
         bfb_addr = fbinfo->addr;
         bfb_width = fbinfo->width;
         bfb_height = fbinfo->height;

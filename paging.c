@@ -15,10 +15,18 @@
 /** Number of 4 KiB blocks in the storage window (256 KiB). */
 #define MAX_BLOCKS 64
 
+/** The window must stay inside map_kernel()'s 4 MiB identity map — a block
+ *  above it would #PF the moment page_table_malloc() zeroed it (real CPUs, and
+ *  a large GOP framebuffer on a T470s-class panel, push kernel_end + the window
+ *  right up to the line). */
+#define IDMAP_LIMIT 0x400000u
+
 /** 2 words = 64 bits, one per 4 KiB block in the storage window. */
 static uint32_t bitmap[2];
 /** Base of the page-table storage window (set by @ref paging_init). */
 static uint32_t page_start;
+/** Blocks actually safe to hand out (<= MAX_BLOCKS): those below IDMAP_LIMIT. */
+static int usable_blocks = MAX_BLOCKS;
 /** Count of blocks currently handed out (diagnostic only). */
 static int used_blocks = 0;
 
@@ -32,6 +40,16 @@ uint32_t paging_init(uint32_t start) {
     page_start = (start + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1u);
     memset(bitmap, 0, sizeof(bitmap));
     used_blocks = 0;
+
+    usable_blocks = MAX_BLOCKS;
+    if (page_start < IDMAP_LIMIT) {
+        uint32_t fit = (IDMAP_LIMIT - page_start) / BLOCKS_LEN;
+        if (fit < (uint32_t) usable_blocks)
+            usable_blocks = (int) fit;
+    } else {
+        usable_blocks = 0;   /* window past the identity map -- unusable */
+    }
+
     return page_start + (uint32_t) MAX_BLOCKS * BLOCKS_LEN;
 }
 
@@ -77,8 +95,11 @@ int paging_first_free() {
     for(int i = 0; i < MAX_BLOCKS / 32; i++) {
         if(bitmap[i] != BYTE_SET) {
             for(int j = 0; j < 32; j++) {
+                int blk = (i * 32) + j;
+                if(blk >= usable_blocks)
+                    return -1;   /* rest of the window is outside the identity map */
                 if(!(bitmap[i] & (1u << j)))
-                    return (i * 32) + j;
+                    return blk;
             }
         }
     }
