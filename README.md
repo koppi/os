@@ -146,6 +146,11 @@ ports are still probed just once at boot. Try it from the QEMU monitor:
   `hda`, `hdb`, … `identify()` bounds every status poll, so an empty or absent
   IDE channel (the common case on real hardware, and when booting `os.iso`
   with no disk) is detected instead of hanging the boot.
+* **AHCI / SATA** — [`ahci.c`](ahci.c), polled, one command in flight; the M.2
+  SATA SSD on an X250-class laptop, mounted as the next free `hd{a,b,…}`.
+* **NVMe** — [`nvme.c`](nvme.c), polled, one admin + one I/O queue; the M.2
+  PCIe SSD on a Kaby Lake laptop (T470s), mounted as the next free `hd{a,b,…}`.
+  See **Booting on real hardware (ThinkPad T470s …)** below.
 
 Any drive that carries a FAT volume is mounted automatically. Programs and
 files are loaded from whichever device the path names — `start rd/hello`,
@@ -170,6 +175,7 @@ function the QEMU `pc` machine exposes has a handler, so nothing logs as
 | 82371SB PIIX3 USB (UHCI) | [`uhci.c`](uhci.c) | brought up later from the `usb` kernel thread |
 | 82371AB PIIX4 ACPI | [`pci_acpi.c`](pci_acpi.c) | latch the PM I/O base; back `poweroff` / `reboot` |
 | QEMU/Bochs standard VGA | [`pci_vga.c`](pci_vga.c) | record the framebuffer BAR, report the DISPI mode |
+| virtio-gpu (`-vga virtio`) | [`virtio_gpu.c`](virtio_gpu.c) | modern virtio-pci 2D scanout off the framebuffer shadow; follows host window resizes |
 | 82540EM gigabit Ethernet | [`e1000.c`](e1000.c) | polled link layer; IPv4/DHCP on top — see below |
 | 82801AA AC'97 audio | [`pci_ac97.c`](pci_ac97.c) | codec bring-up + BDL playback |
 
@@ -282,6 +288,7 @@ for anything more (there is no TLS or resolver cache).
 | In-kernel SSHv2 server (port 22) | [`ssh.c`](ssh.c) |
 | Crypto primitives (SHA-2, bignum, Curve25519, Ed25519, AES-128, CSPRNG) | [`sha2.c`](sha2.c), [`bignum256.c`](bignum256.c), [`curve25519.c`](curve25519.c), [`ed25519.c`](ed25519.c), [`aes128.c`](aes128.c), [`csprng.c`](csprng.c) |
 | QEMU / Bochs standard VGA (DISPI mode control) | [`pci_vga.c`](pci_vga.c) |
+| virtio-gpu 2D scanout + live window-resize (`-vga virtio`) | [`virtio_gpu.c`](virtio_gpu.c) |
 | AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sound.c`](sound.c) |
 | PC speaker | [`pcspk.c`](pcspk.c) |
 | VGA / VBE framebuffer | [`vga.c`](vga.c), [`video.c`](video.c), [`graphics.c`](graphics.c) |
@@ -653,6 +660,49 @@ in the `pci` output regardless.
 `test/x250-boot.sh` boots `os.iso` in QEMU `q35` configurations that
 approximate the X250 (AHCI, xHCI, `e1000e`), under both SeaBIOS and OVMF
 (UEFI), capturing a serial log and a screenshot for each.
+
+### Booting on real hardware (ThinkPad T470s and similar)
+
+The same hybrid `os.iso` boots a **Kaby Lake** ThinkPad (T470s / T460s /
+T470 / X270 — Sunrise Point-LP PCH) under UEFI or CSM. The T470s also has no
+serial port, so boot output goes to the screen the same way (`fbcon`).
+
+The one thing a T470s does differently from an X250 is **storage**: its M.2
+slot usually carries an **NVMe** SSD, not a SATA one, so the kernel now has a
+small NVMe driver.
+
+| Subsystem | Driver | Notes |
+|-----------|--------|-------|
+| Display | multiboot2 GOP/VBE framebuffer ([`video.c`](video.c)), WC via PAT ([`pat.c`](pat.c)) | HD Graphics 620 (`8086:5916`); firmware sets the mode (1920×1080 or 2560×1440), no native modeset |
+| Keyboard / TrackPoint / touchpad | i8042 PS/2 ([`keyboard.c`](keyboard.c), [`mouse.c`](mouse.c)) | Synaptics absolute + TrackPoint pass-through; a non-Synaptics pad falls back to the plain 3-byte protocol (`nosyn` forces it) |
+| Storage (NVMe) | [`nvme.c`](nvme.c) | the M.2 PCIe SSD — one admin + one I/O queue, polled, namespace 1 mounted as the next free `hd{a,b,…}` (512-byte-block namespaces only) |
+| Storage (SATA) | AHCI ([`ahci.c`](ahci.c)) | for a T470s built with an M.2 **SATA** SSD instead |
+| USB | xHCI ([`xhci.c`](xhci.c)) | Sunrise Point-LP `8086:9d2f`; external HID keyboards / mice |
+| Ethernet | Intel I219-LM ([`e1000.c`](e1000.c)) | `is_pch_lan()` covers the whole I219 family (Kaby Lake `15d7`/`15d8`/`15b8`…) |
+| Audio | Intel HD Audio ([`hda.c`](hda.c)) | Sunrise Point-LP `8086:9d71` |
+| Timers / IRQ / SMP / RTC / power-off | as on the X250 | LAPIC timer, ACPI MADT, no IRQ-0 dependency |
+
+The NVMe driver ([`nvme.c`](nvme.c)) is deliberately minimal: it disables the
+controller, sets up a page-aligned admin queue pair in identity-mapped `.bss`,
+`IDENTIFY`s the controller and the active namespace list, creates one I/O
+queue pair (interrupts off — every completion is polled), and serves
+512-byte sector reads/writes through the same [`device_t`](device.h) block
+interface AHCI and IDE use. A 64-bit BAR a UEFI firmware parked above 4 GiB is
+re-homed into the low PCI hole, same as [`xhci.c`](xhci.c). A namespace with a
+non-512-byte LBA format is detected and left unmounted rather than
+mis-mounted.
+
+Escape hatches on the GRUB line (press `e`): `nonvme` `noahci` `noxhci`
+`nousb` `nonet` `nosmp` `nofb` `nosyn`. The "safe" menu entry sets
+`noxhci noahci nonvme nosmp`.
+
+Not supported: the Intel Wireless-AC 8265 WiFi, the Realtek RTS522A SD-card
+reader, the fingerprint reader, and USB mass storage — every device is still
+named in the `pci` output.
+
+`test/t470s-boot.sh` (`make qemu-t470s`) boots `os.iso` in QEMU `q35` configs
+that approximate the T470s (NVMe, xHCI, `e1000e`, Intel HD Audio) under both
+SeaBIOS and OVMF/UEFI, capturing a serial log and a screenshot for each.
 
 ### Other targets
 

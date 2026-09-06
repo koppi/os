@@ -22,6 +22,7 @@
 #include <log.h>
 #include <pat.h>
 #include <io.h>
+#include <spinlock.h>
 
 #define SSFN_NOIMPLEMENTATION
 #define SSFN_CONSOLEBITMAP_TRUECOLOR
@@ -42,6 +43,21 @@ static uint32_t fb_bytespp = 4;
 /* Channel shifts into a native pixel (default BGRX, the common GOP layout). */
 static uint32_t px_rsh = 16, px_gsh = 8, px_bsh = 0;
 
+/* A back buffer was allocated (vs. drawing straight to the hardware fb). */
+static int have_shadow_flag;
+
+/* Present hook: when set (a virtio-gpu backend), fb_present() hands the
+ * finished region to it instead of copying to the linear framebuffer. */
+void (*video_present_hook)(int x, int y, int w, int h);
+
+/* Serialises a present against a runtime mode change. Only contended once a
+ * present hook is installed, so the plain copy path stays lock-free. */
+static spinlock_t fb_lock = SPINLOCK_INIT;
+static uint32_t   fb_lock_if;
+void video_lock(void)   { fb_lock_if = spin_lock(&fb_lock); }
+void video_unlock(void) { spin_unlock(&fb_lock, fb_lock_if); }
+int  video_has_shadow(void) { return have_shadow_flag; }
+
 /** @brief Pack an 0x00RRGGBB colour into the framebuffer's native pixel. */
 static inline uint32_t pack_color(uint32_t c) {
     return (((c >> 16) & 0xFF) << px_rsh) |
@@ -60,13 +76,23 @@ static int fb_reachable(void) {
  *        Clipped to the screen; converts pixel format and pitch.
  */
 static void fb_present(int x, int y, int w, int h) {
-    if (!fb_reachable() || vbemem.buffer == (uint32_t *) fb_base)
-        return;
     if (x < 0) { w += x; x = 0; }
     if (y < 0) { h += y; y = 0; }
     if (x + w > vbemem.xres) w = vbemem.xres - x;
     if (y + h > vbemem.yres) h = vbemem.yres - y;
     if (w <= 0 || h <= 0)
+        return;
+
+    /* A runtime-resolution backend (virtio-gpu) presents its own way; the
+     * lock keeps the region consistent with a concurrent video_set_geometry. */
+    if (video_present_hook) {
+        video_lock();
+        video_present_hook(x, y, w, h);
+        video_unlock();
+        return;
+    }
+
+    if (!fb_reachable() || vbemem.buffer == (uint32_t *) fb_base)
         return;
 
     for (int row = 0; row < h; row++) {
@@ -255,6 +281,10 @@ void vbe_init() {
         vbemem.buffer      = (uint32_t *) shadow;
         vbemem.pitch       = sh_pitch;
         vbemem.buffer_size = sh_span;
+        have_shadow_flag   = 1;
+        /* Reachable from every address space so a panic while a user process
+         * is current can still repaint (also covers the virtio-gpu path). */
+        vmm_share_kernel_range(shadow, sh_span);
     } else {
         /* Low RAM: draw straight to the hardware fb (24-bpp text will tint). */
         klogf(LOG_WARNING, "vbe: no back buffer (low RAM), compositing direct\n");
@@ -265,6 +295,81 @@ void vbe_init() {
     }
 
     fbcon_init();
+}
+
+/**
+ * @brief Enlarge the 32-bpp back buffer in place so it can hold any mode up to
+ *        @p max_w x @p max_h. Called once, before the compositor starts, by a
+ *        display backend that changes resolution at runtime -- so no locking.
+ * @return 1 on success (or if it is already big enough), 0 on failure.
+ */
+int video_grow_shadow(uint32_t max_w, uint32_t max_h) {
+    if (!have_shadow_flag)
+        return 0;
+
+    uint32_t need = max_w * 4u * max_h;
+    if (need <= vbemem.buffer_size)
+        return 1;
+
+    uint32_t npages = (need + PAGE_SIZE - 1) / PAGE_SIZE;
+    uint32_t nva    = kernel_va_hole(npages);
+    if (!nva) {
+        klogf(LOG_WARNING, "vbe: no VA hole to grow the back buffer to %ux%u\n",
+              max_w, max_h);
+        return 0;
+    }
+    for (uint32_t i = 0; i < npages; i++) {
+        if (!vmm_map(get_kern_directory(), nva + i * PAGE_SIZE,
+                     PAGE_PRESENT | PAGE_RW)) {
+            klogf(LOG_WARNING, "vbe: back-buffer grow ran out of frames\n");
+            for (uint32_t j = 0; j < i; j++)
+                vmm_unmap(get_kern_directory(), nva + j * PAGE_SIZE);
+            return 0;
+        }
+    }
+
+    uint32_t old_va = (uint32_t) vbemem.buffer;
+    uint32_t old_sz = vbemem.buffer_size;
+    memcpy((void *) nva, (void *) old_va, old_sz);
+    memset((uint8_t *) nva + old_sz, 0, need - old_sz);
+
+    vbemem.buffer      = (uint32_t *) nva;
+    vbemem.buffer_size = npages * PAGE_SIZE;
+
+    for (uint32_t i = 0; i < (old_sz + PAGE_SIZE - 1) / PAGE_SIZE; i++)
+        vmm_unmap(get_kern_directory(), old_va + i * PAGE_SIZE);
+
+    vmm_share_kernel_range(nva, need);
+    klogf(LOG_INFO, "vbe: back buffer %u KiB (fits %ux%u)\n",
+          need / 1024, max_w, max_h);
+    return 1;
+}
+
+/**
+ * @brief Switch the logical desktop to @p w x @p h without reallocating: the
+ *        back buffer must already be large enough (see @ref video_grow_shadow).
+ *        Wipes it, so the compositor repaints from scratch next frame. Held
+ *        under @ref video_lock by the caller.
+ */
+void video_set_geometry(uint32_t w, uint32_t h) {
+    if (w < 320) w = 320;
+    if (h < 200) h = 200;
+
+    uint32_t need = w * 4u * h;
+    if (need > vbemem.buffer_size) {
+        klogf(LOG_WARNING, "vbe: mode %ux%u does not fit the back buffer\n", w, h);
+        return;
+    }
+
+    vbemem.xres  = (uint16_t) w;
+    vbemem.yres  = (uint16_t) h;
+    vbemem.pitch = (uint16_t) (w * 4u);
+    memset(vbemem.buffer, 0, need);
+
+    fbcon_cols = w / FBCON_CW;
+    fbcon_rows = h / FBCON_CH;
+    if (fbcon_cx >= fbcon_cols) fbcon_cx = fbcon_cols ? fbcon_cols - 1 : 0;
+    if (fbcon_cy >= fbcon_rows) fbcon_cy = fbcon_rows ? fbcon_rows - 1 : 0;
 }
 
 void refresh_screen() {

@@ -22,12 +22,16 @@
 #include <pci_ac97.h>
 #include <e1000.h>
 #include <ahci.h>
+#include <nvme.h>
 #include <hda.h>
+#include <virtio_gpu.h>
 
 #define PCI_CONFIG  0xCF8
 #define PCI_DATA    0xCFC
 
-#define PCI_MAX_DEVICES 32
+/* A Kaby Lake ThinkPad (T470s) exposes ~30 functions once every PCH device and
+ * the devices behind the PCIe root ports are counted, so 32 was not enough. */
+#define PCI_MAX_DEVICES 64
 
 uint32_t
 pci_read(uint32_t bus, uint32_t device, uint32_t function, uint32_t offset) {
@@ -293,7 +297,14 @@ static const pci_driver_t drivers[] = {
     { "acpi",      0x8086, 0x7113, ANY,  ANY,  acpi_probe      },
     { "usb",       ANY,    ANY,    0x0C, 0x03, NULL /* USB thread */ },
     { "ahci",      ANY,    ANY,    0x01, 0x06, ahci_probe      },
+    /* Any NVM Express controller (class 01:08): the M.2 SSD in a Kaby Lake
+     * ThinkPad (T470s) is NVMe, not SATA. nvme_init() creates one I/O queue
+     * pair and mounts namespace 1 as the next free hd{a,b,...}. */
+    { "nvme",      ANY,    ANY,    0x01, 0x08, nvme_probe      },
     { "bochs-vga", 0x1234, 0x1111, ANY,  ANY,  bochs_vga_probe },
+    /* QEMU `-vga virtio`: the modern virtio-gpu 2D device. Drives scanout 0
+     * from the framebuffer shadow and follows host window resizes. */
+    { "virtio-gpu", 0x1AF4, 0x1050, ANY, ANY,  virtio_gpu_probe },
     /* Any Intel Ethernet controller (82540 'e1000', 82574L 'e1000e', the
      * I217/I218 PCH-LAN in a ThinkPad, ...): the register model is shared and
      * e1000_probe special-cases the PCH parts. */

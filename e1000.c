@@ -257,8 +257,11 @@ static int is_pch_lan(uint16_t dev) {
     case 0x153A: case 0x153B:            /* I217-LM / I217-V           */
     case 0x15A0: case 0x15A1: case 0x15A2: case 0x15A3:  /* I218 LM/V  */
     case 0x1502: case 0x1503:            /* 82579LM / 82579V           */
-    case 0x15B7: case 0x15B8: case 0x15D7: case 0x15D8:  /* I219       */
-    case 0x15E3:
+    case 0x1570:                         /* I219 (early)               */
+    case 0x15B7: case 0x15B8: case 0x15B9:               /* I219 / (2) */
+    case 0x15D6: case 0x15D7: case 0x15D8:  /* I219 (4/5) -- T470s     */
+    case 0x15E3: case 0x15E1: case 0x15E2:               /* I219 (5/6) */
+    case 0x0DC5: case 0x0DC6: case 0x0DC7:               /* I219 (later) */
         return 1;
     default:
         return 0;

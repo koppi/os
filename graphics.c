@@ -202,6 +202,14 @@ void paint_desktop() {
     int scr_w = vbemem.xres ? vbemem.xres : 1280;
     int scr_h = vbemem.yres ? vbemem.yres : 1024;
 
+    /* Reseed the starfield when the desktop is re-moded (window resize). */
+    static int last_w, last_h;
+    if (scr_w != last_w || scr_h != last_h) {
+        last_w = scr_w;
+        last_h = scr_h;
+        stars_initialized = 0;
+    }
+
     draw_rect(0, 0, scr_w, scr_h, 0x2D);
 
     if (stars_initialized == 0) {

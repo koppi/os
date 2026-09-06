@@ -39,12 +39,14 @@
 #include <floppy.h>
 #include <ata.h>
 #include <ahci.h>
+#include <nvme.h>
 #include <initrd.h>
 #include <usb.h>
 #include <e1000.h>
 #include <net.h>
 #include <sound.h>
 #include <hda.h>
+#include <virtio_gpu.h>
 
 /** Master switch (pit.c): non-zero once the scheduler is live. */
 extern uint8_t sched_on;
@@ -110,7 +112,8 @@ void main_proc() {
     ramdisk_init(); // mounts the boot RAM disk from os.iso as "rd"
     floppy_init(); // requires irqs to be enabled
     ata_init();    // probes the legacy IDE channels and mounts hd{a,b,...}
-    ahci_init();   // probes SATA ports (the only disk path on a modern laptop)
+    ahci_init();   // probes SATA ports (the disk path on an X250-era laptop)
+    nvme_init();   // probes an NVMe controller (the M.2 SSD on a T470s)
 
     mu();
 
@@ -120,6 +123,8 @@ void main_proc() {
         start_kernel_proc("net", &net_thread);
     if (hda_present())
         start_kernel_proc("hda-mod", &sound_hda_thread);
+    if (virtio_gpu_active())
+        start_kernel_proc("virtio-gpu", &virtio_gpu_thread);
     start_kernel_proc("ssh-worker", &ssh_worker_func);
     //start_kernel_proc("demo_thread", &demo_thread);
     //start_kernel_proc("uart_read", &uart_read_proc);

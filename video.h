@@ -12,6 +12,32 @@ void vbe_init();
 /** @brief Blit the back buffer to the visible framebuffer (one frame). */
 void refresh_screen();
 
+/**
+ * @name Runtime resolution support (a virtio-gpu backend)
+ *
+ * A display driver that can change mode at runtime installs @ref
+ * video_present_hook -- @ref fb_present then routes the finished frame through
+ * it (region transfer + flush) instead of copying to the linear framebuffer.
+ * @ref video_grow_shadow enlarges the 32-bpp back buffer once, before the
+ * compositor starts, so @ref video_set_geometry can later switch the logical
+ * desktop size in place without touching page tables. @ref video_lock brackets
+ * a present against a concurrent mode change.
+ */
+///@{
+extern void (*video_present_hook)(int x, int y, int w, int h);
+/** @return Non-zero if a 32-bpp back buffer was allocated (not direct-to-fb). */
+int  video_has_shadow(void);
+/** @brief Grow the back buffer so any mode up to @p max_w x @p max_h fits.
+ *         @return 1 on success (or already large enough), 0 on failure. */
+int  video_grow_shadow(uint32_t max_w, uint32_t max_h);
+/** @brief Set the logical desktop size in place; wipes the back buffer.
+ *         @p w * @p h * 4 must fit the buffer @ref video_grow_shadow reserved. */
+void video_set_geometry(uint32_t w, uint32_t h);
+/** @brief Acquire / release the present lock (held across @ref video_present_hook). */
+void video_lock(void);
+void video_unlock(void);
+///@}
+
 /** @brief Render one char straight to the visible framebuffer (boot / panic).
  *         No-op until @ref vbe_init has run. */
 void fbcon_putc(char c);

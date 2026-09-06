@@ -75,7 +75,10 @@ QEMU ?= qemu-system-$(TARGET)
 # repeated self-hosting builds of the cc compiler (compute- and syscall-heavy),
 # runs reliably under it. Set SMP=1 only to bisect a suspected SMP regression.
 SMP ?= 4
-QEMUFLAGS += -vga std -m 256M -no-reboot
+# -vga virtio: the modern virtio-gpu 2D device (virtio-vga: keeps VBE for the
+# GRUB hand-off). virtio_gpu.c drives scanout 0 from the framebuffer shadow and
+# follows the SDL/GTK window as it is resized, re-moding the desktop to match.
+QEMUFLAGS += -vga virtio -m 256M -no-reboot
 QEMUFLAGS += -smp $(SMP)
 QEMUFLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 QEMUFLAGS += -enable-kvm
@@ -142,6 +145,11 @@ qemu-nox: iso
 qemu-x250: iso
 	@bash test/x250-boot.sh all
 
+# Boot os.iso in T470s-shaped QEMU configs (q35 + NVMe + xHCI + e1000e + HD
+# Audio) under both SeaBIOS and OVMF/UEFI; logs + screenshots in /tmp/t470s-boot.
+qemu-t470s: iso
+	@bash test/t470s-boot.sh all
+
 $(KERNEL): $(OBJS)
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -o $@ $^
@@ -182,6 +190,6 @@ clean::
 	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin *.d lib/*.d *~ os.iso iso initrd.img docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 cloc docs clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s cloc docs clean
 
 -include $(OBJS:.o=.d)

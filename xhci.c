@@ -503,6 +503,10 @@ int xhci_init(void) {
         pci_cfg_write32(pd, 0x10, nb);
         if (pd->bar[0].is64)
             pci_cfg_write32(pd, 0x14, 0);
+        /* Reflect the move in the device table so a later re-homer (nvme) does
+         * not pick the same slice out of pci_mmio_hole(). */
+        pd->bar[0].addr = nb;
+        pd->bar[0].is64 = 0;
         bar = nb;
         klogf(LOG_INFO, "xhci: BAR re-homed to 0x%x\n", nb);
     }
