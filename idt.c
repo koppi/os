@@ -79,18 +79,25 @@ void idt_load(void) {
 #define PIC2_DATA (PIC2 + 1)
 
 /**
- * @brief Clear the 8259 mask bit for line @p i so that IRQ can be delivered.
- * @param i Vector number (only the low 4 bits pick the PIC line).
+ * @brief Unmask the 8259 line for IDT vector @p vec so its IRQ is delivered.
+ *
+ * PIC IRQs are remapped to base 0x20, so IRQ = vec - 0x20. The old code used
+ * the vector itself as the line number and picked the PIC by `vec < 8`, so it
+ * poked random bits of the *slave* for every vector (keyboard/PIT only worked
+ * because firmware had already unmasked the master). That left IRQ 12 masked
+ * on real hardware -> no PS/2 mouse. For a slave IRQ (8..15) the master's
+ * cascade line (IRQ 2) is unmasked too.
  */
-static void irq_clear_mask(size_t i) {
-    /* Only vectors below 0x30 are PIC-mapped (after the 0x20 remap); anything
-     * else (syscall 0x72, the LAPIC vectors at 0xEF-0xFF) is delivered by the
-     * LAPIC or a software interrupt and must not poke the 8259 registers. */
-    if (i >= 0x30)
-        return;
-    uint16_t port = i < 8 ? PIC1_DATA : PIC2_DATA;
-    uint8_t value = inportb(port) & ~(1 << i);
-    outportb(port, value);
+static void irq_clear_mask(size_t vec) {
+    if (vec < 0x20 || vec >= 0x30)
+        return;                                   /* not a PIC-mapped vector */
+    unsigned irq = (unsigned) vec - 0x20;
+    if (irq < 8) {
+        outportb(PIC1_DATA, inportb(PIC1_DATA) & (uint8_t) ~(1u << irq));
+    } else {
+        outportb(PIC2_DATA, inportb(PIC2_DATA) & (uint8_t) ~(1u << (irq - 8)));
+        outportb(PIC1_DATA, inportb(PIC1_DATA) & (uint8_t) ~(1u << 2));
+    }
 }
 
 /**
