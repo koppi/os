@@ -43,6 +43,10 @@ int vmm_map(page_dir_t *pdir, vmm_addr_t virt, uint32_t flags);
 int vmm_map_phys(page_dir_t *pdir, vmm_addr_t virt, mm_addr_t phys, uint32_t flags);
 /** @return The physical frame @p virt maps to in @p pdir, or 0. */
 void *get_phys_addr(page_dir_t *pdir, vmm_addr_t virt);
+/** @brief Make [virt, virt+span) visible from every process address space
+ *         (device MMIO a syscall path touches on the caller's CR3). Call
+ *         after mapping it into kern_dir, before the first process starts. */
+void vmm_share_kernel_range(uint32_t virt, uint32_t span);
 /** @brief Clone the kernel mappings into a new directory for a process. */
 page_dir_t *create_address_space();
 /** @brief Free the page-table storage of a process directory. */

@@ -38,6 +38,7 @@
 
 #include <floppy.h>
 #include <ata.h>
+#include <ahci.h>
 #include <initrd.h>
 #include <usb.h>
 #include <e1000.h>
@@ -106,7 +107,8 @@ void main_proc() {
     //enable_int();
     ramdisk_init(); // mounts the boot RAM disk from os.iso as "rd"
     floppy_init(); // requires irqs to be enabled
-    ata_init();    // probes the IDE channels and mounts hd{a,b,...}
+    ata_init();    // probes the legacy IDE channels and mounts hd{a,b,...}
+    ahci_init();   // probes SATA ports (the only disk path on a modern laptop)
 
     mu();
 

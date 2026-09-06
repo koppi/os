@@ -178,6 +178,26 @@ void *get_phys_addr(page_dir_t *pdir, vmm_addr_t virt) {
     return (void *) (((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] >> 12 << 12);
 }
 
+/* Page-directory slots a driver has asked to be visible from every process's
+ * ring-0 context (device MMIO touched on the caller's CR3 by a syscall path,
+ * e.g. AHCI / xHCI from the VFS). */
+#define VMM_SHARED_MAX 8
+static struct { int lo, hi; } shared_pde[VMM_SHARED_MAX];
+static int shared_pde_n;
+
+/**
+ * @brief Make [@p va, @p va+@p span) reachable from every address space.
+ *        Call after mapping the range into kern_dir and before any user
+ *        process that needs it is created.
+ */
+void vmm_share_kernel_range(uint32_t va, uint32_t span) {
+    if (shared_pde_n >= VMM_SHARED_MAX || span == 0)
+        return;
+    shared_pde[shared_pde_n].lo = (int) (va >> 22);
+    shared_pde[shared_pde_n].hi = (int) ((va + span - 1) >> 22);
+    shared_pde_n++;
+}
+
 /** Directory slots the kernel needs reachable from a process's ring-0 context:
  *  0 = identity map (kernel code/data/stacks/heap/page-tables, all < 4 MiB),
  *  1 = RETURN_ADDR stub + kernel-thread stacks,
@@ -185,13 +205,19 @@ void *get_phys_addr(page_dir_t *pdir, vmm_addr_t virt) {
  *  initrd slots = the boot RAM disk, so a `run`/`open` syscall can read /rd
  *  on the calling process's own CR3 (initrd_pde_* return -1 when absent),
  *  framebuffer slots = so a panic while a user process is current can still
- *  paint the screen (bfb_pde_* return -1 when there is no framebuffer). */
+ *  paint the screen (bfb_pde_* return -1 when there is no framebuffer),
+ *  shared_pde = driver MMIO registered via vmm_share_kernel_range(). */
 static int is_kernel_slot(int i) {
     if (i == 0 || i == 1 || i == (int) ((uint32_t) 0xFEE00000 >> 22))
         return 1;
     if (i >= initrd_pde_lo() && i <= initrd_pde_hi())
         return 1;
-    return i >= bfb_pde_lo() && i <= bfb_pde_hi();
+    if (i >= bfb_pde_lo() && i <= bfb_pde_hi())
+        return 1;
+    for (int k = 0; k < shared_pde_n; k++)
+        if (i >= shared_pde[k].lo && i <= shared_pde[k].hi)
+            return 1;
+    return 0;
 }
 
 /**

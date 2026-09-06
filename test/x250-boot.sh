@@ -21,7 +21,10 @@ COMMON=(-m 3G -smp 4 -no-reboot $KVM
         -drive id=sata,file="$OUT/sata.img",format=raw,if=none
         -device ich9-ahci,id=ahci -device ide-hd,drive=sata,bus=ahci.0)
 
-[ -f "$OUT/sata.img" ] || qemu-img create -f raw "$OUT/sata.img" 256M >/dev/null
+if [ ! -f "$OUT/sata.img" ]; then
+    qemu-img create -f raw "$OUT/sata.img" 256M >/dev/null
+    command -v mkfs.fat >/dev/null && mkfs.fat -F 16 -n SATADISK "$OUT/sata.img" >/dev/null
+fi
 
 run() {
     local name=$1; shift

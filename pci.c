@@ -21,6 +21,7 @@
 #include <pci_vga.h>
 #include <pci_ac97.h>
 #include <e1000.h>
+#include <ahci.h>
 
 #define PCI_CONFIG  0xCF8
 #define PCI_DATA    0xCFC
@@ -267,7 +268,8 @@ static const pci_driver_t drivers[] = {
     { "piix-isa",  0x8086, 0x7000, ANY,  ANY,  piix_isa_probe  },
     { "piix-ide",  0x8086, 0x7010, ANY,  ANY,  piix_ide_probe  },
     { "acpi",      0x8086, 0x7113, ANY,  ANY,  acpi_probe      },
-    { "uhci",      ANY,    ANY,    0x0C, 0x03, NULL /* USB thread */ },
+    { "usb",       ANY,    ANY,    0x0C, 0x03, NULL /* USB thread */ },
+    { "ahci",      ANY,    ANY,    0x01, 0x06, ahci_probe      },
     { "bochs-vga", 0x1234, 0x1111, ANY,  ANY,  bochs_vga_probe },
     { "e1000",     0x8086, 0x100e, ANY,  ANY,  e1000_probe     },
     { "ac97",      0x8086, 0x2415, ANY,  ANY,  ac97_probe      },
