@@ -6,6 +6,7 @@
 #include <mouse.h>
 #include <io.h>
 #include <idt.h>
+#include <video.h>
 
 mouse_info_t mouse_info;
 
@@ -111,12 +112,14 @@ read_next:
 }
 
 void mouse_check_bounds() {
-    if(mouse_info.x > 1280-1)
-        mouse_info.x = 1280-1;
+    int w = vbemem.xres ? vbemem.xres : 1280;
+    int h = vbemem.yres ? vbemem.yres : 1024;
+    if(mouse_info.x > w - 1)
+        mouse_info.x = w - 1;
     else if(mouse_info.x < 0)
         mouse_info.x = 0;
-    if(mouse_info.y > 1024-1)
-        mouse_info.y = 1024-1;
+    if(mouse_info.y > h - 1)
+        mouse_info.y = h - 1;
     else if(mouse_info.y < 0)
         mouse_info.y = 0;
 }

@@ -14,9 +14,47 @@
 #include <printf.h>
 
 enum KBD_PORTS {
-	KBD_CHECK = 0x64,
-	KBD_IN = 0x60,
+	KBD_CHECK = 0x64,   /* status (read) / command (write) */
+	KBD_IN = 0x60,      /* data */
 };
+
+#define KBD_ST_OBF 0x01    /* output buffer full - data for us to read */
+#define KBD_ST_IBF 0x02    /* input buffer full - controller still busy */
+
+/** @brief Spin (bounded) until the controller can accept a byte. */
+static int kbd_wait_write(void) {
+	for (int i = 0; i < 100000; i++)
+		if (!(inportb(KBD_CHECK) & KBD_ST_IBF))
+			return 1;
+	return 0;
+}
+
+/** @brief Spin (bounded) until the controller has a byte for us. */
+static int kbd_wait_read(void) {
+	for (int i = 0; i < 100000; i++)
+		if (inportb(KBD_CHECK) & KBD_ST_OBF)
+			return 1;
+	return 0;
+}
+
+/** @brief Drain any bytes sitting in the controller output buffer. */
+static void kbd_flush(void) {
+	for (int i = 0; i < 32 && (inportb(KBD_CHECK) & KBD_ST_OBF); i++)
+		(void) inportb(KBD_IN);
+}
+
+static void kbd_cmd(uint8_t c) { kbd_wait_write(); outportb(KBD_CHECK, c); }
+
+static uint8_t kbd_cmd_read(uint8_t c) {
+	kbd_cmd(c);
+	return kbd_wait_read() ? inportb(KBD_IN) : 0xFF;
+}
+
+static void kbd_cmd_write(uint8_t c, uint8_t d) {
+	kbd_cmd(c);
+	kbd_wait_write();
+	outportb(KBD_IN, d);
+}
 
 static const uint8_t keyboard_map[] =
 {
@@ -84,12 +122,47 @@ static void kbd_buf_push(char c) {
     kbd_head = next;
 }
 
-/** @brief Reset the ring, install IRQ 1 and enable the PS/2 first port. */
+/**
+ * @brief Bring up the 8042 controller, reset the keyboard and install IRQ 1.
+ *
+ * The old init just poked 0xAE and trusted the firmware to have configured the
+ * controller. A UEFI boot leaves the i8042 in an unpredictable state (the
+ * firmware's own PS/2 driver may have disabled translation or left a device
+ * mid-command), so do the full sequence: disable both ports, flush, write a
+ * known config byte (IRQ1+IRQ12 on, translation on so we keep decoding
+ * scancode set 1), self-test, then enable and reset the keyboard.
+ *
+ * Runs with interrupts still masked during early boot, so the reset/enable
+ * ACKs are drained by kbd_flush() rather than the IRQ handler.
+ */
 void keyboard_init() {
     kbd_head = kbd_tail = 0;
     shift_state = 0;
+
+    kbd_cmd(0xAD);            /* disable first (keyboard) port  */
+    kbd_cmd(0xA7);            /* disable second (mouse) port    */
+    kbd_flush();
+
+    uint8_t cfg = kbd_cmd_read(0x20);
+    if (cfg == 0xFF)          /* no controller responded */
+        cfg = 0;
+    cfg |=  (1 << 0) | (1 << 1) | (1 << 6);   /* IRQ1, IRQ12, translation */
+    cfg &= ~((1 << 4) | (1 << 5));            /* both port clocks enabled */
+    kbd_cmd_write(0x60, cfg);
+
+    kbd_cmd(0xAA);                            /* controller self-test */
+    if (kbd_wait_read() && inportb(KBD_IN) == 0x55)
+        kbd_cmd_write(0x60, cfg);             /* self-test can wipe the config */
+
+    kbd_cmd(0xAE);                            /* enable keyboard port */
+    kbd_cmd(0xA8);                            /* enable mouse port (mouse_init finishes) */
+
+    kbd_wait_write(); outportb(KBD_IN, 0xFF); /* reset keyboard (-> FA AA)     */
+    kbd_flush();
+    kbd_wait_write(); outportb(KBD_IN, 0xF4); /* enable scanning (-> FA)       */
+    kbd_flush();
+
     install_ir(33, 0x80 | 0x0E, 0x8, &keyboard_int);
-    outportb(KBD_CHECK, 0xAE);
 }
 
 /**
