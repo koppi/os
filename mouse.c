@@ -1,12 +1,23 @@
 /**
  * @file mouse.c
- * @brief PS/2 mouse driver: 3-byte packet assembly in the IRQ handler,
- *        position/button tracking and press/release edge helpers.
+ * @brief PS/2 pointer driver.
+ *
+ * Two protocols:
+ *   - plain PS/2: the standard 3-byte relative packet (a USB-attached mouse
+ *     behind the i8042, or a non-Synaptics touchpad).
+ *   - Synaptics (every ThinkPad ClickPad): the 6-byte absolute packet, plus
+ *     the *pass-through* sub-packet (W == 3) that carries the TrackPoint's
+ *     own 3-byte PS/2 packet. Without decoding this the red TrackPoint does
+ *     nothing -- it is wired to the touchpad's guest port, not the i8042.
+ *
+ * Absolute finger positions are turned into relative cursor motion here.
  */
 #include <mouse.h>
 #include <io.h>
 #include <idt.h>
 #include <video.h>
+#include <cmdline.h>
+#include <log.h>
 
 mouse_info_t mouse_info;
 
@@ -15,8 +26,7 @@ char mouse_byte[3];
 
 extern void mouse_int();
 
-/* i8042 status bits: 0x01 = output buffer full (data to read),
- *                    0x02 = input buffer full (controller busy, don't write). */
+/* i8042 status bits: 0x01 = output buffer full, 0x02 = input buffer full. */
 static int i8042_wait_write(void) {
     for (int i = 0; i < 100000; i++)
         if (!(inportb(MOUSE_STATUS) & 0x02))
@@ -30,7 +40,6 @@ static int i8042_wait_read(void) {
     return 0;
 }
 
-/* Kept for the header/ABI; `type` 1 = wait-readable, anything else = wait-writable. */
 void mouse_wait(uint8_t type) {
     if (type == 1) i8042_wait_read();
     else           i8042_wait_write();
@@ -47,10 +56,9 @@ uint8_t mouse_read() {
     return i8042_wait_read() ? inportb(MOUSE_PORT) : 0;
 }
 
-/** @brief Send @p cmd to the aux device and return its reply (0xFA = ACK).
- *         Retries once on 0xFE (resend). */
+/** @brief Send @p cmd to the aux device, return its reply (0xFA = ACK). */
 static uint8_t aux_cmd(uint8_t cmd) {
-    for (int try = 0; try < 3; try++) {
+    for (int t = 0; t < 3; t++) {
         mouse_write(cmd);
         uint8_t r = mouse_read();
         if (r != 0xFE)
@@ -59,82 +67,182 @@ static uint8_t aux_cmd(uint8_t cmd) {
     return 0;
 }
 
-/** @brief Drain any bytes the aux device left in the output buffer. */
 static void aux_drain(void) {
     for (int i = 0; i < 16 && (inportb(MOUSE_STATUS) & 0x01); i++)
         (void) inportb(MOUSE_PORT);
 }
 
-mouse_info_t *get_mouse_info() {
-    return &mouse_info;
+/* ------------------------------------------------------------------ *
+ *  Synaptics                                                          *
+ * ------------------------------------------------------------------ */
+static int      syn_mode;          /* 1 once the touchpad is in absolute mode */
+static int      syn_passthrough;   /* 1 if it forwards a guest (TrackPoint) */
+static int      pad_down;          /* finger currently on the pad */
+static int      pad_px, pad_py;    /* last absolute finger position */
+
+/** @brief Encode an 8-bit value into four SET-RESOLUTION commands. */
+static void syn_encode(uint8_t v) {
+    aux_cmd(0xE8); aux_cmd((v >> 6) & 3);
+    aux_cmd(0xE8); aux_cmd((v >> 4) & 3);
+    aux_cmd(0xE8); aux_cmd((v >> 2) & 3);
+    aux_cmd(0xE8); aux_cmd(v & 3);
 }
 
-int mouse_left_button_down() {
-    return (mouse_info.prev_button != LEFT_CLICK) && (mouse_info.curr_button == LEFT_CLICK);
+/** @brief Run a Synaptics query @p q, returning its 3 status bytes. */
+static int syn_query(uint8_t q, uint8_t out[3]) {
+    syn_encode(q);
+    if (aux_cmd(0xE9) != 0xFA)
+        return 0;
+    out[0] = mouse_read();
+    out[1] = mouse_read();
+    out[2] = mouse_read();
+    return 1;
 }
 
-int mouse_right_button_down() {
-    return (mouse_info.prev_button != RIGHT_CLICK) && (mouse_info.curr_button == RIGHT_CLICK);
+/** @brief Set the Synaptics mode byte (query 0x14 = "set mode"). */
+static void syn_set_mode(uint8_t mode) {
+    syn_encode(mode);
+    aux_cmd(0xF3);
+    aux_cmd(0x14);
 }
 
-int mouse_left_button_up() {
-    return (mouse_info.prev_button == LEFT_CLICK) && (mouse_info.curr_button != LEFT_CLICK);
+/** @return 1 if a Synaptics touchpad answered and absolute mode is armed. */
+static int syn_init(void) {
+    if (cmdline_has("nosyn"))
+        return 0;
+
+    uint8_t id[3];
+    /* Identify (query 0x00): a Synaptics pad returns 0x47 as the middle byte. */
+    if (!syn_query(0x00, id) || id[1] != 0x47)
+        return 0;
+
+    uint8_t cap[3];
+    if (syn_query(0x02, cap)) {
+        /* Extended-capabilities byte: bit 7 of cap[0] set means "more caps in
+         * cap[1]"; pass-through is cap[0] bit 7... layout is
+         *   cap[0] = { ext-cap valid, ... }, cap[1] = middle-btn, pass-through
+         * Historically SYN_CAP_PASS_THROUGH is bit 7 of the low capability
+         * byte (cap[2] here). Accept it from either likely position. */
+        syn_passthrough = (cap[2] & 0x80) || (cap[1] & 0x01);
+    }
+
+    /* Mode byte: absolute (0x80) | high report rate (0x40) |
+     * disable-gesture (0x04) | W-mode / extended packets (0x01).
+     * W-mode is what makes the pad emit pass-through (W==3) packets. */
+    syn_set_mode(0x80 | 0x40 | 0x04 | 0x01);
+    aux_cmd(0xF4);                 /* enable reporting */
+    aux_drain();
+
+    syn_mode = 1;
+    klogf(LOG_INFO, "mouse: Synaptics touchpad, pass-through %s\n",
+          syn_passthrough ? "on (TrackPoint)" : "off");
+    return 1;
 }
 
-int mouse_right_button_up() {
-    return (mouse_info.prev_button == RIGHT_CLICK) && (mouse_info.curr_button != RIGHT_CLICK);
+/* ------------------------------------------------------------------ *
+ *  Button / motion helpers                                            *
+ * ------------------------------------------------------------------ */
+mouse_info_t *get_mouse_info() { return &mouse_info; }
+
+int mouse_left_button_down()  { return (mouse_info.prev_button != LEFT_CLICK)  && (mouse_info.curr_button == LEFT_CLICK); }
+int mouse_right_button_down() { return (mouse_info.prev_button != RIGHT_CLICK) && (mouse_info.curr_button == RIGHT_CLICK); }
+int mouse_left_button_up()    { return (mouse_info.prev_button == LEFT_CLICK)  && (mouse_info.curr_button != LEFT_CLICK); }
+int mouse_right_button_up()   { return (mouse_info.prev_button == RIGHT_CLICK) && (mouse_info.curr_button != RIGHT_CLICK); }
+
+static void apply_rel(int dx, int dy, uint32_t buttons) {
+    mouse_info.x += dx;
+    mouse_info.y += dy;
+    mouse_check_bounds();
+    mouse_info.curr_button = buttons;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Packet decode                                                      *
+ * ------------------------------------------------------------------ */
+static void decode_plain(const uint8_t *p) {
+    if (p[0] & 0xC0)                          /* X / Y overflow */
+        return;
+    apply_rel((signed char) p[1], -(signed char) p[2],
+              ((p[0] & 1) ? LEFT_CLICK   : 0) |
+              ((p[0] & 2) ? RIGHT_CLICK  : 0) |
+              ((p[0] & 4) ? MIDDLE_CLICK : 0));
+}
+
+static void decode_synaptics(const uint8_t *b) {
+    int w = ((b[0] & 0x30) >> 2) | ((b[0] & 0x04) >> 1) | ((b[3] & 0x04) >> 2);
+
+    if (w == 3 && syn_passthrough) {
+        /* Pass-through packet: the TrackPoint's own 3-byte PS/2 packet lives
+         * in bytes 1, 4, 5. */
+        uint8_t g0 = b[1], g1 = b[4], g2 = b[5];
+        int dx = (g0 & 0x10) ? (int) g1 - 256 : (int) g1;
+        int dy = (g0 & 0x20) ? (int) g2 - 256 : (int) g2;
+        apply_rel(dx, -dy,
+                  ((g0 & 1) ? LEFT_CLICK   : 0) |
+                  ((g0 & 2) ? RIGHT_CLICK  : 0) |
+                  ((g0 & 4) ? MIDDLE_CLICK : 0));
+        return;
+    }
+
+    int x = ((b[3] & 0x10) << 8) | ((b[1] & 0x0F) << 8) | b[4];
+    int y = ((b[3] & 0x20) << 7) | ((b[1] & 0xF0) << 4) | b[5];
+    int z = b[2];
+    int left  = (b[0] & 0x01) ? LEFT_CLICK  : 0;
+    int right = (b[0] & 0x02) ? RIGHT_CLICK : 0;
+    /* ClickPad: the whole surface is one button -> treat a hard press as left. */
+    if ((b[0] ^ b[3]) & 0x01)
+        left = LEFT_CLICK;
+
+    if (z > 30) {                             /* finger present */
+        if (pad_down) {
+            int dx = (x - pad_px) / 6;        /* Synaptics units -> pixels */
+            int dy = (pad_py - y) / 6;        /* pad Y grows upward */
+            if (dx || dy)
+                apply_rel(dx, dy, mouse_info.curr_button);
+        }
+        pad_px = x; pad_py = y;
+        pad_down = 1;
+    } else {
+        pad_down = 0;
+    }
+    mouse_info.curr_button = (mouse_info.curr_button & ~(LEFT_CLICK | RIGHT_CLICK))
+                             | left | right;
 }
 
 void mouse_handler() {
+    uint8_t pkt[6];
+    int need = syn_mode ? 6 : 3;
     uint8_t status;
-    while((status = inportb(MOUSE_STATUS)) & MOUSE_BBIT) {
+
+    while ((status = inportb(MOUSE_STATUS)) & MOUSE_BBIT) {
         uint8_t b = inportb(MOUSE_PORT);
-        if(!(status & MOUSE_F_BIT))
-            continue;               /* byte came from the keyboard, not the mouse */
+        if (!(status & MOUSE_F_BIT))
+            continue;                         /* keyboard byte */
 
-        switch(mouse_cycle) {
-            case 0:
-                /* Byte 0 always has bit 3 set. If it isn't, the stream is out
-                 * of phase (leftover Synaptics bytes, a lost IRQ) -- drop the
-                 * byte and stay at cycle 0 until sync comes back. */
-                if(!(b & MOUSE_V_BIT))
-                    break;
-                mouse_byte[0] = b;
-                mouse_cycle = 1;
-                break;
-            case 1:
-                mouse_byte[1] = b;
-                mouse_cycle = 2;
-                break;
-            case 2:
-                mouse_byte[2] = b;
-                mouse_cycle = 0;
-                if(mouse_byte[0] & 0xC0)          /* X / Y overflow: ignore */
-                    break;
-                mouse_info.x += (signed char) mouse_byte[1];
-                mouse_info.y -= (signed char) mouse_byte[2];  /* PS/2 +Y is up */
-                mouse_check_bounds();
-
-                mouse_info.curr_button =
-                    ((mouse_byte[0] & 1) ? LEFT_CLICK   : 0) |
-                    ((mouse_byte[0] & 2) ? RIGHT_CLICK  : 0) |
-                    ((mouse_byte[0] & 4) ? MIDDLE_CLICK : 0);
-                break;
+        /* Byte 0 sync: plain packets have bit 3 set; Synaptics byte 0 has
+         * bits 7..6 == 10. Resync on a mismatch. */
+        if (mouse_cycle == 0) {
+            int ok = syn_mode ? ((b & 0xC8) == 0x80) : (b & MOUSE_V_BIT);
+            if (!ok)
+                continue;
         }
+        pkt[mouse_cycle++] = b;
+        if (mouse_cycle < need)
+            continue;
+        mouse_cycle = 0;
+
+        if (syn_mode) decode_synaptics(pkt);
+        else          decode_plain(pkt);
     }
 }
 
 void mouse_check_bounds() {
     int w = vbemem.xres ? vbemem.xres : 1280;
     int h = vbemem.yres ? vbemem.yres : 1024;
-    if(mouse_info.x > w - 1)
-        mouse_info.x = w - 1;
-    else if(mouse_info.x < 0)
-        mouse_info.x = 0;
-    if(mouse_info.y > h - 1)
-        mouse_info.y = h - 1;
-    else if(mouse_info.y < 0)
-        mouse_info.y = 0;
+    if (mouse_info.x > w - 1) mouse_info.x = w - 1;
+    else if (mouse_info.x < 0) mouse_info.x = 0;
+    if (mouse_info.y > h - 1) mouse_info.y = h - 1;
+    else if (mouse_info.y < 0) mouse_info.y = 0;
 }
 
 void mouse_init() {
@@ -142,8 +250,7 @@ void mouse_init() {
     mouse_info.y = 0;
     mouse_cycle = 0;
 
-    /* Enable the aux (mouse) port and set the controller config byte:
-     * bit 1 = IRQ12 enable, bit 5 = disable aux clock (clear it). */
+    /* Enable the aux port; config byte: IRQ12 on (bit 1), aux clock on (bit 5=0). */
     i8042_wait_write(); outportb(MOUSE_STATUS, 0xA8);
     i8042_wait_write(); outportb(MOUSE_STATUS, 0x20);
     uint8_t cfg = mouse_read();
@@ -152,18 +259,17 @@ void mouse_init() {
     i8042_wait_write(); outportb(MOUSE_STATUS, 0x60);
     i8042_wait_write(); outportb(MOUSE_PORT, cfg);
 
-    /* Reset. A ThinkPad ClickPad powers up in the Synaptics absolute protocol
-     * (6-byte packets); 0xFF returns it -- and the TrackPoint -- to the
-     * standard 3-byte PS/2 relative mode this driver decodes. Reply is
-     * ACK (FA) then BAT-ok (AA) then device id (00). */
-    aux_cmd(0xFF);
+    aux_cmd(0xFF);                 /* reset (-> FA AA 00) */
     aux_drain();
+    aux_cmd(0xF6);                 /* load defaults */
 
-    aux_cmd(0xF6);              /* load defaults                     */
-    aux_cmd(0xF3); aux_cmd(100);/* sample rate 100 Hz                */
-    aux_cmd(0xE8); aux_cmd(0x02);/* resolution 4 counts/mm           */
-    aux_cmd(0xF4);              /* enable data reporting             */
-    aux_drain();
+    if (!syn_init()) {
+        /* Plain PS/2 relative mode. */
+        aux_cmd(0xF3); aux_cmd(100);
+        aux_cmd(0xE8); aux_cmd(0x02);
+        aux_cmd(0xF4);
+        aux_drain();
+    }
 
     install_ir(44, 0x80 | 0x0E, 0x8, &mouse_int);
 }

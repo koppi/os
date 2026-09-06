@@ -246,8 +246,8 @@ int hda_present(void) { return have_hda; }
  *  Bring-up                                                           *
  * ------------------------------------------------------------------ */
 void hda_probe(struct pci_device *dev) {
-    if (cmdline_has("nosound") || cmdline_has("nohda"))
-        return;
+    if (have_hda || cmdline_has("nosound") || cmdline_has("nohda"))
+        return;   /* a laptop has two HDA controllers (analog + HDMI); one is enough */
 
     pci_device_t *d = (pci_device_t *) dev;
     uint32_t bar = 0, span = 0x4000;
