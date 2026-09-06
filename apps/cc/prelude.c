@@ -181,7 +181,7 @@ void fprintf(void *stream, char *fmt, ...) {
 }
 
 /* ---- file IO ---- */
-/* the fopen syscall wants a leading-slash device path ("/hda/x"); accept both */
+/* the fopen syscall wants a leading-slash device path ("/rd/x"); accept both */
 void *fopen(char *name, char *mode) {
     if (name[0] == '/')
         return (void *)__syscall2(6, (int)name, (int)mode);

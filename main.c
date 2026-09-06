@@ -33,6 +33,7 @@
 #include <acpi.h>
 #include <apic.h>
 #include <percpu.h>
+#include <initrd.h>
 
 
 #include "cpu.h"
@@ -113,6 +114,11 @@ void kernel_main(unsigned long magic, unsigned long addr)
         exit_qemu(1);
     }
 
+    /* Move the boot RAM disk out of the bootloader's scratch area (which GRUB
+     * packs right behind the kernel) before pmm/vmm claim that memory. Must
+     * run with paging still off. */
+    initrd_relocate();
+
     for (int i = 0; i < e820counter; i++)
     {
         struct e820memmap map = e820table[i];
@@ -125,6 +131,10 @@ void kernel_main(unsigned long magic, unsigned long addr)
             pmm_init_reg(map.base_address & 0xffffffff, map.size & 0xffffffff);
         }
     }
+
+    /* Keep the relocated RAM disk out of the frame allocator's reach. */
+    if (initrd_phys_start)
+        pmm_deinit_reg(initrd_phys_start, initrd_phys_end - initrd_phys_start);
 
     pmm_init2();
     vmm_init();

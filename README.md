@@ -15,6 +15,12 @@ computed from the last commit (`ver.h`, `main.c`, `Makefile`).
   ([`boot.S`](boot.S), [`multiboot.c`](multiboot.c),
   [`multiboot2.c`](multiboot2.c)). The bootloader menu ([`grub.cfg`](grub.cfg))
   offers GUI (framebuffer) and console entries.
+* `os.iso` is **self-contained**: GRUB also loads `initrd.img` (the userland,
+  as a FAT16 image) as a Multiboot module, so the OS boots to a shell off a CD
+  or USB stick with no hard disk or floppy attached. See
+  [`initrd.c`](initrd.c) and **Storage & block devices**. A machine with a
+  little over 136 MiB of RAM is needed (the module is relocated to 128 MiB);
+  a smaller box falls back to booting from a real FAT disk.
 * Physical memory is discovered from the BIOS **e820** map / multiboot memory
   info.
 
@@ -127,17 +133,26 @@ ports are still probed just once at boot. Try it from the QEMU monitor:
 `device_add usb-kbd,bus=usb-bus.0,port=2.2` then `device_del <id>`.
 
 ### Storage & block devices
-`main_proc` ([`sched.c`](sched.c)) probes both channels at boot:
+`main_proc` ([`sched.c`](sched.c)) brings the block devices up at boot:
+* **Boot RAM disk** — [`initrd.c`](initrd.c), mounted as `rd`. GRUB loads
+  `initrd.img` (a FAT16 image with the whole userland) from `os.iso` as a
+  Multiboot module; the kernel relocates it to high memory and serves it as a
+  read/write block device. **This is the root filesystem** — `/rd/zsh`,
+  `/rd/cc`, … — and it needs no attached disk, so `os.iso` boots on its own
+  from a CD or a USB stick. Writes to `/rd` are RAM-backed and lost on reboot.
 * **Floppy** — [`floppy.c`](floppy.c) + [`dma.c`](dma.c), mounted as `fda`
   (and `fdb` if present).
 * **IDE / ATA hard disks** — [`ata.c`](ata.c), each detected drive mounted as
-  `hda`, `hdb`, …
+  `hda`, `hdb`, … `identify()` bounds every status poll, so an empty or absent
+  IDE channel (the common case on real hardware, and when booting `os.iso`
+  with no disk) is detected instead of hanging the boot.
 
 Any drive that carries a FAT volume is mounted automatically. Programs and
-files are loaded from whichever device the path names — `start hda/hello`,
-`read fda/mouse.bmp`, `cd hda` — so the OS runs equally from the floppy or the
-hard disk. The QEMU setup attaches `floppy.img` (floppy A), `hda.img`
-(primary master) and `os.iso` (the boot CD).
+files are loaded from whichever device the path names — `start rd/hello`,
+`read rd/mouse.bmp`, `cd hda` — so the OS runs the same whether a file lives on
+the RAM disk or a real disk. `make qemu-iso` boots `os.iso` alone;
+`make qemu-iso DISK=hda.img` also attaches a persistent scratch disk (it shows
+up as `/hda`), and `FLOPPY=floppy.img` likewise (`/fda`).
 
 ### PCI
 [`pci.c`](pci.c) walks every bus/slot/function once at boot into a device table
@@ -217,7 +232,9 @@ with `net_exec()` and block until it finishes.
 * **SSHv2 server** ([`ssh.c`](ssh.c)): a small in-kernel sshd, enough for a
   stock OpenSSH client to log in and reach the same command shell as the
   local console. Algorithms: curve25519-sha256 key exchange, ssh-ed25519 host
-  key (persisted hex-encoded at `/hda/sshkey`, so it survives reboots),
+  key (hex-encoded at `/rd/sshkey` — on the RAM disk it is regenerated each
+  boot, so the client will warn about a changed host key; drop a persistent
+  disk at `/hda` and point `HOSTKEY_PATH` there to keep it stable),
   aes128-ctr cipher, hmac-sha2-256 MAC — all defaults a modern OpenSSH client
   already offers, so no client-side flags are needed beyond accepting the
   host key on first connect. Authentication is a single fixed
@@ -244,6 +261,7 @@ for anything more (there is no TLS or resolver cache).
 ### Drivers
 | Area | Files |
 | --- | --- |
+| Boot RAM disk (Multiboot module, mounted `/rd`) | [`initrd.c`](initrd.c) |
 | ATA / IDE disk (PIO, probed at boot) | [`ata.c`](ata.c), [`ata_asm.asm`](ata_asm.asm) |
 | Floppy disk (+ DMA) | [`floppy.c`](floppy.c), [`dma.c`](dma.c) |
 | PS/2 keyboard (IRQ-driven, ring-buffered) | [`keyboard.c`](keyboard.c), [`keyboard_asm.asm`](keyboard_asm.asm) |
@@ -335,11 +353,12 @@ generator **+** ELF writer in one. It is written in the C subset it accepts, so
 it **compiles itself**:
 
 ```
-make qemu-nox SMP=1                    # cc is heavy; boot single-core (see NOTES.md)
-start hda/cc  hda/cc.c -o hda/cc2      # cc compiles its own source
-start hda/cc2 hda/cc.c -o hda/cc3      # the result compiles it again
-sum hda/cc2 ; sum hda/cc3              # identical checksums => fixed point
-start hda/cc2 hda/test.c -o hda/t ; start hda/t     # -> "test: 37 checks OK"
+make qemu-iso                          # boot os.iso (no disk needed)
+cd rd
+cc cc.c -o cc2                         # cc compiles its own source
+cc2 cc.c -o cc3                        # the result compiles it again
+sum cc2 ; sum cc3                      # identical checksums => fixed point
+cc2 test.c -o t ; t                    # -> "test: 37 checks OK"
 ```
 
 * **Pass 1** (front end): lex → parse → semantic analysis, producing a typed
@@ -383,11 +402,12 @@ in [`apps/lua/shim/`](apps/lua/shim):
 `lua_Number` is `double` and `lua_Integer` is 64-bit. Libraries: `base`,
 `package`, `coroutine`, `table`, `string`, `math`, `utf8`, and a trimmed `os`
 (`time`/`date`/`clock`/`getenv`/`exit`; `execute`/`remove`/`rename` fail). No
-`io` or `debug`. `require` searches `/hda/?.lua` and `/fda/?.lua`.
+`io` or `debug`. `require` searches `/rd/?.lua` and `/fda/?.lua`.
 
 ```
-start hda/lua                 -- REPL (exit with os.exit() or Ctrl-D)
-start hda/lua /hda/t.lua      -- run a script; t.lua is the port's self-test
+cd rd
+lua                          -- REPL (exit with os.exit() or Ctrl-D)
+lua t.lua                    -- run a script; t.lua is the port's self-test
 ```
 
 There is no Ctrl-C, so a non-terminating script needs a `reboot`. See
@@ -397,7 +417,7 @@ There is no Ctrl-C, so a non-terminating script needs a `reboot`. See
 
 The interactive shell is [`apps/zsh`](apps/zsh/main.c) — a small **zsh-flavoured
 shell that runs in ring 3**. The scheduler's first process (`main_proc`) launches
-`/hda/zsh` and blocks until it exits, falling back to the in-kernel console
+`/rd/zsh` and blocks until it exits, falling back to the in-kernel console
 (`kmain_console`, below) if the image is missing or the shell leaves (Ctrl-D /
 `exit`).
 
@@ -407,7 +427,7 @@ reimplement the commands. It classifies each line:
 
 * **shell builtins** (`cd`, `pwd`, `echo`, `history`, `alias`/`unalias`,
   `which`, `help`, `source`, `clear`, `exit`) run in-process;
-* a name that matches a **program** on the current volume (or `/hda`) is loaded
+* a name that matches a **program** on the current volume (or `/rd`) is loaded
   and run via the `spawn` syscall — so `hello` works like `./hello`, and a file
   argument (`lua t.lua`) is resolved against the working directory;
 * **everything else** is handed to the kernel console dispatcher through the
@@ -418,8 +438,8 @@ Editor keys: `Tab` completes, `^P`/`^N` walk history, `^U`/`^W` kill,
 `^L` clears, `^C` abandons the line, `^D` on an empty line leaves the shell.
 Over a PS/2 keyboard only the printable set plus `Tab`/Backspace reach the
 shell, so history there is via `!!` / `!n` / `!prefix`; a serial console
-(`-serial mon:stdio`) delivers the control keys too. `/hda/zshrc` (and
-`/fda/zshrc`) is sourced at start-up — a place for aliases.
+(`-serial mon:stdio`) delivers the control keys too. `/rd/zshrc` is sourced at
+start-up — a place for aliases.
 
 New syscalls behind this: `getkey` (17, one unechoed keystroke), `run` (18,
 `console_exec` on behalf of ring 3), `getcwd` (19), `listdir` (20, for
@@ -465,9 +485,9 @@ but no longer competes with the shell for keystrokes.)
 | `reboot` | reset the machine (0xCF9) |
 
 Paths are resolved against the working directory. A name that contains `/` is
-taken as device-qualified (`start hda/hello`); a bare name resolves against the
-working directory, or against `/hda` when none is set — so `start hello` runs
-`/hda/hello` and `read cc.c` opens `/hda/cc.c`. See **Storage & block devices**
+taken as device-qualified (`start rd/hello`); a bare name resolves against the
+working directory, or against `/rd` when none is set — so `start hello` runs
+`/rd/hello` and `read cc.c` opens `/rd/cc.c`. See **Storage & block devices**
 for the device names. (`/fda` is still reachable by an explicit path, but the
 floppy driver's read path can wedge on a cold motor, so it is not the default.)
 
@@ -509,7 +529,7 @@ mods/              sample MOD music
 iso/               staging dir for grub-mkrescue (generated)
 kernel.lds         kernel linker script
 grub.cfg           GRUB menu
-floppy.sh hda.sh   scripts to (re)build the disk images
+hda.sh floppy.sh   scripts to (re)build the FAT images (initrd / hd / floppy)
 ```
 
 ## Building and Running
@@ -527,44 +547,47 @@ make
 ```
 
 This builds the userspace library and apps, compiles the kernel to
-`kernel.elf`, and (via the `iso` target) produces the bootable `os.iso`.
+`kernel.elf`, and (via the `iso` target) packs the userland into `initrd.img`
+and produces the bootable, self-contained `os.iso`.
 
 Toolchain: system `gcc -m32` / GNU `ld` (`-melf_i386`), NASM for `.asm` stubs.
 Kernel flags: `-Og -std=gnu11 -ffreestanding -fno-builtin -nodefaultlibs
 -fno-stack-protector -m32`, warnings as errors (`-Werror -Wall -Wextra`),
 `-DDEBUG`.
 
-### Disk images
+### FAT images
 
-The repo ships a prebuilt `floppy.img`; `hda.img` is built locally. Both hold a
-FAT volume with the compiled apps copied in.
+`make iso` builds `initrd.img` automatically — that is the root filesystem the
+running OS sees as `/rd`. `hda.img` / `floppy.img` are optional extra disks,
+built locally, only needed if you want persistent storage across reboots.
 
 ```bash
-./floppy.sh    # 1.44M FAT12 floppy image
-./hda.sh       # 16M FAT16 hard-disk image
+IMG=initrd.img SIZE=8M ./hda.sh   # what `make iso` runs
+./hda.sh                          # 16M FAT16 hd image (hda.img)
+./floppy.sh                       # 1.44M FAT12 floppy image
 ```
 
-Both scripts use mtools (no root / loop device) and stage the `zsh` shell (with
-its `zshrc`), `hello`, `tst`, `example`, `mem`, the `lua` interpreter (with
-`t.lua` and `mod.lua`), and the `mouse.bmp` cursor bitmap. `hda.img`
-additionally carries the `cc` compiler,
-its source `cc.c`, its runtime `prelude.c` and the compiler tests — and is
-16 MiB so a couple of generations of compiler output fit. The in-kernel FAT
-driver only handles one sector per cluster, so the images are made with
-`mkfs.fat -C … 1440` / `mkfs.fat -s 1` (16 MiB ⇒ ~32k clusters ⇒ FAT16).
+All use mtools (no root / loop device) and stage the `zsh` shell (with its
+`zshrc`), `hello`, `tst`, `example`, `mem`, `fault`, the `lua` interpreter (with
+`t.lua` / `mod.lua`), `mouse.bmp`, and the `cc` compiler with its source
+(`cc.c`), runtime (`prelude.c`) and tests. The in-kernel FAT driver only
+handles one sector per cluster, so the images are made with `mkfs.fat -F 16
+-s 1` (or `-C … 1440` for the FAT12 floppy).
 
 ### Run in QEMU
 
 ```bash
-make qemu-iso     # boot os.iso (GUI, SDL), serial on stdio
-make qemu-nox     # same, no display
-make qemu-kernel  # boot kernel.elf directly with -kernel
+make qemu-iso                  # boot os.iso (GUI, SDL), serial on stdio
+make qemu-nox                  # same, no display
+make qemu-kernel               # boot kernel.elf directly (-kernel -initrd)
+make qemu-iso DISK=hda.img     # also attach a persistent scratch disk (/hda)
 ```
 
-QEMU is launched with 256 MB RAM, `-vga std`, the floppy + IDE hard disk +
-CD-ROM images, AC97 / SB16 / PC-speaker audio, a UHCI controller with a
-`usb-kbd` on root port 1 and a `usb-hub` on root port 2 carrying a `usb-mouse`,
-an `isa-debug-exit` device (the kernel uses it to exit QEMU with a status code),
+QEMU is launched with 256 MB RAM, `-vga std`, the `os.iso` CD-ROM (which
+carries the kernel *and* the initrd — no other drive is attached by default),
+AC97 / SB16 / PC-speaker audio, a UHCI controller with a `usb-kbd` on root
+port 1 and a `usb-hub` on root port 2 carrying a `usb-mouse`, an
+`isa-debug-exit` device (the kernel uses it to exit QEMU with a status code),
 KVM acceleration, and a SLIRP `netdev` forwarding host port **2222** to the
 guest's port 22 — once the guest has DHCP'd an address (see the boot log),
 `ssh -p 2222 koppi@localhost` (password `os`) from the host reaches the
@@ -574,14 +597,15 @@ Once the `>` prompt appears, try:
 
 ```
 ls
-start hello
-cd hda
-start tst
+cd rd
+hello
+lua t.lua
 ```
 
-`start hello` loads `/fda/hello` (prints `Hello from userspace!`, exits 0);
-after `cd hda`, `start tst` loads and runs `/hda/tst` straight off the hard
-disk. Programs can be run back to back in one session.
+`hello` loads `/rd/hello` (prints `Hello from userspace!`, exits 0). Programs
+can be run back to back in one session. On real hardware, write `os.iso` to a
+USB stick (`sudo dd if=os.iso of=/dev/sdX bs=4M` — it is isohybrid) and boot
+it; the OS comes up the same way, with no disk required.
 
 ### Other targets
 
@@ -596,7 +620,8 @@ make clean        # remove build artifacts
 
 `kernel_main` ([`main.c`](main.c)) brings the system up in this order:
 
-UART/log → parse multiboot → physical MM (e820) → VMM → kernel heap →
+UART/log → parse multiboot → **relocate the initrd module** → physical MM
+(e820, initrd frames reserved) → VMM (initrd identity-mapped) → kernel heap →
 VGA or VBE → GDT → IDT → FPU → PIC → PIT (1 kHz) → VFS → floppy detect →
 keyboard → mouse → UART RX IRQ → sound → syscalls → TSS → RTC →
 PCI (enumerate + bind drivers) → **ACPI/MADT → Local APIC → AP bring-up** →
@@ -604,8 +629,9 @@ scheduler.
 
 `sched_init()` does not return: it builds one idle thread per core, releases
 the parked application processors and `iret`s into the scheduler's first
-process (`main_proc` in [`sched.c`](sched.c)), which brings up the floppy and
-IDE block devices, mounts their FAT volumes, starts the framebuffer redraw thread,
+process (`main_proc` in [`sched.c`](sched.c)), which mounts the boot RAM disk
+(`/rd`), probes the floppy and IDE channels for any extra FAT volumes, starts
+the framebuffer redraw thread,
 the USB thread (`usb_thread` — enumerate, then poll HID endpoints and hub
 ports) and, if an e1000 was found, the `net` thread (`net_thread` — run the
 DHCP client, sync the RTC over NTP, then service the RX ring, retry the NFS

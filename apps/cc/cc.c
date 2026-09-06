@@ -2836,7 +2836,7 @@ int main(int argc, char **argv) {
     char *prelude = 0;
     int plen = 0;
     if (!nostdlib) {
-        if (!rtpath) rtpath = "/hda/prelude.c";
+        if (!rtpath) rtpath = "/rd/prelude.c";
         prelude = sys_readfile(rtpath, &plen);
         if (!prelude) {
             outs("cc: cannot read prelude "); outs(rtpath);

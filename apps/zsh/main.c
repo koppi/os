@@ -170,10 +170,10 @@ static int listdir_has(const char *dir, const char *name) {
     return 0;
 }
 
-/** @return the directory holding program @p cmd (cwd or /hda), or NULL. */
+/** @return the directory holding program @p cmd (cwd or /rd), or NULL. */
 static const char *prog_dir(const char *cmd) {
     if (g_cwd[0] && scmp(g_cwd, "/") != 0 && listdir_has(g_cwd, cmd)) return g_cwd;
-    if (listdir_has("/hda", cmd)) return "/hda";
+    if (listdir_has("/rd", cmd)) return "/rd";
     return 0;
 }
 
@@ -322,7 +322,7 @@ static int fnmatch(const char *p, const char *s) {
 }
 
 static const char *ls_base(void) {
-    return (g_cwd[0] && scmp(g_cwd, "/") != 0) ? g_cwd : "/hda";
+    return (g_cwd[0] && scmp(g_cwd, "/") != 0) ? g_cwd : "/rd";
 }
 
 static void glob_expand(char *seg) {
@@ -508,7 +508,7 @@ static void source_arg(const char *a) {
     if (!n[0]) { w("source: filename required\n"); return; }
     if (n[0] == '/') { source_path(n); return; }
     char full[112];
-    const char *base = (g_cwd[0] && scmp(g_cwd, "/") != 0) ? g_cwd : "/hda";
+    const char *base = (g_cwd[0] && scmp(g_cwd, "/") != 0) ? g_cwd : "/rd";
     scpy(full, base);
     scat(full, "/");
     scat(full, n);
@@ -516,7 +516,7 @@ static void source_arg(const char *a) {
 }
 
 /* Prefix the current directory onto bare argument tokens that name a file in
- * it, so `lua t.lua` opens /hda/t.lua the way `cat t.lua` already would. */
+ * it, so `lua t.lua` opens /rd/t.lua the way `cat t.lua` already would. */
 static void qualify_args(char *args) {
     const char *base = (g_cwd[0] && scmp(g_cwd, "/") != 0) ? g_cwd : 0;
     if (!args[0] || !base) return;
@@ -602,7 +602,7 @@ static void run_segment(const char *seg_in) {
      * Everything else is either a program on disk or a command for the kernel
      * console dispatcher (native built-ins + the coreutils toolbox). Spawn it
      * only when it is an explicit `start`, a path, or the name of a file in the
-     * current directory / on /hda; otherwise hand the whole line to `run`.
+     * current directory / on /rd; otherwise hand the whole line to `run`.
      */
     int is_start = (scmp(cmd, "start") == 0);
     const char *rest = is_start ? skip_ws(args) : seg;
@@ -626,7 +626,7 @@ static void run_segment(const char *seg_in) {
         scpy(full, prog);
     } else {
         const char *base = prog_dir(prog);
-        if (!base) base = (g_cwd[0] && scmp(g_cwd, "/") != 0) ? g_cwd : "/hda";
+        if (!base) base = (g_cwd[0] && scmp(g_cwd, "/") != 0) ? g_cwd : "/rd";
         scpy(full, base);
         scat(full, "/");
         scat(full, prog);
@@ -707,8 +707,8 @@ static void complete(char *buf, int *plen, int *drawn) {
     else                                     scpy(lspath, g_cwd[0] ? g_cwd : "/");
 
     if (scmp(lspath, "/") == 0) {
-        const char *roots[] = { "fda", "hda", "nfs" };
-        for (int i = 0; i < 3 && nc < 64; i++)
+        const char *roots[] = { "rd", "hda", "fda", "nfs" };
+        for (int i = 0; i < 4 && nc < 64; i++)
             if (sncmp(roots[i], pfx, pl) == 0) scpy(cand[nc++], roots[i]);
     } else {
         sys_listdir(lspath, ld_buf, sizeof ld_buf);
@@ -830,7 +830,7 @@ int main(int argc, char **argv) {
     alias_set("ll", "ls");
     alias_set("la", "ls");
     alias_set("h", "history");
-    source_path("/hda/zshrc");
+    source_path("/rd/zshrc");
 
     static char line[LINE];
     while (!g_done) {

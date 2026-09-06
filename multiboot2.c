@@ -13,6 +13,7 @@
 #include <printf.h>
 
 #include <bfb.h>
+#include <initrd.h>
 
 /** Multiboot 2 tags are padded to an 8-byte boundary. */
 #define MULTIBOOT2_TAG_ALIGN  8
@@ -48,7 +49,11 @@ static void multiboot2_cmdline(const multiboot2_cmdline_t *module) {
 }
 
 static void multiboot2_module(const multiboot2_module_t *module) {
-    (void)module;
+    /* First module only — it is the boot RAM disk (grub.cfg / initrd.img). */
+    if (!initrd_mod_start) {
+        initrd_mod_start = module->start;
+        initrd_mod_end   = module->end;
+    }
 }
 
 static void multiboot2_memmap(uint32_t length, const multiboot2_memmap_t *memmap)

@@ -1,4 +1,4 @@
--- Demo module for `require`. Staged as /hda/mod.lua; test.lua pulls it in.
+-- Demo module for `require`. Staged as /rd/mod.lua; test.lua pulls it in.
 local M = {}
 
 function M.greet(who)

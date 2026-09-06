@@ -11,8 +11,8 @@ src/        vendored Lua 5.4.8 (lua.org). Unmodified except:
               - lua.c renamed to frontend.c so the l*.c wildcard skips it
 shim/       the i386 / freestanding platform layer (hand-written + 2 vendored)
 openlibs.c  luaL_openlibs() minus io/debug, os trimmed
-test.lua    self-test, staged as /hda/t.lua
-mod.lua     `require` demo, staged as /hda/mod.lua
+test.lua    self-test, staged as /rd/t.lua
+mod.lua     `require` demo, staged as /rd/mod.lua
 Makefile    builds `lua`; links ../../lib/{stdlib,system_calls,unistd}.o + ../../arith64.o
 ```
 
@@ -29,7 +29,7 @@ Makefile    builds `lua`; links ../../lib/{stdlib,system_calls,unistd}.o + ../..
   (via `-D`) to go straight to the `write` syscall.
 * `-fno-tree-loop-distribute-patterns` — stops GCC turning the byte loops in
   `shim/string.c` into calls to `memset`/`memcpy` (infinite recursion).
-* `LUA_PATH_DEFAULT = "/hda/?.lua;/hda/?/init.lua;/fda/?.lua;./?.lua"`, no C path.
+* `LUA_PATH_DEFAULT = "/rd/?.lua;/rd/?/init.lua;/fda/?.lua;./?.lua"`, no C path.
 * `l_system(cmd)` and `lua_getlocaledecpoint()` are stubbed via `-D`.
 
 ## Platform layer (`shim/`)

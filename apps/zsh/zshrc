@@ -1,11 +1,11 @@
-# apps/zsh/zshrc - staged as /hda/zshrc and /fda/zshrc, sourced at shell start.
+# apps/zsh/zshrc - staged as /rd/zshrc (and /fda/zshrc), sourced at shell start.
 # Every line runs through the normal command dispatch, so it is a good place
 # for aliases and a bit of setup.
 
 alias l='ls'
 alias ll='ls'
 alias c='clear'
-alias reload='source /hda/zshrc'
+alias reload='source /rd/zshrc'
 alias shutdown='poweroff'
 
 echo welcome to os zsh - try: ls, cat cc.c, pci, date, hello, lua t.lua

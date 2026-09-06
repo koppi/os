@@ -76,7 +76,9 @@ void paint_mouse2() {
 
     if (!mouse_cursor && !tried) {
         tried = 1;
-        mouse_cursor = bmp_image_from_file("/fda/mouse.bmp");
+        mouse_cursor = bmp_image_from_file("/rd/mouse.bmp");
+        if (!mouse_cursor)
+            mouse_cursor = bmp_image_from_file("/fda/mouse.bmp");
         if (!mouse_cursor)
             mouse_cursor = bmp_image_from_file("/hda/mouse.bmp");
     }

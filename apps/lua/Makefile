@@ -8,7 +8,7 @@ LUACFG = -DLUA_USE_C89 \
          '-Dl_sprintf(s,sz,f,i)=snprintf((s),(sz),(f),(i))' \
          "-Dlua_getlocaledecpoint()='.'" \
          '-Dl_system(cmd)=((cmd)==0?0:-1)' \
-         '-DLUA_PATH_DEFAULT="/hda/?.lua;/hda/?/init.lua;/fda/?.lua;./?.lua"' \
+         '-DLUA_PATH_DEFAULT="/rd/?.lua;/rd/?/init.lua;/fda/?.lua;./?.lua"' \
          '-DLUA_CPATH_DEFAULT="./?.so"' \
          '-Dlua_writestring(s,l)=__lua_out((s),(l))' \
          '-Dlua_writeline()=__lua_out("\n",1)' \

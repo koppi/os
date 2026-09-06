@@ -17,6 +17,7 @@
 #include <percpu.h>
 #include <apic.h>
 #include <spinlock.h>
+#include <initrd.h>
 
 /*
  * |------------------------------------------------|
@@ -50,6 +51,7 @@ void vmm_init() {
      * map_kernel() allocates the first table from it. */
     paging_init((uint32_t) &kernel_end);
     map_kernel(kern_dir);
+    initrd_map();   /* identity-map the relocated boot RAM disk (kern_dir only) */
     change_page_directory(kern_dir);
     enable_paging();
 }
@@ -178,9 +180,13 @@ void *get_phys_addr(page_dir_t *pdir, vmm_addr_t virt) {
 /** Directory slots the kernel needs reachable from a process's ring-0 context:
  *  0 = identity map (kernel code/data/stacks/heap/page-tables, all < 4 MiB),
  *  1 = RETURN_ADDR stub + kernel-thread stacks,
- *  LAPIC slot = the MMIO this_cpu() reads on every scheduler tick. */
+ *  LAPIC slot = the MMIO this_cpu() reads on every scheduler tick,
+ *  initrd slots = the boot RAM disk, so a `run`/`open` syscall can read /rd
+ *  on the calling process's own CR3 (initrd_pde_* return -1 when absent). */
 static int is_kernel_slot(int i) {
-    return i == 0 || i == 1 || i == (int) ((uint32_t) 0xFEE00000 >> 22);
+    if (i == 0 || i == 1 || i == (int) ((uint32_t) 0xFEE00000 >> 22))
+        return 1;
+    return i >= initrd_pde_lo() && i <= initrd_pde_hi();
 }
 
 /**

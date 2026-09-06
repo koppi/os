@@ -1,14 +1,20 @@
 #!/usr/bin/env bash
-# Build the IDE hard-disk image. Uses mtools, so no root / loop device needed.
+# Build a FAT16 image staged with the userland (shell, apps, cc toolchain).
+# Uses mtools, so no root / loop device needed.
+#
+#   ./hda.sh                       -> hda.img, 16 MiB  (persistent scratch disk)
+#   IMG=initrd.img SIZE=8M ./hda.sh -> the boot RAM disk packed into os.iso
+#
+# 16 MiB gives headroom for the self-hosting C compiler (cc), its source and
+# runtime, and a couple of generations of compiler output. One sector per
+# cluster and -F 16 keep it firmly FAT16, which is all the in-kernel driver does.
 set -e
 
-IMG=hda.img
+IMG=${IMG:-hda.img}
+SIZE=${SIZE:-16M}
 
-# 16 MiB: enough headroom for the self-hosting C compiler (cc), its source and
-# runtime, and a couple of generations of compiler output. Still one sector per
-# cluster (~32k clusters => FAT16), which is all the in-kernel FAT driver does.
-qemu-img create -f raw "$IMG" 16M
-/sbin/mkfs.fat -s 1 -R 1 "$IMG"
+qemu-img create -f raw "$IMG" "$SIZE"
+/sbin/mkfs.fat -F 16 -s 1 -R 1 "$IMG"
 
 mcopy -i "$IMG" -D o apps/zsh/zsh         ::zsh
 mcopy -i "$IMG" -D o apps/zsh/zshrc       ::zshrc

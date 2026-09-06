@@ -7,8 +7,27 @@
 #include <lib/string.h>
 #include <vfs.h>
 
-/** Registered devices, indexed by @c device_t::id (ATA takes 0-3, floppies 4-5). */
+/** Registered devices, indexed by @c device_t::id (the RAM disk takes 0, ATA
+ *  and the floppies fill in after it). */
 static device_t *devices[8];
+
+/**
+ * @brief Match a mount name against the first path component of @p name.
+ *
+ * Handles names of any length (the RAM disk is "rd", disks are "hda"/"fda"):
+ * the mount name must be followed by '/' or end-of-string in @p name, so "rd"
+ * matches "rd" and "rd/zsh" but not "rdx".
+ *
+ * @param mount NUL-terminated mount name.
+ * @param name  Path, optionally with a leading '/'.
+ */
+static int dev_name_matches(const char *mount, const char *name) {
+    if(name[0] == '/')
+        name++;
+    size_t n = strlen(mount);
+    return strncmp((char *) mount, (char *) name, n) == 0 &&
+           (name[n] == '/' || name[n] == '\0');
+}
 
 /**
  * @brief Record @p dev and mount its filesystem.
@@ -27,10 +46,8 @@ void device_register(device_t *dev) {
  * @return The device, or NULL.
  */
 device_t *get_dev_by_name(char *name) {
-    if(name[0] == '/')
-        name++;
     for(int i = 0; i < 8; i++) {
-        if(devices[i] != NULL && strncmp(devices[i]->mount, name, 3) == 0)
+        if(devices[i] != NULL && dev_name_matches(devices[i]->mount, name))
             return devices[i];
     }
     return NULL;
@@ -50,10 +67,8 @@ device_t *get_dev_by_id(int id) {
  * @return The device id, or -1 if no match.
  */
 int get_dev_id_by_name(char *name) {
-    if(name[0] == '/')
-        name++;
     for(int i = 0; i < 8; i++) {
-        if(devices[i] != NULL && strncmp(devices[i]->mount, name, 3) == 0)
+        if(devices[i] != NULL && dev_name_matches(devices[i]->mount, name))
             return devices[i]->id;
     }
     return -1;

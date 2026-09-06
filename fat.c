@@ -103,7 +103,10 @@ void to_normal_file_name(char *name, char *str) {
         if(name[i] != ' ') {
             str[j] = tolower(name[i]);
             j++;
-        } else if((flag == 1) && (name[9] != ' ')) {
+        } else if((flag == 1) && (name[8] != ' ')) {
+            /* name[8] is the first extension char: test that, not name[9], so a
+             * single-letter extension ("CC      C  " -> "cc.c") still gets its
+             * dot and round-trips through to_dos_file_name(). */
             flag = 0;
             str[j] = '.';
             j++;
@@ -516,7 +519,16 @@ file fat_search(char *name) {
     int root = 1;
     
     cur_dir.dev = get_dev_id_by_name(name);
-    name += 3;
+    /* Skip the device component ("rd", "hda", ...) — its length is not fixed,
+     * so advance to the first '/' (or the end) rather than a hard-coded += 3. */
+    if(name[0] == '/')
+        name++;
+    char *sep = strchr(name, '/');
+    if(!sep) {                 /* bare "/rd" with no path: nothing to open */
+        cur_dir.type = FS_NULL;
+        return cur_dir;
+    }
+    name = sep;
     while(name++) {
         char pathname[16];
         int i;

@@ -42,7 +42,9 @@
  * in for one. Change these if you don't want the defaults. */
 #define SSH_USERNAME        "koppi"
 #define SSH_PASSWORD        "os"
-#define HOSTKEY_PATH        "/hda/sshkey"   /* short: this FAT driver is 8.3-only */
+#define HOSTKEY_PATH        "/rd/sshkey"    /* short: this FAT driver is 8.3-only.
+                                            * On the RAM disk this is regenerated
+                                            * every boot (see README). */
 #define SSH_MAX_PACKET      8192
 #define SSH_MAX_AUTH_TRIES  6
 #define SSH_MAX_DATA_CHUNK  4096

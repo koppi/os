@@ -37,12 +37,23 @@ void ata_init() {
     static const char *chan_name[4] = {
         "primary master", "primary slave", "secondary master", "secondary slave"
     };
+    /* The RAM disk (initrd.c) claims device id 0 before this runs, so probe for
+     * the next free slot rather than assuming channel index == id. Mount names
+     * still run hda, hdb, ... in channel order. */
+    int hd_letter = 0;
     for(int i = 0; i < 4; i++) {
         if(temp_info->present == 1) {
-            dev_info[i].id = i;
+            int id = 0;
+            while(id < 8 && get_dev_by_id(id))
+                id++;
+            if(id >= 8) {
+                temp_info++;
+                continue;   /* device table full */
+            }
+            dev_info[i].id = id;
             dev_info[i].type = 1;
             strcpy(dev_info[i].mount, "hd");
-            dev_info[i].mount[2] = i + 'a';
+            dev_info[i].mount[2] = 'a' + hd_letter++;
             dev_info[i].mount[3] = 0;
             dev_info[i].read = &ata_read_sector;
             dev_info[i].write = &ata_write_sector;
@@ -75,11 +86,26 @@ void ata_info_fill(drive_t *drive, int type, uint32_t data, uint32_t err,
     identify(drive);
 }
 
+/* Bound on the IDENTIFY status polls. Large enough that a real, slow drive
+ * still completes; small enough that a wedged or absent channel (common on
+ * real hardware and when booting os.iso with no disk attached) fails the probe
+ * in a few milliseconds instead of hanging the boot forever. */
+#define ATA_POLL_MAX 500000
+
 void identify(drive_t *drive) {
     if(drive->type == 1)
         outportb(drive->sel_reg, 0xA0);
     else
         outportb(drive->sel_reg, 0xB0);
+    delay_400ns();
+
+    /* All-ones on the status port means the channel is floating: no drive, and
+     * usually no controller either. Bail before issuing any command. */
+    if(inportb(drive->status_reg) == 0xFF) {
+        drive->present = 0;
+        return;
+    }
+
     //outportb(drive->sectors_reg, 0); // koppi
     outportb(drive->lba_low_reg, 0);
     outportb(drive->lba_mid_reg, 0);
@@ -88,14 +114,23 @@ void identify(drive_t *drive) {
     if(inportb(drive->status_reg) == 0) {
         drive->present = 0;
     } else {
+        /* Wait out BSY, then require a clean LBA mid/high (0 => plain ATA, not
+         * ATAPI/SATA) and DRQ. Every wait is bounded so an unresponsive
+         * channel marks the drive absent instead of spinning forever. */
+        int timeout = ATA_POLL_MAX;
+        while((inportb(drive->status_reg) & 0x80) != 0) {
+            if(--timeout <= 0) { drive->present = 0; return; }
+        }
         if((inportb(drive->lba_mid_reg) != 0) || (inportb(drive->lba_high_reg) != 0)) {
             drive->present = 0;
         } else {
-            while((inportb(drive->status_reg) & 0x80) != 0);
-            while(((inportb(drive->status_reg) & 0x8) != 8) && ((inportb(drive->status_reg) & 0x0) == 0));
-            if((inportb(drive->status_reg) & 0x0) == 1) {
-                drive->present = 0;
-            } else {
+            timeout = ATA_POLL_MAX;
+            uint8_t st;
+            while(!((st = inportb(drive->status_reg)) & 0x08)) {
+                if(st & 0x01) { drive->present = 0; return; }   /* ERR */
+                if(--timeout <= 0) { drive->present = 0; return; }
+            }
+            {
                 drive->present = 1;
                 for(int i = 0; i < 256; i++) {
                     switch(i) {

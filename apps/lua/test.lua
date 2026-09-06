@@ -1,4 +1,4 @@
--- Smoke test for the koppi-os Lua port. Run with:  start hda/lua /hda/t.lua
+-- Smoke test for the koppi-os Lua port. Run with:  start rd/lua /rd/t.lua
 print("Lua port self-test  --  " .. _VERSION)
 
 -- numbers: 64-bit integers and IEEE doubles
@@ -43,7 +43,7 @@ assert(co() == 1 and co() == 4 and co() == 9)
 -- utf8
 assert(utf8.char(72, 105) == "Hi" and utf8.len("Hej") == 3)
 
--- require a Lua module off the FAT volume (LUA_PATH = /hda/?.lua)
+-- require a Lua module off the FAT volume (LUA_PATH = /rd/?.lua)
 local mod = require("mod")
 assert(mod.greet("koppi") == "hello, koppi" and mod.answer == 42)
 

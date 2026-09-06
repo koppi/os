@@ -84,9 +84,16 @@ QEMUFLAGS += -device sb16,audiodev=pa
 QEMUFLAGS += -device ac97,audiodev=pa
 #QEMUFLAGS += -d in_asm,cpu,guest_errors,exec
 QEMUFLAGS += -rtc base=localtime,clock=vm
-QEMUFLAGS += -drive file=floppy.img,format=raw,index=0,if=floppy
-QEMUFLAGS += -drive file=hda.img,format=raw,if=ide,index=0,media=disk
+# The root filesystem now rides inside os.iso as a Multiboot module (initrd.img),
+# so no hd/floppy image is needed to boot. Set DISK=<file> for a persistent
+# scratch disk (it shows up inside the OS as /hda); FLOPPY=<file> likewise (/fda).
 QEMUFLAGS += -drive file=os.iso,if=ide,index=1,media=cdrom
+ifneq ($(DISK),)
+QEMUFLAGS += -drive file=$(DISK),format=raw,if=ide,index=0,media=disk
+endif
+ifneq ($(FLOPPY),)
+QEMUFLAGS += -drive file=$(FLOPPY),format=raw,index=0,if=floppy
+endif
 QEMUFLAGS += -display sdl
 QEMUFLAGS += -usb
 QEMUFLAGS += -device usb-kbd,port=1
@@ -101,15 +108,23 @@ lib:
 apps:
 	$(MAKE) -C apps
 
-iso: $(KERNEL)
+# The boot RAM disk: the whole userland, packed into a FAT16 image that GRUB
+# hands to the kernel as a Multiboot module. 8 MiB is plenty for the payload
+# plus a few generations of cc output (it is RAM-backed and ephemeral).
+initrd.img: hda.sh apps
+	@echo "  IMG initrd.img"
+	@IMG=initrd.img SIZE=8M ./hda.sh >/dev/null
+
+iso: $(KERNEL) initrd.img
 	@mkdir -p iso/boot/grub
 	@cp $(KERNEL) iso/boot/$(KERNEL)
+	@cp initrd.img iso/boot/initrd.img
 	@cp grub.cfg iso/boot/grub/grub.cfg
 	@grub-mkrescue -o os.iso iso 1>&2 2>/dev/null
 
-qemu-kernel: $(KERNEL)
+qemu-kernel: $(KERNEL) initrd.img
 	@echo "QEMU .."
-	@$(QEMU) -kernel $(KERNEL) $(QEMUFLAGS) -display none -serial 'mon:stdio'
+	@$(QEMU) -kernel $(KERNEL) -initrd initrd.img $(QEMUFLAGS) -display none -serial 'mon:stdio'
 
 qemu-iso: iso
 	@echo "QEMU .."
@@ -157,7 +172,7 @@ docs::
 clean::
 	@$(MAKE) -C lib clean
 	@$(MAKE) -C apps clean
-	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin *.d lib/*.d *~ os.iso iso docs
+	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin *.d lib/*.d *~ os.iso iso initrd.img docs
 
 .PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox cloc docs clean
 

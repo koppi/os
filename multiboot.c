@@ -5,6 +5,7 @@
  */
 #include <multiboot.h>
 #include <bfb.h>
+#include <initrd.h>
 #include <stddef.h>
 
 /** Extract command name from the multiboot module command line.
@@ -34,8 +35,11 @@ void multiboot_extract_argument(char *buf, size_t size, const char *cmd_line) {
 }
 
 static void multiboot_modules(uint32_t count, multiboot_module_t *mods) {
-    (void)count;
-    (void)mods;
+    /* First module only — the boot RAM disk (grub.cfg / initrd.img). */
+    if (count > 0 && !initrd_mod_start) {
+        initrd_mod_start = mods[0].start;
+        initrd_mod_end   = mods[0].end;
+    }
 }
 
 static void multiboot_memmap(uint32_t length, multiboot_memmap_t *memmap)

@@ -38,6 +38,7 @@
 
 #include <floppy.h>
 #include <ata.h>
+#include <initrd.h>
 #include <usb.h>
 #include <e1000.h>
 #include <net.h>
@@ -103,6 +104,7 @@ void demo_thread() {
 
 void main_proc() {
     //enable_int();
+    ramdisk_init(); // mounts the boot RAM disk from os.iso as "rd"
     floppy_init(); // requires irqs to be enabled
     ata_init();    // probes the IDE channels and mounts hd{a,b,...}
 
@@ -117,13 +119,13 @@ void main_proc() {
     //start_kernel_proc("uart_read", &uart_read_proc);
 
     /*
-     * Hand control to the user-space shell (apps/zsh, staged on the disk
-     * images). It owns line editing, history and completion and reaches every
-     * command in commands.c through the `run` syscall. Fall back to the
-     * in-kernel debug console if the shell image is missing or fails to load,
-     * and again once the shell exits (Ctrl-D / `exit`).
+     * Hand control to the user-space shell (apps/zsh, staged on the "rd" RAM
+     * disk that GRUB loaded from os.iso). It owns line editing, history and
+     * completion and reaches every command in commands.c through the `run`
+     * syscall. Fall back to the in-kernel debug console if the shell image is
+     * missing or fails to load, and again once the shell exits (Ctrl-D / `exit`).
      */
-    int sh = start_proc("/hda/zsh", "");
+    int sh = start_proc("/rd/zsh", "");
     if(sh != PROC_STOPPED) {
         while(proc_state(sh) != PROC_STOPPED) {
             console_spawn_service();   /* run programs the shell asks us to */

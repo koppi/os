@@ -1350,8 +1350,8 @@ static void cmd_env(int argc, char **argv) {
     if (printenv && argc > 1) only = argv[1];
     struct { const char *k, *v; } e[] = {
         { "USER", "root" }, { "LOGNAME", "root" }, { "HOME", "/" },
-        { "SHELL", "/hda/zsh" }, { "PWD", console_cwd() }, { "TERM", "os" },
-        { "PATH", "/hda:/fda" }, { "HOSTNAME", cu_hostname }, { "OSTYPE", "os" },
+        { "SHELL", "/rd/zsh" }, { "PWD", console_cwd() }, { "TERM", "os" },
+        { "PATH", "/rd:/hda:/fda" }, { "HOSTNAME", cu_hostname }, { "OSTYPE", "os" },
     };
     for (unsigned i = 0; i < sizeof e / sizeof e[0]; i++) {
         if (only) { if (s_eq(e[i].k, only)) printf("%s\n", e[i].v); }
