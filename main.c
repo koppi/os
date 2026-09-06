@@ -62,6 +62,52 @@ struct version_tuplet os_ver = {
 /** Total memory (KiB) reported by the multiboot2 basic-meminfo tag. */
 extern uint32_t multiboot2_mem_size;
 
+/* ------------------------------------------------------------------ *
+ *  Early-boot progress beacon (bootdiag)                              *
+ *                                                                    *
+ *  A real ThinkPad has no serial port and the screen is dark until    *
+ *  fbcon_init(), so when the kernel dies in between there is nothing   *
+ *  to see. With `bootdiag` on the GRUB line this beeps the PC speaker  *
+ *  N times at checkpoint N and, while paging is still off, floods the  *
+ *  framebuffer with a per-checkpoint colour. The last thing you hear   *
+ *  / see is the checkpoint the kernel reached; the next step is the    *
+ *  one that hung.                                                      *
+ * ------------------------------------------------------------------ */
+static int bootdiag_on;
+
+static void bd_delay(volatile uint32_t n) { while (n--) __asm__ volatile("pause"); }
+
+static void bd_beep(int freq, uint32_t hold) {
+    uint32_t c = 1193182u / (uint32_t) freq;
+    outportb(0x43, 0xB6);
+    outportb(0x42, c & 0xFF);
+    outportb(0x42, (c >> 8) & 0xFF);
+    outportb(0x61, inportb(0x61) | 3);
+    bd_delay(hold);
+    outportb(0x61, inportb(0x61) & 0xFC);
+    bd_delay(hold / 3);
+}
+
+/** @param stage 1..N checkpoint number. @param paging_off non-zero while the
+ *         framebuffer is still identity-accessible (before vmm_init). */
+static void bootdiag(int stage, int paging_off) {
+    if (!bootdiag_on)
+        return;
+    for (int i = 0; i < stage; i++)
+        bd_beep(760 + stage * 90, 900000);
+    if (paging_off && bfb_addr && bfb_bpp >= 24) {
+        static const uint32_t hue[] = {
+            0x330000, 0x333300, 0x003300, 0x003333, 0x000033, 0x330033, 0x333333
+        };
+        uint32_t col = hue[(stage - 1) % 7];
+        uint32_t pitch = bfb_scanline ? bfb_scanline : bfb_width * 4;
+        volatile uint8_t *fb = (volatile uint8_t *) (uintptr_t) bfb_addr;
+        for (uint32_t y = 0; y < bfb_height; y++)
+            for (uint32_t x = 0; x < bfb_width; x++)
+                *(volatile uint32_t *) (fb + y * pitch + x * 4) = col;
+    }
+}
+
 /**
  * @brief Read the CMOS floppy-drive type byte and log both drives.
  */
@@ -120,6 +166,9 @@ void kernel_main(unsigned long magic, unsigned long addr)
     if (kernel_cmdline[0])
         klogf(LOG_INFO, "  cmdline: %s\n", kernel_cmdline);
 
+    bootdiag_on = cmdline_has("bootdiag");
+    bootdiag(1, 1);   /* checkpoint 1: multiboot parsed, cmdline read */
+
     /* The loader's memory-size fields are unreliable (a UEFI GRUB reports a
      * token ~7 MiB); the E820 map is authoritative, so use the top of RAM it
      * reports whenever that is larger. */
@@ -176,13 +225,17 @@ void kernel_main(unsigned long magic, unsigned long addr)
           (unsigned) multiboot2_mem_size, (unsigned) get_max_blocks(),
           (unsigned) get_used_blocks(),
           (unsigned) ((get_max_blocks() - get_used_blocks()) * 4));
+    bootdiag(2, 1);   /* checkpoint 2: physical MM up, paging still off */
     vmm_init();
+    bootdiag(3, 0);   /* checkpoint 3: paging enabled (map_kernel survived) */
     kheap_init();
     if (cmdline_has("nofb"))
         bfb_addr = 0;               /* force VGA text mode */
     pat_init();                     /* WC memory type -> a fast framebuffer */
+    bootdiag(4, 0);   /* checkpoint 4: PAT done, about to touch the framebuffer */
     if (!bfb_addr) vga_init();
     else vbe_init();
+    bootdiag(5, 0);   /* checkpoint 5: framebuffer init returned (fbcon should now paint) */
     gdt_init();
     idt_init(0x8);
     fpu_init();
