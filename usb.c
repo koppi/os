@@ -9,6 +9,7 @@
  */
 #include <usb.h>
 #include <uhci.h>
+#include <xhci.h>
 #include <usb_hid.h>
 #include <usb_hub.h>
 #include <log.h>
@@ -206,6 +207,9 @@ static usb_device_t *alloc_device(void) {
 }
 
 void usb_init(void) {
+    /* xHCI first: it is the only controller on a recent machine. */
+    xhci_init();
+
     if(!uhci_init())
         return;
     for(int p = 0; p < uhci_port_count(); p++)
@@ -213,6 +217,7 @@ void usb_init(void) {
 }
 
 void usb_poll(void) {
+    xhci_poll();
     usb_hid_poll();
     usb_hub_poll();
 }

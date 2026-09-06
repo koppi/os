@@ -239,6 +239,28 @@ void pci_dump(void) {
 
 int pci_count(void) { return ndev; }
 
+uint32_t pci_mmio_hole(uint32_t size) {
+    /* Lowest 32-bit MMIO address above every assigned memory BAR, aligned to
+     * `size`, kept below the LAPIC/IOAPIC/HPET block at 0xFEC00000. Used to
+     * re-home a BAR a UEFI firmware parked above 4 GiB where a 32-bit kernel
+     * cannot reach it. */
+    uint32_t top = 0xC0000000;
+    for (int i = 0; i < ndev; i++)
+        for (int b = 0; b < 6; b++) {
+            const pci_bar_t *bar = &table[i].bar[b];
+            if (bar->is_io || !bar->addr || !bar->size)
+                continue;
+            uint32_t end = bar->addr + bar->size;
+            if (end > top && end < 0xFEC00000)
+                top = end;
+        }
+    if (size == 0) size = 0x1000;
+    top = (top + size - 1) & ~(size - 1);
+    if (top + size > 0xFEC00000)
+        return 0;
+    return top;
+}
+
 const pci_device_t *pci_dev(int i) {
     return (i >= 0 && i < ndev) ? &table[i] : NULL;
 }

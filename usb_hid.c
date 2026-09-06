@@ -60,7 +60,7 @@ static int report_has_key(uint8_t *rpt, uint8_t code) {
  * @brief Diff a new keyboard report against the previous one and push newly
  *        pressed keys (mods byte bit 1/5 = shift) into the keyboard ring.
  */
-static void handle_keyboard(hid_dev_t *h, uint8_t *rpt, int len) {
+void usb_hid_report_keyboard(const uint8_t *rpt, int len, uint8_t prev[8]) {
     if(len < 3)
         return;
     int shift = (rpt[0] & 0x22) != 0;   /* L/R shift */
@@ -68,17 +68,16 @@ static void handle_keyboard(hid_dev_t *h, uint8_t *rpt, int len) {
         uint8_t code = rpt[i];
         if(code < 4 || code >= 128)
             continue;
-        if(report_has_key(h->prev, code))
+        if(report_has_key(prev, code))
             continue;   /* still held from last report */
         char c = shift ? kbd_ascii_shift[code] : kbd_ascii[code];
         if(c)
             keyboard_push_char(c);
     }
-    memcpy(h->prev, rpt, 8);
+    memcpy(prev, (void *)rpt, 8);
 }
 
-/** @brief Apply a boot-protocol mouse report to @c mouse_info. */
-static void handle_mouse(uint8_t *rpt, int len) {
+void usb_hid_report_mouse(const uint8_t *rpt, int len) {
     if(len < 3)
         return;
     int8_t dx = (int8_t)rpt[1];
@@ -92,6 +91,15 @@ static void handle_mouse(uint8_t *rpt, int len) {
     else if(b & 0x02) mouse_info.curr_button = RIGHT_CLICK;
     else if(b & 0x04) mouse_info.curr_button = MIDDLE_CLICK;
     else              mouse_info.curr_button = 0;
+}
+
+static void handle_keyboard(hid_dev_t *h, uint8_t *rpt, int len) {
+    usb_hid_report_keyboard(rpt, len, h->prev);
+}
+
+/** @brief Apply a boot-protocol mouse report to @c mouse_info. */
+static void handle_mouse(uint8_t *rpt, int len) {
+    usb_hid_report_mouse(rpt, len);
 }
 
 /** @brief SET_PROTOCOL(boot) + SET_IDLE(0) on @p iface. */

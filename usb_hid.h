@@ -31,3 +31,16 @@ void usb_hid_detach(uint8_t addr);
 
 /** @brief Poll every attached HID endpoint once and dispatch any new report. */
 void usb_hid_poll(void);
+
+/**
+ * @brief Translate a HID boot keyboard report and push newly-pressed keys.
+ * @param rpt  The 8-byte boot report [mods, resv, key0..key5].
+ * @param len  Report length.
+ * @param prev Caller-owned 8-byte buffer holding the previous report (updated).
+ *
+ * Host-controller-agnostic: the xHCI driver feeds reports here too.
+ */
+void usb_hid_report_keyboard(const uint8_t *rpt, int len, uint8_t prev[8]);
+
+/** @brief Apply a HID boot mouse report [buttons, dx, dy, (wheel)] to mouse_info. */
+void usb_hid_report_mouse(const uint8_t *rpt, int len);

@@ -107,3 +107,7 @@ const pci_device_t *pci_get_by_class(uint8_t class, uint8_t subclass);
 
 /** @brief OR @p bits into the device's command register (I/O / MEM / bus master). */
 void pci_enable(const pci_device_t *d, uint16_t bits);
+
+/** @return A free, `size`-aligned 32-bit MMIO address (0 if none), for
+ *          re-homing a BAR a UEFI firmware placed above 4 GiB. */
+uint32_t pci_mmio_hole(uint32_t size);
