@@ -117,14 +117,11 @@ static int syn_init(void) {
         return 0;
 
     uint8_t cap[3];
-    if (syn_query(0x02, cap)) {
-        /* Extended-capabilities byte: bit 7 of cap[0] set means "more caps in
-         * cap[1]"; pass-through is cap[0] bit 7... layout is
-         *   cap[0] = { ext-cap valid, ... }, cap[1] = middle-btn, pass-through
-         * Historically SYN_CAP_PASS_THROUGH is bit 7 of the low capability
-         * byte (cap[2] here). Accept it from either likely position. */
-        syn_passthrough = (cap[2] & 0x80) || (cap[1] & 0x01);
-    }
+    /* Read Capabilities (query 0x02): the 24-bit value is cap[0]<<16 |
+     * cap[1]<<8 | cap[2]; cap[1] must read back 0x47 for the answer to be
+     * valid, and SYN_CAP_PASS_THROUGH is bit 7 of the low byte. */
+    if (syn_query(0x02, cap) && cap[1] == 0x47)
+        syn_passthrough = (cap[2] & 0x80) != 0;
 
     /* Mode byte: absolute (0x80) | high report rate (0x40) |
      * disable-gesture (0x04) | W-mode / extended packets (0x01).
@@ -187,13 +184,18 @@ static void decode_synaptics(const uint8_t *b) {
     int x = ((b[3] & 0x10) << 8) | ((b[1] & 0x0F) << 8) | b[4];
     int y = ((b[3] & 0x20) << 7) | ((b[1] & 0xF0) << 4) | b[5];
     int z = b[2];
-    int left  = (b[0] & 0x01) ? LEFT_CLICK  : 0;
-    int right = (b[0] & 0x02) ? RIGHT_CLICK : 0;
-    /* ClickPad: the whole surface is one button -> treat a hard press as left. */
-    if ((b[0] ^ b[3]) & 0x01)
-        left = LEFT_CLICK;
 
-    if (z > 30) {                             /* finger present */
+    /* ClickPad: no discrete buttons -- a physical click shows as byte0 bit0
+     * differing from byte3 bit0. (The TrackPoint's own buttons arrive in the
+     * w == 3 pass-through packet above.) */
+    int left = ((b[0] ^ b[3]) & 0x01) ? LEFT_CLICK : 0;
+    mouse_info.curr_button = (mouse_info.curr_button & ~(LEFT_CLICK | RIGHT_CLICK)) | left;
+
+    /* Only a single finger (w in 4..15) steers the cursor. w in {0,1,2} is
+     * multi-finger / advanced-gesture data whose x/y fields mean something
+     * else -- decoding it as a position is what made a resting second finger
+     * fling the pointer across the screen. */
+    if (w >= 4 && z > 30) {
         if (pad_down) {
             int dx = (x - pad_px) / 6;        /* Synaptics units -> pixels */
             int dy = (pad_py - y) / 6;        /* pad Y grows upward */
@@ -205,12 +207,15 @@ static void decode_synaptics(const uint8_t *b) {
     } else {
         pad_down = 0;
     }
-    mouse_info.curr_button = (mouse_info.curr_button & ~(LEFT_CLICK | RIGHT_CLICK))
-                             | left | right;
 }
 
 void mouse_handler() {
-    uint8_t pkt[6];
+    /* MUST be static: the i8042 raises one IRQ per byte received, so a 6-byte
+     * Synaptics packet is assembled over six separate calls to this handler.
+     * A local array would be a fresh (uninitialised) stack slot every call and
+     * every packet would decode from garbage -- the cursor jumps at random for
+     * both the touchpad and the pass-through TrackPoint. */
+    static uint8_t pkt[6];
     int need = syn_mode ? 6 : 3;
     uint8_t status;
 
@@ -219,13 +224,22 @@ void mouse_handler() {
         if (!(status & MOUSE_F_BIT))
             continue;                         /* keyboard byte */
 
-        /* Byte 0 sync: plain packets have bit 3 set; Synaptics byte 0 has
-         * bits 7..6 == 10. Resync on a mismatch. */
-        if (mouse_cycle == 0) {
-            int ok = syn_mode ? ((b & 0xC8) == 0x80) : (b & MOUSE_V_BIT);
-            if (!ok)
+        if (syn_mode) {
+            /* Absolute packets: byte 0 is 1 0 x x 0 x x x  ((b & 0xC8) == 0x80),
+             * byte 3 is 1 1 x x 0 x x x  ((b & 0xC8) == 0xC0). A byte that
+             * fails its slot's test means a byte was dropped -- realign by
+             * reconsidering it as a fresh byte 0. */
+            if (mouse_cycle == 0 && (b & 0xC8) != 0x80)
                 continue;
+            if (mouse_cycle == 3 && (b & 0xC8) != 0xC0) {
+                mouse_cycle = 0;
+                if ((b & 0xC8) != 0x80)
+                    continue;
+            }
+        } else if (mouse_cycle == 0 && !(b & MOUSE_V_BIT)) {
+            continue;                         /* plain byte 0 lost sync */
         }
+
         pkt[mouse_cycle++] = b;
         if (mouse_cycle < need)
             continue;
