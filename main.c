@@ -40,6 +40,14 @@
 
 #include "cpu.h"
 
+/** Total number of boot_progress() steps (one per subsystem init). */
+#define BOOT_PROG_TOTAL 20
+
+/** Increment the boot-progress counter and label the bar with @p msg. */
+#define BOOT_PROG(msg) boot_progress(++boot_prog_cur, BOOT_PROG_TOTAL, (msg))
+
+static unsigned boot_prog_cur;
+
 /** The running OS version, printed at boot. Derived from git at build time. */
 struct version_tuplet os_ver = {
 #ifdef OS_VER_MAJ
@@ -185,6 +193,7 @@ void kernel_main(unsigned long magic, unsigned long addr)
 
     bootdiag_on = cmdline_has("bootdiag");
     bootdiag(1, 1);   /* checkpoint 1: multiboot parsed, cmdline read */
+    BOOT_PROG("multiboot");
 
     /* The loader's memory-size fields are unreliable (a UEFI GRUB reports a
      * token ~7 MiB); the E820 map is authoritative, so use the top of RAM it
@@ -206,6 +215,7 @@ void kernel_main(unsigned long magic, unsigned long addr)
      * packs right behind the kernel) before pmm/vmm claim that memory. Must
      * run with paging still off. */
     initrd_relocate();
+    BOOT_PROG("boot RAM disk");
 
     for (int i = 0; i < e820counter; i++)
     {
@@ -243,9 +253,13 @@ void kernel_main(unsigned long magic, unsigned long addr)
           (unsigned) get_used_blocks(),
           (unsigned) ((get_max_blocks() - get_used_blocks()) * 4));
     bootdiag(2, 1);   /* checkpoint 2: physical MM up, paging still off */
+    BOOT_PROG("physical memory");
     vmm_init();
+    boot_progress_paging_on();
     bootdiag(3, 0);   /* checkpoint 3: paging enabled (map_kernel survived) */
+    BOOT_PROG("paging");
     kheap_init();
+    BOOT_PROG("kernel heap");
     if (cmdline_has("nofb"))
         bfb_addr = 0;               /* force VGA text mode */
     pat_init();                     /* WC memory type -> a fast framebuffer */
@@ -253,21 +267,34 @@ void kernel_main(unsigned long magic, unsigned long addr)
     if (!bfb_addr) vga_init();
     else vbe_init();
     bootdiag(5, 0);   /* checkpoint 5: framebuffer init returned (fbcon should now paint) */
+    BOOT_PROG("GDT");
     gdt_init();
+    BOOT_PROG("interrupts");
     idt_init(0x8);
+    BOOT_PROG("FPU");
     fpu_init();
+    BOOT_PROG("PIC");
     pic_init(0x20, 0x28);
+    BOOT_PROG("PIT timer");
     pit_init();
     pit_start_counter(1000, PIT_COUNTER_0, PIT_MODE_SQUAREWAVEGEN);
+    BOOT_PROG("VFS");
     vfs_init();
     floppy_detect();
+    BOOT_PROG("keyboard");
     keyboard_init();
+    BOOT_PROG("mouse");
     mouse_init();
     uart_rx_ir();
+    BOOT_PROG("sound");
     sound_init();
+    BOOT_PROG("syscalls");
     syscall_init();
+    BOOT_PROG("TSS");
     install_tss();
+    BOOT_PROG("RTC");
     rtc_init();
+    BOOT_PROG("PCI");
     pci_init();
 
     /* SMP bring-up for the boot CPU: parse ACPI/MADT, register the BSP,
@@ -279,10 +306,12 @@ void kernel_main(unsigned long magic, unsigned long addr)
     acpi_init();
     smp_register_bsp(acpi_bsp_apicid());
     apic_init();
+    BOOT_PROG("SMP");
     smp_init();
 
     klogf(LOG_INFO, "Initialization took: %llu\n", rdtsc() - tsc);
 
+    BOOT_PROG("scheduler");
     // sched_init() does not return: it iret's into the scheduler's first
     // process (main_proc), which brings up the interactive console.
     sched_init();

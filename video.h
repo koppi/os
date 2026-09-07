@@ -47,6 +47,18 @@ int fbcon_active(void);
  *         compositor suspends it; panic() resumes it. */
 void fbcon_suspend(void);
 void fbcon_resume(void);
+
+/** @brief Draw a green boot progress bar at the bottom of the screen.
+ *  @param cur,total Bar fills cur/total of the way across. @p msg is the name
+ *         of the subsystem currently initializing, drawn above the bar.
+ *  Works before and after @ref vbe_init: before it paints straight into the
+ *  boot framebuffer (paging off); after it draws into the shadow and
+ *  presents. Call every time a subsystem finishes (see main.c). */
+void boot_progress(uint32_t cur, uint32_t total, const char *msg);
+/** @brief Note that paging is now enabled. Between paging-on and @ref vbe_init
+ *         the framebuffer can be unmapped, so @ref boot_progress stops painting
+ *         to the physical fb for that brief window. */
+void boot_progress_paging_on(void);
 /** @brief Plot one pixel in the back buffer. */
 void draw_pixel(int x, int y, uint32_t color);
 /** @brief Fill an axis-aligned rectangle. */

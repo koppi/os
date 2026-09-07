@@ -119,6 +119,9 @@ static void fb_present(int x, int y, int w, int h) {
  * ------------------------------------------------------------------ */
 #define FBCON_CW 8
 #define FBCON_CH 16
+/* Screen rows reserved at the bottom for the boot progress bar + its
+ * message, so the kernel-log text console never scrolls into it. */
+#define FBCON_RESERVE_BOTTOM 32
 
 static int      fbcon_on;
 static uint32_t fbcon_cols, fbcon_rows, fbcon_cx, fbcon_cy;
@@ -188,7 +191,7 @@ void fbcon_resume(void)  { if (fb_base) fbcon_on = 1; }
 
 static void fbcon_init(void) {
     fbcon_cols = vbemem.xres / FBCON_CW;
-    fbcon_rows = vbemem.yres / FBCON_CH;
+    fbcon_rows = (vbemem.yres - FBCON_RESERVE_BOTTOM) / FBCON_CH;
     fbcon_cx = fbcon_cy = 0;
     for (uint32_t r = 0; r < fbcon_rows; r++)
         fbcon_fill_row(r);
@@ -367,7 +370,7 @@ void video_set_geometry(uint32_t w, uint32_t h) {
     memset(vbemem.buffer, 0, need);
 
     fbcon_cols = w / FBCON_CW;
-    fbcon_rows = h / FBCON_CH;
+    fbcon_rows = (h - FBCON_RESERVE_BOTTOM) / FBCON_CH;
     if (fbcon_cx >= fbcon_cols) fbcon_cx = fbcon_cols ? fbcon_cols - 1 : 0;
     if (fbcon_cy >= fbcon_rows) fbcon_cy = fbcon_rows ? fbcon_rows - 1 : 0;
 }
@@ -478,5 +481,95 @@ void draw_line(int x0, int y0, int x1, int y1, uint32_t color) {
         int e2 = 2 * error;
         if (e2 > -deltay) { error -= deltay; x0 += sx; }
         if (e2 < deltax)  { error += deltax; y0 += sy; }
+    }
+}
+
+/* ------------------------------------------------------------------ *
+ *  Boot-time progress bar                                             *
+ * ------------------------------------------------------------------ */
+/* Bar colours in the shadow's native 0x00RRGGBB format. */
+#define BOOTP_TRACK 0x00404040
+#define BOOTP_FILL  0x0033CC33
+#define BOOTP_TEXT  0x00FFFFFF
+
+static int bootp_paging;    /* paging is on (direct physical writes unsafe) */
+
+/** @brief Record that paging is now enabled. Until @ref vbe_init maps the
+ *         framebuffer the physical fb can be unmapped, so @ref boot_progress
+ *         stops painting to it for that brief window. */
+void boot_progress_paging_on(void) { bootp_paging = 1; }
+
+/** @brief Render @p text into the raw boot framebuffer (pre-vbe, 24/32-bpp).
+ *         Reuses the SSFN set-up used by fbcon, against the physical fb. */
+static void bootp_phys_string(const char *text, uint32_t y) {
+    uint32_t pitch = bfb_scanline ? bfb_scanline : bfb_width * 4;
+    ssfn_font      = &_binary_unifont_sfn_start;
+    ssfn_dst_ptr   = (uint8_t *)(uintptr_t) bfb_addr;
+    ssfn_dst_pitch = pitch;
+    ssfn_dst_w     = bfb_width;
+    ssfn_dst_h     = bfb_height;
+    ssfn_fg        = pack_color(BOOTP_TEXT);
+    ssfn_x         = 8;
+    ssfn_y         = y;
+    for (const char *p = text; *p; p++) {
+        if (ssfn_x + FBCON_CW <= bfb_width && ssfn_y + FBCON_CH <= bfb_height)
+            ssfn_putc((unsigned char) *p);
+        ssfn_x += FBCON_CW;
+    }
+}
+
+void boot_progress(uint32_t cur, uint32_t total, const char *msg) {
+    if (!bfb_addr)
+        return;
+
+    /* Post-vbe: draw into the shadow surface and present the strip. */
+    if (vbemem.buffer) {
+        const uint32_t bar_h = 9;
+        const uint32_t w    = vbemem.xres;
+        const uint32_t y    = vbemem.yres - bar_h;
+        if (y < FBCON_CH)
+            return;
+        uint32_t fill = (total > 0) ? (uint64_t) w * cur / total : 0;
+        if (fill > w) fill = w;
+
+        /* Clear one text row + the bar, then redraw. */
+        draw_rect(0, y - FBCON_CH, w, FBCON_CH + bar_h, 0x000000);
+        draw_rect(0, y, w, bar_h, BOOTP_TRACK);
+        if (fill)
+            draw_rect(0, y, fill, bar_h, BOOTP_FILL);
+        draw_string(8, y - FBCON_CH, msg, BOOTP_TEXT);
+        fb_present(0, y - FBCON_CH, w, FBCON_CH + bar_h);
+        return;
+    }
+
+    /* Pre-vbe: paint straight into the boot framebuffer (24/32-bpp) while
+     * paging is still off. Once paging is on and before vbe_init the fb may
+     * be unmapped, so draw nothing -- the bar freezes, then resumes under the
+     * shadow path above (fbcon_init clears the screen, so it repaints). */
+    if (!bootp_paging && bfb_bpp >= 24 && bfb_height >= FBCON_CH + 9) {
+        const uint8_t bytespp = bfb_bpp >= 32 ? 4 : 3;
+        const uint32_t pitch = bfb_scanline ? bfb_scanline : bfb_width * bytespp;
+        volatile uint8_t *fb = (volatile uint8_t *)(uintptr_t) bfb_addr;
+        const uint32_t bar_h = 9;
+        const uint32_t y0    = bfb_height - bar_h;
+        uint32_t fill = (total > 0) ? (uint64_t) bfb_width * cur / total : 0;
+        if (fill > bfb_width) fill = bfb_width;
+
+        /* Clear the message row + track; draw the green fill across the bar. */
+        for (uint32_t y = y0 - FBCON_CH; y < bfb_height; y++) {
+            for (uint32_t x = 0; x < bfb_width; x++) {
+                uint32_t color =
+                    (y >= y0 && x < fill) ? BOOTP_FILL : 0x000000;
+                volatile uint8_t *p = fb + y * pitch + x * bytespp;
+                if (bytespp == 4)
+                    *(volatile uint32_t *)p = color;
+                else {
+                    p[0] = color & 0xFF;
+                    p[1] = (color >> 8) & 0xFF;
+                    p[2] = (color >> 16) & 0xFF;
+                }
+            }
+        }
+        bootp_phys_string(msg, y0 - FBCON_CH);
     }
 }
