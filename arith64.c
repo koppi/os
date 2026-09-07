@@ -190,6 +190,14 @@ arith64_u64 __divmoddi4(arith64_u64 a, arith64_u64 b, arith64_u64 *c)
     return (a << 1) | (wrap & 1);               // return the quotient
 }
 
+// GCC 15 emits __udivmoddi4 (combined unsigned 64-bit div + mod) at -O3.
+// Same operation as __divmoddi4 above: quotient in the return value and the
+// remainder stored to *rem when it is non-NULL.
+arith64_u64 __udivmoddi4(arith64_u64 a, arith64_u64 b, arith64_u64 *rem)
+{
+    return __divmoddi4(a, b, rem);
+}
+
 // Return the quotient of the signed division of a and b.
 arith64_s64 __divdi3(arith64_s64 a, arith64_s64 b)
 {

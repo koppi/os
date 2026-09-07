@@ -12,7 +12,7 @@
 // File : hxcmod.c
 // Contains: a tiny mod player
 //
-// Written by: Jean François DEL NERO
+// Written by: Jean Franï¿½ois DEL NERO
 //
 // You are free to do what you want with this code.
 // A credit is always appreciated if you include it into your prod :)
@@ -389,6 +389,7 @@ static modtype modlist[]=
 
 ///////////////////////////////////////////////////////////////////////////////////
 
+static void memcopy( void * dest, void *source, unsigned long size ) __attribute__((noinline));
 static void memcopy( void * dest, void *source, unsigned long size )
 {
 	unsigned long i;
@@ -1419,7 +1420,7 @@ int hxcmod_load( modcontext * modctx, void * mod_data, int mod_data_size )
 #ifdef FULL_STATE
 			memclear(&(modctx->effects_event_counts),0,sizeof(modctx->effects_event_counts));
 #endif
-			memcopy(&(modctx->song.title),modmemory,1084);
+			memcopy(&(modctx->song),modmemory,1084);
 
 			i = 0;
 			modctx->number_of_channels = 0;

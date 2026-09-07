@@ -22,7 +22,7 @@ KERNEL = kernel.elf
 
 ASFLAGS += -m32 -I.
 
-CFLAGS += -Og
+CFLAGS += -O3
 CFLAGS += -DDEBUG
 CFLAGS += -Werror
 CFLAGS += -Wall -Wextra -Wunused -Wno-pointer-to-int-cast -pedantic -pedantic-errors

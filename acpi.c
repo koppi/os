@@ -148,7 +148,8 @@ static const rsdp_t *find_rsdp(void) {
             return r;
 
     /* EBDA: paragraph pointer at 0x40E, then scan the first 1 KiB. */
-    uint32_t ebda_seg = *(uint16_t *) acpi_map(0x40E, 2);
+    uint16_t ebda_seg;
+    __asm__("movw (%1), %0" : "=r" (ebda_seg) : "r" (acpi_map(0x40E, 2)));
     uint32_t ebda = (ebda_seg << 4) & 0xFFFFF;
     for (uint32_t addr = ebda; addr < ebda + 1024; addr += 16)
         if ((r = check_rsdp(addr)))

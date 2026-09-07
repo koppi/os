@@ -14,7 +14,7 @@ LUACFG = -DLUA_USE_C89 \
          '-Dlua_writeline()=__lua_out("\n",1)' \
          '-Dlua_writestringerror(s,p)=__lua_errf((s),(p))'
 
-CFLAGS = -m32 -std=gnu23 -Os -pipe -ffreestanding -fno-builtin -nostdlib \
+CFLAGS = -m32 -std=gnu23 -O3 -pipe -ffreestanding -fno-builtin -nostdlib \
          -fno-stack-protector -fno-pic -fno-pie -fno-common -fno-tree-loop-distribute-patterns \
          -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
          -I shim -I src -w $(LUACFG)
@@ -25,7 +25,7 @@ LUASRC  = $(filter-out src/linit.c src/liolib.c src/luac.c src/onelua.c, \
                        $(wildcard src/l*.c))
 LUAOBJ  = $(LUASRC:.c=.o) src/frontend.o
 SHIMOBJ = shim/printf.o shim/string.o shim/stdlib.o shim/stdio.o shim/time.o \
-          shim/libm.o shim/libm_s.o shim/port_asm.o shim/port.o shim/arith64.o
+          shim/libm.o shim/libm_s.o shim/port_asm.o shim/arith64.o
 OBJ     = $(LUAOBJ) openlibs.o $(SHIMOBJ)
 
 # 64-bit soft arithmetic: build our own copy - the kernel's arith64.o may not
@@ -49,7 +49,7 @@ shim/port_asm.o: shim/port_asm.S
 	@$(CC) -m32 -c $< -o $@
 
 shim/arith64.o: ../../arith64.c
-	@$(CC) -m32 -Os -ffreestanding -fno-builtin -nostdlib -fno-pic -fno-pie \
+	@$(CC) -m32 -O3 -ffreestanding -fno-builtin -nostdlib -fno-pic -fno-pie \
 	       -fno-stack-protector -w -c $< -o $@
 
 clean:
