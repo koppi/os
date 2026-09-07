@@ -19,7 +19,7 @@
 #include <pcspk.h>
 #include <commands.h>
 #include <bmp.h>
-#include <sound.h>
+#include <sb16.h>
 #include <rand.h>
 
 short mouse_icon[] =  {

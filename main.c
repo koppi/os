@@ -25,7 +25,7 @@
 #include <rtc.h>
 #include <vfs.h>
 #include <fpu.h>
-#include <sound.h>
+#include <sb16.h>
 #include <pci.h>
 #include <printf.h>
 #include <commands.h>

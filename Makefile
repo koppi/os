@@ -86,7 +86,7 @@ QEMUFLAGS += -audiodev id=pa,driver=pa -machine pcspk-audiodev=pa
 QEMUFLAGS += -device sb16,audiodev=pa
 QEMUFLAGS += -device ac97,audiodev=pa
 # Intel HD Audio (Azalia): the audio path on a real laptop. When present the
-# MOD player routes through it instead of the Sound Blaster (see sound.c).
+# MOD player routes through it instead of the Sound Blaster (see sb16.c).
 QEMUFLAGS += -device intel-hda -device hda-output,audiodev=pa
 #QEMUFLAGS += -d in_asm,cpu,guest_errors,exec
 QEMUFLAGS += -rtc base=localtime,clock=vm

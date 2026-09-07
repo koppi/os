@@ -1,9 +1,9 @@
 /**
- * @file sound.c
+ * @file sb16.c
  * @brief Sound Blaster 16 driver plus the glue that feeds the hxcmod MOD
  *        player's output to the card over auto-init DMA.
  */
-#include <sound.h>
+#include <sb16.h>
 #include <io.h>
 #include <lib/string.h>
 #include <idt.h>
@@ -78,7 +78,7 @@ static uint8_t hda_active = 0;
 static uint8_t sb16_ok = 0;
 
 /* Master playback level, 0..SOUND_VOL_MAX. The volume keys (keyboard.c) step
- * it. sound.c drives the SB16 mixer inline (cheap port writes, IRQ-safe) and
+ * it. sb16.c drives the SB16 mixer inline (cheap port writes, IRQ-safe) and
  * raises sound_vol_dirty so the HD Audio thread re-applies the codec amp — a
  * CORB/RIRB verb must not be issued from the keyboard IRQ. */
 #define SOUND_VOL_MAX 16

@@ -1,5 +1,5 @@
 /**
- * @file sound.h
+ * @file sb16.h
  * @brief Sound Blaster 16 bring-up and the MOD-music playback glue, plus the
  *        musical-note / waveform constants used by the synth.
  */

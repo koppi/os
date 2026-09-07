@@ -44,7 +44,7 @@
 #include <usb.h>
 #include <e1000.h>
 #include <net.h>
-#include <sound.h>
+#include <sb16.h>
 #include <hda.h>
 #include <virtio_gpu.h>
 

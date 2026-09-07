@@ -304,7 +304,7 @@ for anything more (there is no TLS or resolver cache).
 | Crypto primitives (SHA-2, bignum, Curve25519, Ed25519, AES-128, CSPRNG) | [`sha2.c`](sha2.c), [`bignum256.c`](bignum256.c), [`curve25519.c`](curve25519.c), [`ed25519.c`](ed25519.c), [`aes128.c`](aes128.c), [`csprng.c`](csprng.c) |
 | QEMU / Bochs standard VGA (DISPI mode control) | [`pci_vga.c`](pci_vga.c) |
 | virtio-gpu 2D scanout + live window-resize (`-vga virtio`) | [`virtio_gpu.c`](virtio_gpu.c) |
-| AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sound.c`](sound.c) |
+| AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sb16.c`](sb16.c) |
 | PC speaker | [`pcspk.c`](pcspk.c) |
 | VGA / VBE framebuffer | [`vga.c`](vga.c), [`video.c`](video.c), [`graphics.c`](graphics.c) |
 | PIT timer (1 kHz tick) | [`pit.c`](pit.c) |
@@ -321,12 +321,12 @@ for anything more (there is no TLS or resolver cache).
 * [`hxcmod.c`](hxcmod.c) Amiga MOD player; sample module in
   [`mods/01.mod`](mods/01.mod).
 * Audio output goes through whichever card is present: the AC97 codec
-  ([`pci_ac97.c`](pci_ac97.c)), a Sound Blaster 16 via [`sound.c`](sound.c),
+  ([`pci_ac97.c`](pci_ac97.c)), a Sound Blaster 16 via [`sb16.c`](sb16.c),
   or — on the laptops — Intel HD Audio ([`hda.c`](hda.c)), with MOD playback
   routed through the Azalia codec when one is present. The PS/2 keyboard's
   **volume-up / volume-down / mute** keys drive the master level: they step
   the SB16 mixer inline from the IRQ and flag the HD Audio thread to re-apply
-  the codec's output amp ([`sound.c`](sound.c), [`hda.c`](hda.c),
+  the codec's output amp ([`sb16.c`](sb16.c), [`hda.c`](hda.c),
   [`keyboard.c`](keyboard.c)).
 
 ### Support libraries (freestanding, in-tree)

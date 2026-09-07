@@ -12,7 +12,7 @@
 #include <idt.h>
 #include <pit.h>
 #include <printf.h>
-#include <sound.h>
+#include <sb16.h>
 
 enum KBD_PORTS {
 	KBD_CHECK = 0x64,   /* status (read) / command (write) */
