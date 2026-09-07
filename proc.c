@@ -344,7 +344,7 @@ void remove_proc(int pid) {
 /**
  * Creates a kernel process from a function
  */
-int start_kernel_proc(char *name, void *addr) {
+int start_kernel_proc(char *name, void (*thread)(void)) {
     /* Each kernel process gets its own stack window above KERNEL_SPACE_END;
      * bump the base so a second (third, ...) kernel thread does not land on
      * the previous one's stack. */
@@ -365,7 +365,7 @@ int start_kernel_proc(char *name, void *addr) {
     }
     proc->thread_list->main = 1;
     proc->thread_list->parent = (void *) proc;
-    proc->thread_list->eip = (uint32_t) addr;
+    proc->thread_list->eip = (uint32_t) (uintptr_t) thread;
 
     uint32_t stack = kproc_stack_base;
     kproc_stack_base += 0x4000;   /* user page + kernel page + guard pages */

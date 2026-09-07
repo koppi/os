@@ -104,7 +104,7 @@ static void irq_clear_mask(size_t vec) {
  * @brief Write handler @p irq into IDT slot @p i and unmask the PIC line.
  *        See @ref idt.h for the argument meanings.
  */
-void install_ir(uint32_t i, uint16_t flags, uint16_t sel, void *irq) {
+void install_ir(uint32_t i, uint16_t flags, uint16_t sel, irq_handler_t irq) {
     uint32_t ir_addr = (uint32_t) irq;
 
     idt[i].base_low = (uint16_t) ir_addr & 0xFFFF;

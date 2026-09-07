@@ -46,7 +46,8 @@ void default_ir_handler();
  * @param sel   Code selector.
  * @param irq   Handler entry point.
  */
-void install_ir(uint32_t i, uint16_t flags, uint16_t sel, void *irq);
+typedef void (*irq_handler_t)(void);
+void install_ir(uint32_t i, uint16_t flags, uint16_t sel, irq_handler_t irq);
 
 /** @brief Load @p ptr with @c lidt (asm). */
 extern void idt_set(struct idt_ptr *ptr);

@@ -241,5 +241,5 @@ void vga_init(void) {
 			vga_putentry_int(' ', x, y);
 	}
 	vga_enable_cursor();
-	klogf(LOG_INFO, "\e[91mV\e[92mG\e[94mA\e[0m: initialized.\n");
+	klogf(LOG_INFO, "\033[91mV\033[92mG\033[94mA\033[0m: initialized.\n");
 }

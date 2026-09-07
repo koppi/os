@@ -22,7 +22,7 @@ static inline void diag_to_screen(uint32_t cs) {
 }
 
 /** Entry point jumped to in userspace to unwind a faulted process. */
-void (*return_error)() = (void *) RETURN_ADDR;
+void (*return_error)(void) = (void (*)(void)) RETURN_ADDR;
 
 /**
  * @brief Return non-zero if the current DS selector belongs to ring 3.

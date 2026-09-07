@@ -29,4 +29,4 @@ do { \
 #endif
 
 /** @brief Marker for unreached / unfinished code paths; fails an assert. */
-inline void notImplemented() { assert(0); };
+inline void notImplemented() { assert(0); }

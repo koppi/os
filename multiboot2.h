@@ -56,14 +56,14 @@ typedef struct {
 
 /** Multiboot2 cmdline structure */
 typedef struct {
-	char string[0];
+	char string[1];
 } __attribute__((packed)) multiboot2_cmdline_t;
 
 /** Multiboot2 modules structure */
 typedef struct {
 	mb2addr_t start;
 	mb2addr_t end;
-	char string[];
+	char string[1];
 } __attribute__((packed)) multiboot2_module_t;
 
 typedef struct multiboot_tag_basic_meminfo {
@@ -97,7 +97,7 @@ typedef struct {
 /** Multiboot2 indexed color information structure */
 typedef struct {
 	uint32_t colors;
-	multiboot2_colorinfo_palette_t palette[];
+	multiboot2_colorinfo_palette_t palette[1];
 } __attribute__((packed)) multiboot2_colorinfo_indexed_t;
 
 /** Multiboot2 RGB color information structure */

@@ -266,7 +266,7 @@ void __attribute__((noreturn)) sched_run_thread(thread_t *t) {
 }
 
 void sched_init() {
-    memcpy((void *) RETURN_ADDR, &end_process_return, PAGE_SIZE);
+    memcpy((void *) RETURN_ADDR, (void *) (uintptr_t) end_process_return, PAGE_SIZE);
 
     process_t *proc = (process_t *) kmalloc(sizeof(process_t));
     strcpy(proc->name, "console");

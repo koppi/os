@@ -92,8 +92,10 @@ uint8_t floppy_read_status() {
 void floppy_send_cmd(uint8_t cmd) {
     int i;
     for(i = 0; i < 500; i++)
-        if(floppy_read_status() & FLOPPY_MSR_MASK_DATAREG)
-            return outportb(FLOPPY_FIFO, cmd);
+        if(floppy_read_status() & FLOPPY_MSR_MASK_DATAREG) {
+            outportb(FLOPPY_FIFO, cmd);
+            return;
+        }
 }
 
 uint8_t floppy_read_data() {

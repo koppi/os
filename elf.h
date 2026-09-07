@@ -80,7 +80,7 @@ typedef struct elf_header {
     uint16_t index_sect_header_names;  // Index of section header table entry containing
 			               // section names.
 } __attribute__((__packed__)) elf_header_t;
-_Static_assert(sizeof(struct elf_header) == 52);
+_Static_assert(sizeof(struct elf_header) == 52, "elf_header must be 52 bytes");
 
 // Directly maps to ELF section headers.
 typedef struct elf_section_header {
@@ -96,7 +96,7 @@ typedef struct elf_section_header {
     uint32_t s_entsize;                // Size of each entry (bytes) if contains fixed size
 			               // entries, otherwise 0.
 } __attribute__((__packed__)) elf_section_header_t;
-_Static_assert(sizeof(struct elf_section_header) == 40);
+_Static_assert(sizeof(struct elf_section_header) == 40, "elf_section_header must be 40 bytes");
 
 // Directly maps to ELF 'program' headers.
 typedef struct elf_program_header {
@@ -122,7 +122,7 @@ typedef struct elf_program_header {
     uint32_t align;      // 0, 1 = no alignment. Otherwise is a power of 2.
 			 // p_vaddr = p_offset % align.
 } __attribute__((__packed__)) elf_program_header_t;
-_Static_assert(sizeof(struct elf_program_header) == 32);
+_Static_assert(sizeof(struct elf_program_header) == 32, "elf_program_header must be 32 bytes");
 
 /** @brief Sanity-check an ELF header (magic, 32-bit little-endian x86). */
 int elf_validate(elf_header_t *eh);

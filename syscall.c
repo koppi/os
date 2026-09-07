@@ -132,29 +132,29 @@ static uint32_t sys_spawn(const char *path, const char *args) {
 }
 
 /** Call number → implementation. NULL entries are unimplemented. */
-static void *syscalls[] = {
-    &printf,                    // printf   0
-    &gets,                      // scanf    1
-    NULL,                       // clear    2
-    &start_thread,              // fork     3
-    &stop_thread,               // exit     4
-    &end_process,               // return n 5
-    &vfs_file_open_user,        // fopen    6
-    &vfs_file_close_user,       // fclose   7
-    NULL,                       // PWD      8
-    &umalloc_sys,               // malloc   9
-    &ufree_sys,                 // free     10
-    &urealloc_sys,              // realloc  11
-    &sys_write,                 // write    12
-    &sys_fread,                 // fread    13
-    &sys_time,                  // time     14
-    &sys_clock,                 // clock    15
-    &sys_spit,                  // spit     16
-    &keyboard_getkey,           // getkey   17  (blocking, unechoed keystroke)
-    &sys_run,                   // run      18  (console_exec on behalf of ring 3)
-    &sys_getcwd,                // getcwd   19
-    &sys_listdir,               // listdir  20
-    &sys_spawn                  // spawn    21  (load+run a program for ring 3)
+static uintptr_t syscalls[] = {
+    (uintptr_t) printf,              // printf   0
+    (uintptr_t) gets,                // scanf    1
+    (uintptr_t) NULL,                // clear    2
+    (uintptr_t) start_thread,        // fork     3
+    (uintptr_t) stop_thread,         // exit     4
+    (uintptr_t) end_process,         // return n 5
+    (uintptr_t) vfs_file_open_user,  // fopen    6
+    (uintptr_t) vfs_file_close_user, // fclose   7
+    (uintptr_t) NULL,                // PWD      8
+    (uintptr_t) umalloc_sys,         // malloc   9
+    (uintptr_t) ufree_sys,           // free     10
+    (uintptr_t) urealloc_sys,        // realloc  11
+    (uintptr_t) sys_write,           // write    12
+    (uintptr_t) sys_fread,           // fread    13
+    (uintptr_t) sys_time,            // time     14
+    (uintptr_t) sys_clock,           // clock    15
+    (uintptr_t) sys_spit,            // spit     16
+    (uintptr_t) keyboard_getkey,     // getkey   17  (blocking, unechoed keystroke)
+    (uintptr_t) sys_run,             // run      18  (console_exec on behalf of ring 3)
+    (uintptr_t) sys_getcwd,          // getcwd   19
+    (uintptr_t) sys_listdir,         // listdir  20
+    (uintptr_t) sys_spawn            // spawn    21  (load+run a program for ring 3)
 };
 
 /**
@@ -187,6 +187,6 @@ void syscall_disp(struct regs *re) {
         re->eax = -1;
         return;
     }
-    syscall_call_func func = syscalls[re->eax];
+    syscall_call_func func = (syscall_call_func) syscalls[re->eax];
     re->eax = func(re->ebx, re->ecx, re->edx, re->esi, re->edi);
 }

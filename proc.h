@@ -93,6 +93,6 @@ void end_proc(int ret);
 /** @brief Free a stopped process's address space and control block. */
 void remove_proc(int pid);
 /** @brief Create a kernel-mode process running function @p addr. */
-int start_kernel_proc(char *name, void *addr);
+int start_kernel_proc(char *name, void (*thread)(void));
 /** @return The state of process @p id (@c PROC_STOPPED if unknown). */
 int proc_state(int id);
