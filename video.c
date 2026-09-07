@@ -13,9 +13,9 @@
  */
 #include <video.h>
 
-#include <stdlib.h>
+
 #include <graphics.h>
-#include <memory.h>
+
 #include <paging.h>
 #include <lib/string.h>
 #include <bfb.h>

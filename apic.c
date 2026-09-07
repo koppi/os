@@ -13,11 +13,11 @@
 #include <apic.h>
 #include <acpi.h>
 #include <paging.h>
-#include <mm.h>
-#include <io.h>
+
+
 #include <pit.h>
 #include <percpu.h>
-#include <lib/string.h>
+
 #include <log.h>
 
 /* --- LAPIC MMIO register offsets (Intel SDM Vol 3A §10.4). --- */

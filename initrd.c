@@ -24,7 +24,7 @@
 #include <lib/string.h>
 #include <log.h>
 #include <memmap.h>
-#include <mm.h>
+
 #include <paging.h>
 
 #define SECTOR_SIZE 512

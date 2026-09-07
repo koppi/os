@@ -11,7 +11,7 @@
 #include <idt.h>
 #include <keyboard.h>
 #include <lib/string.h>
-#include <log.h>
+
 
 static uint8_t uart_initialized = 0;
 static const uint16_t UART_PORT = 0x3f8;

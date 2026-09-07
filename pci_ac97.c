@@ -6,10 +6,10 @@
 #include <pci.h>
 #include <log.h>
 #include <io.h>
-#include <stddef.h>
-#include <stdint.h>
+
+
 #include <kheap.h>
-#include <proc.h>
+
 #include <idt.h>
 
 #define AC97_VENDOR_INTEL  0x8086

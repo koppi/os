@@ -11,7 +11,7 @@
 #include <pit.h>
 #include <printf.h>
 #include <fpu.h>
-#include <percpu.h>
+
 #include <spinlock.h>
 
 /** asm helper (thread_asm) that returns twice, once in each thread. */

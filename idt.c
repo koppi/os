@@ -4,10 +4,10 @@
  */
 #include <idt.h>
 #include <exception.h>
-#include <apic.h>
+
 #include <smp_asm.h>
 #include <lib/string.h> // for memset
-#include <log.h>
+
 #include <io.h>
 
 struct idt_ptr idtr;                    /**< @c lidt operand. */

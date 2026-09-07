@@ -19,7 +19,7 @@
 #include <pci.h>
 #include <device.h>
 #include <fat.h>
-#include <io.h>
+
 #include <paging.h>
 #include <pit.h>
 #include <cmdline.h>

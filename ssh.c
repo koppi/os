@@ -27,7 +27,7 @@
 #include <printf.h>
 #include <kheap.h>
 #include <spinlock.h>
-#include <io.h>
+
 #include <log.h>
 #include <csprng.h>
 #include <sha2.h>

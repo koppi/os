@@ -7,7 +7,7 @@
  * a given CPU lives at GDT slot 5 + @c index, and @c set_esp0 writes the
  * current CPU's ESP0.
  */
-#include <io.h>
+
 #include <tss.h>
 #include <lib/string.h>
 #include <gdt.h>

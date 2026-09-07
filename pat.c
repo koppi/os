@@ -20,7 +20,7 @@
  */
 #include <pat.h>
 #include <cpu.h>
-#include <log.h>
+
 
 #define IA32_PAT 0x277
 

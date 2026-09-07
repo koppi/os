@@ -1,6 +1,6 @@
 #include <types.h>
 #include <stdlib.h>
-#include <lib/string.h>
+
 
 static int compare_wrapper(const void* a, const void* b, void* arg)
 {

@@ -10,7 +10,7 @@
 #include <acpi.h>
 #include <paging.h>
 #include <mm.h>
-#include <lib/string.h>
+
 #include <log.h>
 
 /* --- ACPI table signatures (RSDT entries are 4-byte physical addresses). --- */

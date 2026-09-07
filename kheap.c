@@ -7,7 +7,7 @@
  */
 #include <kheap.h>
 #include <mm.h>
-#include <paging.h>
+
 #include <printf.h>
 #include <spinlock.h>
 

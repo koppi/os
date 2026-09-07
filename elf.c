@@ -4,8 +4,8 @@
  *        the header and copies each PT_LOAD segment to its virtual address in
  *        the target process's page directory.
  */
-#include <proc.h>
-#include <memory.h>
+
+
 #include <vfs.h>
 #include <lib/string.h>
 #include <elf.h>

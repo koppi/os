@@ -8,7 +8,7 @@
 #include <initrd.h>
 #include <cmdline.h>
 #include <lib/string.h>
-#include <stddef.h>
+
 
 /** Extract command name from the multiboot module command line.
  *

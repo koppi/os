@@ -9,14 +9,14 @@
 #include <mouse.h>
 #include <kheap.h>
 #include <rtc.h>
-#include <pit.h>
+
 
 #include <microui.h>
 #include <renderer.h>
 #include <printf.h>
 #include <lib/string.h>
 #include <keyboard.h>
-#include <pcspk.h>
+
 #include <commands.h>
 #include <bmp.h>
 #include <sb16.h>

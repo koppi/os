@@ -13,7 +13,7 @@
 #include <pci.h>
 #include <device.h>
 #include <fat.h>
-#include <io.h>
+
 #include <paging.h>
 #include <lib/string.h>
 #include <cmdline.h>

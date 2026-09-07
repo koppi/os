@@ -17,7 +17,7 @@ CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
 
 #include <assert.h>
-#include <stddef.h>
+
 
 #include "rbtree.h"
 

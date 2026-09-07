@@ -33,14 +33,14 @@
 #include <sha2.h>
 #include <io.h>
 #include <acpi.h>
-#include <pci_acpi.h>
+
 #include <net.h>
 #include <tcp.h>
 #include <dns.h>
 #include <ver.h>
 #include <log.h>
 #include <commands.h>
-#include <coreutils.h>
+
 
 /* ------------------------------------------------------------------ output -- */
 

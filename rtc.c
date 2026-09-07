@@ -4,7 +4,7 @@
  *        (handling BCD vs binary and 12/24-hour mode) and derive the weekday.
  */
 #include <rtc.h>
-#include <lib/string.h>
+
 #include <kheap.h>
 #include <io.h>
 #include <printf.h>

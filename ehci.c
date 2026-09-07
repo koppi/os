@@ -20,7 +20,7 @@
 #include <usb.h>
 #include <usb_hid.h>
 #include <keyboard.h>
-#include <io.h>
+
 #include <mm.h>
 #include <paging.h>
 #include <pit.h>

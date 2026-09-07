@@ -17,7 +17,7 @@
 #include <idt.h>
 #include <sched.h>
 #include <spinlock.h>
-#include <io.h>
+
 #include <fpu.h>
 #include <mm.h>
 #include <kheap.h>

@@ -9,8 +9,8 @@
  * @ref tlb_shootdown. The "current" page directory is per-CPU (each CPU's
  * @ref cpu_t::current_dir), set by @ref change_page_directory alongside CR3.
  */
-#include <io.h>
-#include <memory.h>
+
+
 #include <lib/string.h>
 #include <printf.h>
 #include <proc.h>

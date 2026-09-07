@@ -20,7 +20,7 @@
 ** IN THE SOFTWARE.
 */
 
-#include <stdio.h>
+
 #include <stdlib.h>
 #include <io.h>
 #include <lib/string.h>

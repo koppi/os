@@ -18,7 +18,7 @@
 #include <cmdline.h>
 #include <paging.h>
 #include <kheap.h>
-#include <memory.h>
+
 #include <lib/string.h>
 #include <video.h>
 

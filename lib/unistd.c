@@ -1,8 +1,8 @@
-#include <lib/string.h>
+
 #include <lib/unistd.h>
 #include <lib/system_calls.h>
-#include <proc.h>
-#include <sched.h>
+
+
 
 /* Creates a child thread */
 pid_t fork() {

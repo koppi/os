@@ -7,7 +7,7 @@
  * @ref keyboard_get_lastkey / @ref keyboard_invalidate_lastkey. The ring avoids
  * losing keys whose make+break pair arrives between two polls.
  */
-#include <keyboard.h>
+
 #include <io.h>
 #include <idt.h>
 #include <pit.h>

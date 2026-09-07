@@ -5,12 +5,12 @@
  */
 #include <types.h>
 #include <stddef.h>
-#include <multiboot.h>
+
 #include <multiboot2.h>
 #include <align.h>
 
 #include <log.h>
-#include <printf.h>
+
 
 #include <bfb.h>
 #include <initrd.h>

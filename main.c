@@ -27,8 +27,8 @@
 #include <fpu.h>
 #include <sb16.h>
 #include <pci.h>
-#include <printf.h>
-#include <commands.h>
+
+
 #include <cmdline.h>
 #include <pat.h>
 

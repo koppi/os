@@ -4,7 +4,7 @@
  */
 #include <cmdline.h>
 #include <types.h>
-#include <stddef.h>
+
 #include <lib/string.h>
 
 char kernel_cmdline[256];

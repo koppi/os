@@ -12,7 +12,7 @@
 
 #include <io.h>
 #include <log.h>
-#include <pit.h>
+
 #include <printf.h>
 #include <lib/string.h>
 
