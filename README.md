@@ -320,6 +320,14 @@ for anything more (there is no TLS or resolver cache).
 ### Audio
 * [`hxcmod.c`](hxcmod.c) Amiga MOD player; sample module in
   [`mods/01.mod`](mods/01.mod).
+* Audio output goes through whichever card is present: the AC97 codec
+  ([`pci_ac97.c`](pci_ac97.c)), a Sound Blaster 16 via [`sound.c`](sound.c),
+  or — on the laptops — Intel HD Audio ([`hda.c`](hda.c)), with MOD playback
+  routed through the Azalia codec when one is present. The PS/2 keyboard's
+  **volume-up / volume-down / mute** keys drive the master level: they step
+  the SB16 mixer inline from the IRQ and flag the HD Audio thread to re-apply
+  the codec's output amp ([`sound.c`](sound.c), [`hda.c`](hda.c),
+  [`keyboard.c`](keyboard.c)).
 
 ### Support libraries (freestanding, in-tree)
 * [`printf.c`](printf.c) (eyalroz/printf), [`ctype.c`](ctype.c),
@@ -706,6 +714,16 @@ interface AHCI and IDE use. A 64-bit BAR a UEFI firmware parked above 4 GiB is
 re-homed into the low PCI hole, same as [`xhci.c`](xhci.c). A namespace with a
 non-512-byte LBA format is detected and left unmounted rather than
 mis-mounted.
+
+If a real laptop comes up **black** — a `T470s` has no serial port and the
+screen stays dark until `fbcon_init()` — add **`bootdiag`** to the GRUB line
+(there is a "bootdiag" menu entry). It turns the PC speaker into an
+early-boot progress beacon: at checkpoint N of the pre-console bring-up
+(1 parsed multiboot, 2 physical MM up, 3 paging on, 4 PAT done, 5
+framebuffer up) the kernel beeps N times and, while paging is still off,
+floods the framebuffer with a per-checkpoint colour. The last beep count /
+colour you get is the last checkpoint the kernel reached — the next step is
+the one that hung. See [`main.c`](main.c).
 
 Escape hatches on the GRUB line (press `e`): `nonvme` `noahci` `noxhci`
 `nousb` `nonet` `nosmp` `nofb` `nosyn`. The "safe" menu entry sets
