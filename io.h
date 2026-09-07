@@ -71,7 +71,7 @@ static inline void outportl(uint32_t port, uint32_t val) {
 }
 
 /** @brief Execute a single @c hlt (wait for the next interrupt). */
-void halt();
+void halt(void);
 
 /**
  * @brief Shut the machine down through QEMU's isa-debug-exit device, then
@@ -81,10 +81,10 @@ void halt();
 void exit_qemu(const int status_code);
 
 /** @brief Set the interrupt flag (`sti`) and log it. */
-void enable_int();
+void enable_int(void);
 
 /** @brief Clear the interrupt flag (`cli`) and log it. */
-void disable_int();
+void disable_int(void);
 
 /**
  * @brief Busy-wait for roughly @p s PIT ticks, halting between checks.

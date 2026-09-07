@@ -14,7 +14,7 @@ LUACFG = -DLUA_USE_C89 \
          '-Dlua_writeline()=__lua_out("\n",1)' \
          '-Dlua_writestringerror(s,p)=__lua_errf((s),(p))'
 
-CFLAGS = -m32 -std=gnu11 -Os -pipe -ffreestanding -fno-builtin -nostdlib \
+CFLAGS = -m32 -std=gnu23 -Os -pipe -ffreestanding -fno-builtin -nostdlib \
          -fno-stack-protector -fno-pic -fno-pie -fno-common -fno-tree-loop-distribute-patterns \
          -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
          -I shim -I src -w $(LUACFG)

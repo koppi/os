@@ -10,6 +10,9 @@
 /** Max devices addressable by id. */
 #define MAX_DEVICES 26
 
+/** Any block device (see device.h); forward-declared to avoid a header cycle. */
+struct device;
+
 /** An open file (or directory) handle. */
 typedef struct {
     char name[32];              /**< Leaf name. */
@@ -23,7 +26,7 @@ typedef struct {
 
 /** Per-filesystem operation vector (FAT fills this in). */
 typedef struct {
-    void (*mount) ();                    /**< Mount the volume. */
+    void (*mount) (struct device *dev);  /**< Mount the volume. */
     void (*read) (file *f, char *str);   /**< Read one unit into @c str. */
     void (*write) (file *f, char *str);  /**< Write @c str. */
     void (*close) (file *f);             /**< Close @c f. */

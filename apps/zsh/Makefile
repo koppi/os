@@ -6,7 +6,7 @@
 CC = gcc
 LD = ld
 
-CFLAGS  = -m32 -std=gnu11 -Os -pipe -ffreestanding -fno-builtin -nostdlib \
+CFLAGS  = -m32 -std=gnu23 -Os -pipe -ffreestanding -fno-builtin -nostdlib \
           -fno-pic -fno-pie -fno-stack-protector -fno-common \
           -fno-tree-loop-distribute-patterns \
           -Wall -Wextra -Werror -Wno-pointer-to-int-cast

@@ -26,7 +26,7 @@ CFLAGS += -Og
 CFLAGS += -DDEBUG
 CFLAGS += -Werror
 CFLAGS += -Wall -Wextra -Wunused -Wno-pointer-to-int-cast -pedantic -pedantic-errors
-CFLAGS += -m32 -std=gnu11 -pipe -fno-stack-protector
+CFLAGS += -m32 -std=gnu23 -pipe -fno-stack-protector
 CFLAGS += -finline-functions -Wno-missing-field-initializers
 CFLAGS += -fno-omit-frame-pointer -ffreestanding -fno-builtin
 CFLAGS += -nodefaultlibs

@@ -4,7 +4,7 @@ LD=ld
 LDFLAGS += -melf_i386 -T fault.lds -Map fault.map
 
 all:
-	@$(CC) -Wall -g -Wextra -Werror -fno-builtin -nodefaultlibs -nostartfiles -nostdlib -fno-pic -fno-pie -m32 -I ../../include/lib -c main.c
+	@$(CC) -Wall -g -Wextra -Werror -fno-builtin -nodefaultlibs -nostartfiles -nostdlib -fno-pic -fno-pie -m32 -std=gnu23 -I ../../include/lib -c main.c
 	@$(LD) $(LDFLAGS) -o fault main.o ../../lib/stdio.o ../../lib/string.o ../../lib/system_calls.o ../../lib/stdlib.o
 
 clean:
