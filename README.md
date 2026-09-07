@@ -567,7 +567,7 @@ hda.sh floppy.sh   scripts to (re)build the FAT images (initrd / hd / floppy)
 ### Prerequisites (Debian/Ubuntu)
 
 ```bash
-sudo apt -y install grub-common xorriso mtools nasm gcc-multilib qemu-system-x86 grub-pc-bin
+sudo apt -y install grub-common xorriso mtools gcc-multilib qemu-system-x86 grub-pc-bin
 ```
 
 ### Build

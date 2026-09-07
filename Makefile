@@ -12,10 +12,10 @@ CC=gcc
 LD=ld
 OBJCOPY=objcopy
 
-SRCS = $(wildcard *.[cS] *.asm) $(wildcard lib/*.c)
-# ap_boot.asm is a flat binary (AP trampoline), not an ELF asm object, so it is
-# excluded from the generic *.[cS]/*.asm rule and built via ap_boot_bin.o.
-SRCS := $(filter-out ap_boot.asm,$(SRCS))
+SRCS = $(wildcard *.c *.S) $(wildcard lib/*.c)
+# ap_boot.S is a flat binary (AP trampoline), not an ELF asm object, so it is
+# excluded from the generic *.c/*.S rule and built via ap_boot_bin.o.
+SRCS := $(filter-out ap_boot.S,$(SRCS))
 AP_BOOT_BIN = ap_boot_bin.o
 OBJS = $(addsuffix .o,$(basename $(SRCS))) font.o $(AP_BOOT_BIN)
 KERNEL = kernel.elf
@@ -168,16 +168,15 @@ $(KERNEL): $(OBJS)
 	@echo "  CC $<"
 	@$(CC) -MD $(ASFLAGS) -o $@ -c $<
 
-%.o: %.asm
-	@echo "NASM $<"
-	@nasm -f elf -o $@ $^
-
 # AP trampoline: assemble to a flat binary and wrap it as an ELF object so the
 # linker embeds it; C accesses it via _binary_ap_boot_bin_start/_end/_size.
-ap_boot_bin.o: ap_boot.asm
-	@echo "NASM -f bin ap_boot.asm"
-	@nasm -f bin -o ap_boot.bin ap_boot.asm
+ap_boot_bin.o: ap_boot.S ap_boot.ld
+	@echo "  AS ap_boot.S"
+	@$(CC) $(ASFLAGS) -o ap_boot.tmp.o -c ap_boot.S
+	@$(LD) -m elf_i386 -T ap_boot.ld -o ap_boot.tmp.elf ap_boot.tmp.o
+	@$(OBJCOPY) -O binary ap_boot.tmp.elf ap_boot.bin
 	@$(OBJCOPY) -I binary -O elf32-i386 -B i386 ap_boot.bin $@
+	@rm -f ap_boot.tmp.o ap_boot.tmp.elf
 
 font.o:
 	@$(OBJCOPY) -O elf32-i386 -B i386 -I binary unifont.sfn font.o
@@ -194,7 +193,7 @@ docs::
 clean::
 	@$(MAKE) -C lib clean
 	@$(MAKE) -C apps clean
-	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin *.d lib/*.d *~ os.iso iso initrd.img docs
+	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin ap_boot.tmp.* *.d lib/*.d *~ os.iso iso initrd.img docs
 
 .PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 cloc docs clean
 
