@@ -134,13 +134,39 @@ static void bootdiag(int stage, int paging_off) {
     }
 }
 
-/** @brief Sub-step beacon: @p n low (400 Hz) beeps, distinct from the rising
- *         (>=680 Hz) checkpoint markers, to bisect a coarse step. */
+/** @brief Sub-step beacon: @p n low (400 Hz) beeps AND a distinct dim colour
+ *         flood, distinct from the rising (>=680 Hz) checkpoint markers /
+ *         the green progress bar, to bisect a coarse step. The framebuffer is
+ *         still identity-accessible under vmm_init (paging is off until
+ *         @ref enable_paging), so a hang leaves the whole screen in the last
+ *         sub-step colour: dark red (map_kernel) -> dark yellow (kernel heap)
+ *         -> dark cyan (initrd) -> dark magenta (CR3 loaded). */
 void bootdiag_sub(int n) {
     if (!bootdiag_on)
         return;
     for (int i = 0; i < n; i++)
         bd_tone(400, 6, 4);
+
+    static const uint32_t hue[] = {
+        0x00220000, 0x00222200, 0x00002222, 0x00220022
+    };
+    if (n >= 1 && n <= 4 && bfb_addr && bfb_bpp >= 24) {
+        const uint8_t bytespp = bfb_bpp >= 32 ? 4 : 3;
+        uint32_t col   = hue[(n - 1) % 4];
+        uint32_t pitch = bfb_scanline ? bfb_scanline : bfb_width * bytespp;
+        volatile uint8_t *fb = (volatile uint8_t *) (uintptr_t) bfb_addr;
+        for (uint32_t y = 0; y < bfb_height; y++)
+            for (uint32_t x = 0; x < bfb_width; x++) {
+                volatile uint8_t *p = fb + y * pitch + x * bytespp;
+                if (bytespp == 4)
+                    *(volatile uint32_t *) p = col;
+                else {
+                    p[0] = col & 0xFF;
+                    p[1] = (col >> 8) & 0xFF;
+                    p[2] = (col >> 16) & 0xFF;
+                }
+            }
+    }
 }
 
 /**
