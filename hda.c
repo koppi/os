@@ -401,6 +401,23 @@ void hda_probe(struct pci_device *dev) {
         return;   /* a laptop has two HDA controllers (analog + HDMI); one is enough */
 
     pci_device_t *d = (pci_device_t *) dev;
+
+    /* Intel integrated-HDMI ("iHD") controllers are digital-only. A laptop
+     * carries one alongside the PCH analog controller; if we take the first
+     * (usually the HDMI one, e.g. Haswell 0x0a0c on a MacBook Air), there is
+     * no audible output. Skip them and let the analog controller bind. */
+    static const uint16_t hdmi_only[] = {
+        0x0a0c, 0x0c0c, 0x0d0c,      /* Haswell / Broadwell iHD */
+        0x160c, 0x170c,              /* Skylake / Kaby Lake iHD */
+        0x280c, 0x281c               /* Alder Lake iHD */
+    };
+    if (d->vendor == 0x8086)
+        for (unsigned i = 0; i < sizeof(hdmi_only) / sizeof(hdmi_only[0]); i++)
+            if (d->device == hdmi_only[i]) {
+                klogf(LOG_INFO, "hda: skipping digital-only HDMI controller 8086:%04x\n",
+                      d->device);
+                return;
+            }
     uint32_t bar = 0, span = 0x4000;
     for (int i = 0; i < 6; i++)
         if (!d->bar[i].is_io && d->bar[i].addr) {

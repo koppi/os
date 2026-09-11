@@ -19,6 +19,7 @@
 #include <spinlock.h>
 #include <initrd.h>
 #include <bfb.h>
+#include <bootdiag.h>
 
 /*
  * |------------------------------------------------|
@@ -52,12 +53,16 @@ void vmm_init() {
      * map_kernel() allocates the first table from it. */
     paging_init((uint32_t) &kernel_end);
     map_kernel(kern_dir);
+    bootdiag_sub(1);    /* identity 4 MiB mapped, RETURN_ADDR page up */
     /* Identity-map the kernel heap window (KHEAP_BASE, 4 MiB). main.c has
      * already reserved these frames in the PMM. */
     for (uint32_t va = KHEAP_BASE; va < KHEAP_BASE + KHEAP_SIZE; va += PAGE_SIZE)
         vmm_map_phys(kern_dir, va, va, PAGE_PRESENT | PAGE_RW);
+    bootdiag_sub(2);    /* heap window identity-mapped */
     initrd_map();   /* identity-map the relocated boot RAM disk (kern_dir only) */
+    bootdiag_sub(3);    /* initrd mapped */
     change_page_directory(kern_dir);
+    bootdiag_sub(4);    /* CR3 loaded, about to flip CR0.PG */
     enable_paging();
 }
 

@@ -31,6 +31,7 @@
 
 #include <cmdline.h>
 #include <pat.h>
+#include <bootdiag.h>
 
 #include <acpi.h>
 #include <apic.h>
@@ -131,6 +132,15 @@ static void bootdiag(int stage, int paging_off) {
                 *(volatile uint32_t *) (fb + y * pitch + x * 4) = col;
         bd_spin(120);   /* ~1-2 s so the colour is readable */
     }
+}
+
+/** @brief Sub-step beacon: @p n low (400 Hz) beeps, distinct from the rising
+ *         (>=680 Hz) checkpoint markers, to bisect a coarse step. */
+void bootdiag_sub(int n) {
+    if (!bootdiag_on)
+        return;
+    for (int i = 0; i < n; i++)
+        bd_tone(400, 6, 4);
 }
 
 /**
@@ -269,33 +279,49 @@ void kernel_main(unsigned long magic, unsigned long addr)
     bootdiag(5, 0);   /* checkpoint 5: framebuffer init returned (fbcon should now paint) */
     BOOT_PROG("GDT");
     gdt_init();
+    klogf(LOG_INFO, "DBG: after gdt_init\n");
     BOOT_PROG("interrupts");
     idt_init(0x8);
+    klogf(LOG_INFO, "DBG: after idt_init\n");
     BOOT_PROG("FPU");
     fpu_init();
+    klogf(LOG_INFO, "DBG: after fpu_init\n");
     BOOT_PROG("PIC");
     pic_init(0x20, 0x28);
+    klogf(LOG_INFO, "DBG: after pic_init\n");
     BOOT_PROG("PIT timer");
     pit_init();
+    klogf(LOG_INFO, "DBG: after pit_init\n");
     pit_start_counter(1000, PIT_COUNTER_0, PIT_MODE_SQUAREWAVEGEN);
+    klogf(LOG_INFO, "DBG: after pit_start_counter\n");
     BOOT_PROG("VFS");
     vfs_init();
+    klogf(LOG_INFO, "DBG: after vfs_init\n");
     floppy_detect();
+    klogf(LOG_INFO, "DBG: after floppy_detect\n");
     BOOT_PROG("keyboard");
     keyboard_init();
+    klogf(LOG_INFO, "DBG: after keyboard_init\n");
     BOOT_PROG("mouse");
     mouse_init();
+    klogf(LOG_INFO, "DBG: after mouse_init\n");
     uart_rx_ir();
+    klogf(LOG_INFO, "DBG: after uart_rx_ir\n");
     BOOT_PROG("sound");
     sound_init();
+    klogf(LOG_INFO, "DBG: after sound_init\n");
     BOOT_PROG("syscalls");
     syscall_init();
+    klogf(LOG_INFO, "DBG: after syscall_init\n");
     BOOT_PROG("TSS");
     install_tss();
+    klogf(LOG_INFO, "DBG: after install_tss\n");
     BOOT_PROG("RTC");
     rtc_init();
+    klogf(LOG_INFO, "DBG: after rtc_init\n");
     BOOT_PROG("PCI");
     pci_init();
+    klogf(LOG_INFO, "DBG: after pci_init\n");
 
     /* SMP bring-up for the boot CPU: parse ACPI/MADT, register the BSP,
      * map + enable the local APIC, and calibrate its timer against the PIT.

@@ -588,8 +588,11 @@ Kernel flags: `-Og -std=gnu11 -ffreestanding -fno-builtin -nodefaultlibs
 ### FAT images
 
 `make iso` builds `initrd.img` automatically — that is the root filesystem the
-running OS sees as `/rd`. `hda.img` / `floppy.img` are optional extra disks,
-built locally, only needed if you want persistent storage across reboots.
+running OS sees as `/rd`. `make usb` additionally packs the kernel + initrd +
+GRUB into a **GPT/FAT32 UEFI ESP image** (`os-usb.img`) for machines that boot
+only from EFI (no CSM) — see the MacBook Air section below. `hda.img` /
+`floppy.img` are optional extra disks, built locally, only needed if you want
+persistent storage across reboots.
 
 ```bash
 IMG=initrd.img SIZE=8M ./hda.sh   # what `make iso` runs
@@ -792,6 +795,62 @@ the `pci` output.
 `q35` config, each with an EHCI controller, a USB keyboard and a USB tablet,
 capturing a serial log and a
 screenshot for each.
+
+### Booting on real hardware (MacBook Air 2013 and similar)
+
+The MacBook Air 2013 (MacBookAir6,1 / 6,2) is a **Haswell-ULT** machine and the
+first laptop this kernel boots that is **UEFI-only**: the Apple EFI implements
+no Legacy/CSM BIOS and has no VGA text mode, no serial port and no PS/2 — a
+completely "black-box" bring-up on the internal LCD. There is also **no wired
+NIC**, so `os.iso` (made for BIOS machines) is useless here; the USB image is
+the native boot medium.
+
+**Build the USB image and write it to a stick.**
+
+```bash
+make usb                       # -> os-usb.img  (GPT + FAT32 ESP, grub2 x86_64-efi)
+dd if=os-usb.img of=/dev/sdX bs=1M status=progress   # WHOLE stick, not a partition
+```
+
+Hold **Option** at power-on until the disk picker appears and choose the EFI
+boot icon (labelled "EFI Boot", the Windows/BOOTCAMP icon shape). GRUB loads
+`grub.cfg` from the stick's ESP, keeps the GOP mode the Apple firmware already
+set, and hands the kernel the framebuffer + the Multiboot2 memory map.
+
+| Subsystem | Driver | Notes |
+|-----------|--------|-------|
+| Display | multiboot2 GOP framebuffer ([`video.c`](video.c)), WC via PAT ([`pat.c`](pat.c)) | Haswell HD 5000 (`8086:0a26`); 13" panel is 1440×900, 11" is 1366×768 — the kernel reads the real size/pitch from the framebuffer tag |
+| Keyboard / trackpad | xHCI HID ([`xhci.c`](xhci.c)) | xHCI-only PCH (`8086:9c31`) — external USB HID only (the MacBook's own keyboard is on a Broadcom device that speaks an HID-over-HT transport, unsupported) |
+| Storage | **AHCI** ([`ahci.c`](ahci.c)) | Samsung S4LN053X01 PCIe SSD (`144d:1600`, `8086:9c03` PCH), mounted `/hda` |
+| Ethernet | — | no wired NIC; the BCM4360 WiFi (`14e4:43a0`) is unsupported |
+| Audio | Intel HD Audio ([`hda.c`](hda.c)) | PCH analog controller `8086:9c20` with the Cirrus CS4208 codec is chosen over the digital-only Haswell HDMI controller `8086:0a0c` (see below) |
+| Timers / IRQ / RTC / power-off | as on the X250 | Apple EFI exposes the RSDP/MADT the same way; 8 GiB RAM |
+
+**Two HD Audio controllers.** The MBA carries both the Haswell **HDMI** audio
+(`0:3.3`, `8086:0a0c`, digital-only) and the PCH **analog** controller
+(`0:27.0`, `8086:9c20`, CS4208 codec). PCI enumerates them in that order, so a
+driver that binds the first controller by class would claim HDMI and produce no
+audible output. `hda_probe()` now skips the Intel iHD (HDMI-only) controllers
+by device ID, so the analog one binds and the built-in speakers work.
+
+**The "hangs at `physical memory`" boot issue.** On real Apple EFI — but not
+under OVMF/QEMU — this kernel used to die silently right after the boot bar
+reached "physical memory": a 64-bit UEFI bootloader can hand a 32-bit Multiboot
+kernel a CPU with CR4 still in a 64-bit-era state (PAE/PGE/PCID set), which
+makes the `CR0.PG`/`CR3` writes for this kernel's non-PAE page tables #GP the
+CPU (a triple fault — invisible on a machine with no UART). `enable_paging()`
+([`mm.c`](mm.c)) now does the transition in the order x86 mandates (paging off
+→ non-PAE CR4 → reload CR3 → paging on). The `bootdiag` GRUB entry adds
+low-pitched sub-step beeps inside `vmm_init` (1 = identity map, 2 = heap, 3 =
+initrd, 4 = CR3 loaded) so a remaining hang there reports exactly which map was
+last reached.
+
+Escape hatches on the GRUB line (press `e`): `nousb` `noahci` `nonvme`
+`nosmp` `nofb` `nosyn`; `bootdiag` beeps + colour-floods the boot progress.
+
+`test/mba-boot.sh` (`make qemu-mba`) boots `os.iso` in MBA-shaped QEMU configs
+(q35 + xHCI-only + QXL GOP-like video under OVMF), capturing a serial log and a
+screenshot for each. `make usb` builds the GPT USB image the real machine needs.
 
 ### Other targets
 

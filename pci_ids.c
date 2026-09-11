@@ -207,6 +207,18 @@ static const struct { uint16_t vendor, device; const char *name; } devices[] = {
     { 0x1c5c, 0x1284, "PC401 NVMe SSD" },
     { 0x1c5c, 0x1327, "PC300 NVMe SSD" },
     { 0x8086, 0xf1a5, "SSD 600p / Pro 6000p Series NVMe" },
+    /* MacBook Air 2013 (Haswell-ULT) */
+    { 0x8086, 0x0a04, "Haswell-ULT DRAM Controller" },
+    { 0x8086, 0x0a16, "Haswell-ULT Host Bridge / DRAM Registers" },
+    { 0x8086, 0x0a26, "Haswell-ULT HD Graphics 5000" },
+    { 0x8086, 0x9c03, "8 Series SATA Controller (AHCI mode)" },
+    { 0x8086, 0x9c22, "8 Series SMBus Controller" },
+    { 0x8086, 0x9c41, "8 Series LPC Controller" },
+    { 0x8086, 0x9c43, "8 Series Thermal Subsystem" },
+    { 0x8086, 0x9ce2, "8 Series USB EHCI #2" },
+    { 0x144d, 0x1600, "S4LN053X01 AHCI PCIe SSD (-01600)" },
+    { 0x14e4, 0x43a0, "BCM4360 802.11ac Wireless LAN Controller" },
+    { 0x1013, 0x4208, "CS4208 HD Audio Codec" },
     /* Display */
     { 0x1234, 0x1111, "QEMU/Bochs Virtual Video Controller" },
     { 0x1013, 0x00b8, "GD 5446 (Cirrus)" },
@@ -222,8 +234,11 @@ static const struct { uint16_t vendor, device; const char *name; } devices[] = {
     /* Audio */
     { 0x8086, 0x2415, "82801AA AC'97 Audio Controller" },
     { 0x8086, 0x2668, "82801FB/FBM/FR/FW/FRW (ICH6) HD Audio Controller" },
+    { 0x8086, 0x9c20, "8 Series HD Audio Controller" },
+    { 0x8086, 0x0a0c, "Haswell-ULT HD Audio Controller (HDMI)" },
     /* USB */
     { 0x1b36, 0x000d, "QEMU XHCI Host Controller" },
+    { 0x8086, 0x9c31, "8 Series USB xHCI Host Controller" },
     { 0x8086, 0x24cd, "82801DB/DBM (ICH4) USB2 EHCI Controller" },
     /* Storage / misc */
     { 0x1af4, 0x1001, "Virtio block device" },

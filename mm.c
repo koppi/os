@@ -173,13 +173,28 @@ uint32_t get_max_blocks() {
     return pmm.max_blocks;
 }
 
-/** @brief Set CR0.PG to turn paging on. */
+/** @brief Turn paging on, defensively.
+ *
+ * A 64-bit UEFI bootloader can leave CR4 in a 64-bit-era state (PAE/PGE/PCID)
+ * at the 32-bit hand-off; with non-PAE tables that makes CR0.PG/CR3 writes #GP
+ * (a silent triple-fault on real UEFI hardware). Transition in the mandated
+ * order: paging off -> non-PAE CR4 -> reload CR3 -> paging on. */
 void enable_paging() {
-    uint32_t reg;
-    // Enable paging
-    asm volatile("mov %%cr0, %0" : "=r" (reg));
-    reg |= 0x80000000;
-    asm volatile("mov %0, %%cr0" : : "r" (reg));
+    uint32_t cr3;
+    asm volatile("mov %%cr3, %0" : "=r" (cr3));
+    asm volatile(
+        /* CLGI-worthy point: interrupts are already off here (never on until
+         * pic_init), and the whole 0-4 MiB identity map is in place. */
+        "movl %%cr0, %%eax\n\t"
+        "andl $~0x80000000, %%eax\n\t"    /* CR0.PG = 0            */
+        "movl %%eax, %%cr0\n\t"
+        "xorl %%eax, %%eax\n\t"
+        "movl %%eax, %%cr4\n\t"           /* 32-bit non-PAE state  */
+        "movl %0, %%cr3\n\t"              /* flush + install dir   */
+        "movl %%cr0, %%eax\n\t"
+        "orl $0x80000000, %%eax\n\t"      /* CR0.PG = 1            */
+        "movl %%eax, %%cr0\n\t"
+        : : "r" (cr3) : "eax", "memory");
 }
 
 /**

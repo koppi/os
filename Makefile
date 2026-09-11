@@ -156,6 +156,16 @@ qemu-t470s: iso
 qemu-x220: $(KERNEL) initrd.img
 	@bash test/x220-boot.sh all
 
+# Boot os.iso in MacBook Air 2013-shaped QEMU configs (q35 + xHCI-only + QXL
+# GOP-like video, UEFI/OVMF only); logs + screenshots in /tmp/mba-boot.
+qemu-mba: iso
+	@bash test/mba-boot.sh all
+
+# Build a GPT+FAT32 UEFI USB image (os-usb.img) that the UEFI-only laptops
+# (no CSM, e.g. a MacBook) boot from: grub2 x86_64-efi + kernel + initrd.
+usb: $(KERNEL) initrd.img
+	@bash ./make-usb.sh
+
 $(KERNEL): $(OBJS)
 	@echo "  LD $@"
 	@$(LD) $(LDFLAGS) -o $@ $^

@@ -261,6 +261,9 @@ void vbe_init() {
     fb_base = (uint8_t *) fb_pa;
     klogf(LOG_INFO, "vbe: framebuffer mapped %s\n",
           wc ? "write-combining" : "uncached");
+    klogf(LOG_INFO, "vbe: DBG kern_dir=%x pa(fb)=%x\n",
+          (uint32_t) get_kern_directory(),
+          (uint32_t) get_phys_addr(get_kern_directory(), fb_pa));
 
     /* 2. The 32-bpp shadow surface. All drawing targets this; fb_present()
      *    converts it to the hardware format. Scattered frames, contiguous VA. */
@@ -519,6 +522,7 @@ static void bootp_phys_string(const char *text, uint32_t y) {
 }
 
 void boot_progress(uint32_t cur, uint32_t total, const char *msg) {
+    klogf(LOG_INFO, "DBG boot_progress: cur=%u total=%u msg=%s vbemem.buffer=%p fb_base=%p\n", cur, total, msg, (void *)vbemem.buffer, (void *)fb_base);
     if (!bfb_addr)
         return;
 
