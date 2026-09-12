@@ -244,6 +244,16 @@ void tlb_shootdown(uint32_t va) {
     if (ncpu <= 1)
         return;
 
+    /* Before smp_release() the APs spin with interrupts disabled, so they
+     * cannot answer this IPI: ncpu already counts them, and the wait below
+     * would burn its whole timeout and then give up with their TLBs stale.
+     * Worse, the abandoned round's acks arrive once they enable interrupts and
+     * decrement whichever round is in flight by then, letting that one finish
+     * while a CPU has not flushed. Skip the round entirely - each AP drops its
+     * whole TLB when it is released (see ap_main). */
+    if (!smp_aps_running())
+        return;
+
     uint32_t f = spin_lock(&tlb_lock);
     tlb_va = va;
     tlb_pending = ncpu - 1;

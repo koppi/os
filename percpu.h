@@ -112,6 +112,15 @@ void __attribute__((noreturn)) ap_main(void);
 /** @brief Release all parked APs (set smp_go, start each core's timer). */
 void smp_release(void);
 
+/**
+ * @brief Non-zero once the APs have been released and can service IPIs.
+ *
+ * Between coming online and @ref smp_release they spin with interrupts still
+ * disabled, so anything that waits for them to acknowledge an IPI (a TLB
+ * shootdown, say) would wait forever.
+ */
+int smp_aps_running(void);
+
 /** @brief Print per-CPU state (the `cpus` command). */
 void smp_report(void);
 

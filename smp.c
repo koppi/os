@@ -235,10 +235,23 @@ void __attribute__((noreturn)) ap_main(void) {
     while (!smp_go)
         __builtin_ia32_pause();
 
+    /* Interrupts were off for the whole park, so every TLB shootdown the BSP
+     * broadcast while we sat here went unanswered. Drop the entire TLB now, by
+     * reloading CR3, before touching any of those mappings. */
+    {
+        uint32_t cr3;
+        asm volatile("mov %%cr3, %0" : "=r"(cr3));
+        asm volatile("mov %0, %%cr3" : : "r"(cr3) : "memory");
+    }
+
     /* Become the idle thread; the first LAPIC tick will run the scheduler. */
     c->preempt_disable = 0;
     lapic_timer_start();
     sched_run_thread(c->idle);
+}
+
+int smp_aps_running(void) {
+    return smp_go;
 }
 
 /** @brief Release the parked APs into the scheduler (BSP, from sched_init). */
