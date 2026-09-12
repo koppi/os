@@ -10,17 +10,21 @@
  */
 #include <lib/string.h>
 #include <memory.h>
+#include <proc.h>
 #include <spinlock.h>
 #include <log.h>
 
 /** Number of 4 KiB blocks in the storage window (256 KiB). */
 #define MAX_BLOCKS 64
 
-/** The window must stay inside map_kernel()'s 4 MiB identity map — a block
- *  above it would #PF the moment page_table_malloc() zeroed it (real CPUs, and
- *  a large GOP framebuffer on a T470s-class panel, push kernel_end + the window
- *  right up to the line). */
-#define IDMAP_LIMIT 0x400000u
+/** The whole storage window must stay inside map_kernel()'s identity map — a
+ *  block above it would #PF the moment page_table_malloc() zeroed it. The 4 MiB
+ *  map only ever made 4 of the 64 blocks usable, but boot needs 6 (map_kernel
+ *  slots 0+1, the heap window, two initrd tables at 128 MiB and the framebuffer
+ *  at 0xFE000000); the 5th allocation silently returned NULL and the initrd top
+ *  half / framebuffer never got mapped — the #PF at the first access after
+ *  paging came up triple-faulted the MBA while QEMU/OVMF happened to fit. */
+#define IDMAP_LIMIT 0x800000u
 
 /** 2 words = 64 bits, one per 4 KiB block in the storage window. */
 static uint32_t bitmap[2];
@@ -50,6 +54,14 @@ uint32_t paging_init(uint32_t start) {
     } else {
         usable_blocks = 0;   /* window past the identity map -- unusable */
     }
+
+    /* Reserve RETURN_ADDR's own frame (block 4 here) so the storage window
+     * never hands out the trampoline page the bootstrap copied into place. */
+    uint32_t ret_blk = ((uint32_t) RETURN_ADDR - page_start) / BLOCKS_LEN;
+    if(ret_blk < (uint32_t) usable_blocks) {
+        paging_set_bit((int) ret_blk);
+        used_blocks++;
+    }
     klogf(LOG_INFO, "paging: page_start=0x%x usable=%d\n", page_start, usable_blocks);
 
     return page_start + (uint32_t) MAX_BLOCKS * BLOCKS_LEN;
@@ -69,6 +81,7 @@ void *page_table_malloc() {
     int p = paging_first_free();
     if(p == -1) {
         spin_unlock(&pgtbl_lock, f);
+        klogf(LOG_ERR, "page_table_malloc: OUT OF BLOCKS used=%d usable=%d\n", used_blocks, usable_blocks);
         return 0;
     }
     paging_set_bit(p);

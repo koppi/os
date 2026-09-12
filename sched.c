@@ -290,9 +290,17 @@ void sched_init() {
     proc->pdir = get_kern_directory();
     main_thread->eip = (uint32_t) &main_proc;
 
-    vmm_map(proc->pdir, (vmm_addr_t) KERNEL_SPACE_END, PAGE_PRESENT | PAGE_RW);
+    /* The console's ring-0 stacks must not sit on KERNEL_SPACE_END (0x800000):
+     * every user image is linked at exactly that address (every link.lds in
+     * apps/ uses `. = 8M`), so load_elf_relocate() maps and copies the ELF
+     * right over the console's live stack pages. Place them below the elf
+     * staging window (0x700000) and the image base, above the page-table
+     * storage window, in frames pmm_init2() has already reserved
+     * (0 .. KERNEL_SPACE_END). */
+#define CONSOLE_STACK_BASE 0x600000
+    vmm_map(proc->pdir, (vmm_addr_t) CONSOLE_STACK_BASE, PAGE_PRESENT | PAGE_RW);
 
-    main_thread->esp = (uint32_t) KERNEL_SPACE_END;
+    main_thread->esp = (uint32_t) CONSOLE_STACK_BASE;
     main_thread->stack_limit = ((uint32_t) main_thread->esp + PAGE_SIZE);
 
     main_thread->esp_kernel = main_thread->stack_limit;

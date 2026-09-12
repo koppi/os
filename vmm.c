@@ -75,8 +75,11 @@ void map_kernel(page_dir_t *pdir) {
     vmm_addr_t virt = 0x00000000;
     mm_addr_t phys = 0x0;
 
-    // Identity map first 4MB
-    for(int i = 0; i < 1024; i++, virt += PAGE_SIZE, phys += PAGE_SIZE) {
+    // Identity map first 8MB: the storage window runs page_start..0x43c000, and
+    // the identity map must cover the whole window or the first page_table_malloc()
+    // zeroing a block past 0x400000 would #PF. Slot 1 also gives RETURN_ADDR its
+    // table, so no separate slot-1 allocation is needed.
+    for(int i = 0; i < 2048; i++, virt += PAGE_SIZE, phys += PAGE_SIZE) {
         if(pdir[virt >> 22] == 0) {
             if(!vmm_create_page_table(pdir, virt, PAGE_PRESENT | PAGE_RW)) {
                 printf("Error creating page table");
@@ -85,12 +88,10 @@ void map_kernel(page_dir_t *pdir) {
         }
         ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[PTE_IDX(virt)] = phys | PAGE_PRESENT | PAGE_RW;
     }
-    // Space for RETURN_ADDR
+    // RETURN_ADDR page — already identity-mapped by the loop (it's at 0x400000,
+    // PTE 0 of slot 1); just re-flag that PTE USER for ring-3.
     uint32_t ret_addr = (uint32_t) RETURN_ADDR;
-    if(!vmm_create_page_table(pdir, ret_addr, PAGE_PRESENT | PAGE_RW | PAGE_USER)) {
-        printf("Error creating page table");
-        return;
-    }
+    pdir[ret_addr >> 22] |= PAGE_USER;
     ((uint32_t *) (pdir[ret_addr >> 22] & ~0xFFF))[PTE_IDX(ret_addr)] = ret_addr | PAGE_PRESENT | PAGE_RW | PAGE_USER;
 }
 

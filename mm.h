@@ -20,7 +20,7 @@
 #define PMM_PHYS_LIMIT 0xFFFFF000u
 
 /** Top of the identity-mapped low memory; also the pmm's reserved ceiling. */
-#define KERNEL_SPACE_END 0x401000
+#define KERNEL_SPACE_END 0x800000
 
 /**
  * The kernel heap. It used to be wedged between the page-table window and the
