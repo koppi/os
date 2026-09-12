@@ -439,6 +439,12 @@ static int configure_iep(int idx, int slot_id, int psi, int port,
     nt.d[3] = TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_ISP;
     ring_push(int_ring[idx][iep_idx], &d->iep_enq[iep_idx], &d->iep_cycle[iep_idx], nt);
 
+    /* Tell the controller the ring is non-empty. Without this the first
+     * transfer never starts, so no event ever arrives, so xhci_poll() never
+     * reaches the re-arm that rings the doorbell for subsequent ones: the
+     * endpoint reports "configured" and then stays silent forever. */
+    db[slot_id] = dci;
+
     klogf(LOG_INFO, "xhci: slot %d iface %d proto %d ep 0x%x configured\n",
           slot_id, iface, proto, ep_addr);
     return 0;
@@ -496,12 +502,45 @@ static int enumerate_port(int port) {
         return -1;
     }
 
-    /* 4. Device descriptor */
+    /* 4. Device descriptor, in two steps.
+     *
+     * ep0_mps_for_speed() above is only an opening guess. It is exact for low,
+     * high and super speed, but a full-speed device may use 8, 16, 32 or 64 and
+     * the only way to learn which is bMaxPacketSize0, in the first 8 bytes. Read
+     * those, correct endpoint 0 with an Evaluate Context, and only then ask for
+     * the rest: while the context still says 8 the controller splits control
+     * transfers at the wrong boundary, so the 18-byte read fails and the device
+     * is dropped as having no descriptor. */
     usb_device_desc_t dd;
     memset(&dd, 0, sizeof(dd));
-    if (get_descriptor(idx, USB_DT_DEVICE, 0, &dd, 8) < 0 ||
-        get_descriptor(idx, USB_DT_DEVICE, 0, &dd, 18) < 0) {
+    if (get_descriptor(idx, USB_DT_DEVICE, 0, &dd, 8) < 0) {
         klogf(LOG_WARNING, "xhci: no device descriptor on port %d\n", port);
+        d->in_use = 0;
+        return -1;
+    }
+
+    /* SuperSpeed states it as an exponent; everyone else as a byte count. */
+    int real_mps = (psi == 4) ? (1 << dd.bMaxPacketSize0) : dd.bMaxPacketSize0;
+    if (real_mps >= 8 && real_mps != mps) {
+        memset(in_ctx[idx], 0, sizeof(in_ctx[idx]));
+        in_ctrl(in_ctx[idx])[1] = 0x2;             /* A1 (EP0) only */
+        uint32_t *ne = (uint32_t *)(in_dev(in_ctx[idx]) + 1 * ctx_size);
+        /* Only Max Packet Size is evaluated for EP0 (xHCI 4.6.7). */
+        ne[1] = (4u << 3) | (3u << 1) | ((uint32_t)real_mps << 16);
+        trb_t ev = {{ (uint32_t)&in_ctx[idx][0], 0, 0,
+                      TRB_TYPE(TRB_EVAL_CTX) | (slot_id << 24) }};
+        if (cmd_exec(ev, &r) == CC_SUCCESS) {
+            klogf(LOG_INFO, "xhci: port %d ep0 max packet %d -> %d\n",
+                  port, mps, real_mps);
+            mps = real_mps;
+        } else {
+            klogf(LOG_WARNING, "xhci: port %d ep0 max packet %d -> %d rejected\n",
+                  port, mps, real_mps);
+        }
+    }
+
+    if (get_descriptor(idx, USB_DT_DEVICE, 0, &dd, 18) < 0) {
+        klogf(LOG_WARNING, "xhci: short device descriptor on port %d\n", port);
         d->in_use = 0;
         return -1;
     }
