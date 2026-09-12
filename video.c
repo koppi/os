@@ -23,6 +23,7 @@
 #include <pat.h>
 #include <io.h>
 #include <spinlock.h>
+#include <bootdiag.h>
 
 #define SSFN_NOIMPLEMENTATION
 #define SSFN_CONSOLEBITMAP_TRUECOLOR
@@ -502,6 +503,9 @@ static int bootp_paging;    /* paging is on (direct physical writes unsafe) */
  *         stops painting to it for that brief window. */
 void boot_progress_paging_on(void) { bootp_paging = 1; }
 
+/** Row cursor for @ref bootdiag_text (advances down the screen). */
+static uint32_t bootdiag_text_y;
+
 /** @brief Render @p text into the raw boot framebuffer (pre-vbe, 24/32-bpp).
  *         Reuses the SSFN set-up used by fbcon, against the physical fb. */
 static void bootp_phys_string(const char *text, uint32_t y) {
@@ -519,6 +523,15 @@ static void bootp_phys_string(const char *text, uint32_t y) {
             ssfn_putc((unsigned char) *p);
         ssfn_x += FBCON_CW;
     }
+}
+
+/** @brief Label a boot sub-step on the raw framebuffer (white text at the next
+ *         free row from the top), for when `bootdiag` is on. */
+void bootdiag_text(const char *text) {
+    if (!bfb_addr || bfb_bpp < 24)
+        return;
+    bootp_phys_string(text, bootdiag_text_y);
+    bootdiag_text_y += FBCON_CH;
 }
 
 void boot_progress(uint32_t cur, uint32_t total, const char *msg) {

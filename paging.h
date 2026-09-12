@@ -23,6 +23,7 @@
 typedef uint32_t page_dir_t; /**< A page-directory (or page-table) entry. */
 
 #define PAGEDIR_SIZE        1024  /**< Entries per page directory / table. */
+#define PTE_IDX(virt)       (((virt) >> 12) & 0x3FF)
 
 /** @brief Build the kernel directory, enable paging, switch to it. */
 void vmm_init();

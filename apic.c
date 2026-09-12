@@ -150,6 +150,8 @@ void lapic_timer_mask(int mask) {
 }
 
 void lapic_timer_start(void) {
+    if (!lapic_ready)
+        return;
     if (!ticks_per_ms)
         ticks_per_ms = 1;
     lapic_write(LAPIC_TIMER_DIV, 0x3);     /* Divide by 16. */
@@ -266,9 +268,13 @@ void apic_init(void) {
      * uncacheable (PCD): the LAPIC ID register is CPU-local, and a cacheable
      * mapping let one CPU read another's id (0 = BSP) from a shared cache line,
      * which sent this_cpu() -- and the whole per-CPU scheduler -- off the rails. */
-    for (uint32_t off = 0; off < 0x1000; off += PAGE_SIZE)
-        vmm_map_phys(get_kern_directory(), lapic_base + off, lapic_base + off,
-                     PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
+    for (uint32_t off = 0; off < 0x1000; off += PAGE_SIZE) {
+        if (!vmm_map_phys(get_kern_directory(), lapic_base + off, lapic_base + off,
+                           PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT)) {
+            klogf(LOG_WARNING, "apic: cannot map LAPIC at 0x%x, skipping\n", lapic_base);
+            return;
+        }
+    }
     lapic_ready = 1;
 
     /* Enable this (BSP) CPU's LAPIC. */

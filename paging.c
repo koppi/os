@@ -11,6 +11,7 @@
 #include <lib/string.h>
 #include <memory.h>
 #include <spinlock.h>
+#include <log.h>
 
 /** Number of 4 KiB blocks in the storage window (256 KiB). */
 #define MAX_BLOCKS 64
@@ -49,6 +50,7 @@ uint32_t paging_init(uint32_t start) {
     } else {
         usable_blocks = 0;   /* window past the identity map -- unusable */
     }
+    klogf(LOG_INFO, "paging: page_start=0x%x usable=%d\n", page_start, usable_blocks);
 
     return page_start + (uint32_t) MAX_BLOCKS * BLOCKS_LEN;
 }

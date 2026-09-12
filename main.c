@@ -134,13 +134,14 @@ static void bootdiag(int stage, int paging_off) {
     }
 }
 
-/** @brief Sub-step beacon: @p n low (400 Hz) beeps AND a distinct dim colour
- *         flood, distinct from the rising (>=680 Hz) checkpoint markers /
- *         the green progress bar, to bisect a coarse step. The framebuffer is
- *         still identity-accessible under vmm_init (paging is off until
- *         @ref enable_paging), so a hang leaves the whole screen in the last
- *         sub-step colour: dark red (map_kernel) -> dark yellow (kernel heap)
- *         -> dark cyan (initrd) -> dark magenta (CR3 loaded). */
+/** @brief Sub-step beacon: @p n low (400 Hz) beeps, a distinct dim colour
+ *         flood, and a readable white label (see @ref bootdiag_text) -- all
+ *         distinct from the rising (>=680 Hz) checkpoint markers / the green
+ *         progress bar, to bisect a coarse step. The framebuffer is still
+ *         identity-accessible under vmm_init (paging is off until
+ *         @ref enable_paging), so a hang leaves the whole screen painted with
+ *         the last sub-step: dark red (map_kernel) -> dark yellow (kernel
+ *         heap) -> dark cyan (initrd) -> dark magenta (CR3 loaded). */
 void bootdiag_sub(int n) {
     if (!bootdiag_on)
         return;
@@ -149,6 +150,12 @@ void bootdiag_sub(int n) {
 
     static const uint32_t hue[] = {
         0x00220000, 0x00222200, 0x00002222, 0x00220022
+    };
+    static const char *lab[] = {
+        "vmm: kernel 4M identity + RETURN_ADDR mapped",
+        "vmm: kernel heap window mapped",
+        "vmm: initrd mapped",
+        "vmm: CR3 loaded, before enable_paging",
     };
     if (n >= 1 && n <= 4 && bfb_addr && bfb_bpp >= 24) {
         const uint8_t bytespp = bfb_bpp >= 32 ? 4 : 3;
@@ -166,6 +173,7 @@ void bootdiag_sub(int n) {
                     p[2] = (col >> 16) & 0xFF;
                 }
             }
+        bootdiag_text(lab[n - 1]);
     }
 }
 

@@ -34,7 +34,8 @@
 #define MULTIBOOT2_TAG_FBINFO  8
 #define MULTIBOOT2_TAG_ACPI_OLD 14   /**< ACPI 1.0 RSDP (needed under UEFI). */
 #define MULTIBOOT2_TAG_ACPI_NEW 15   /**< ACPI 2.0+ RSDP (needed under UEFI). */
-#define MULTIBOOT2_TAG_EFI64    12   /**< EFI 64-bit system table pointer. */
+#define MULTIBOOT2_TAG_EFI_MMAP  17  /**< EFI memory map (needed under UEFI). */
+#define MULTIBOOT2_TAG_EFI64     12  /**< EFI 64-bit system table pointer. */
 
 #define MULTIBOOT2_VISUAL_INDEXED  0
 #define MULTIBOOT2_VISUAL_RGB      1
@@ -87,6 +88,23 @@ typedef struct {
 	uint32_t reserved;
 } __attribute__((packed)) multiboot2_memmap_entry_t;
 
+/** EFI memory map entry structure (from UEFI EFI_MEMORY_DESCRIPTOR) */
+typedef struct {
+	uint32_t type;
+	uint32_t reserved;
+	uint64_t physical_start;
+	uint64_t virtual_start;
+	uint64_t number_of_pages;
+	uint64_t attribute;
+} __attribute__((packed)) multiboot2_efi_mmap_entry_t;
+
+/** EFI memory map tag structure */
+typedef struct {
+	uint32_t descriptor_size;
+	uint32_t descriptor_version;
+	uint8_t  entries[1];
+} __attribute__((packed)) multiboot2_efi_mmap_t;
+
 /** Multiboot2 palette structure */
 typedef struct {
 	uint8_t red;
@@ -135,6 +153,7 @@ typedef struct {
         multiboot2_basic_meminfo_t basic_meminfo;
 		multiboot2_memmap_t memmap;
 		multiboot2_fbinfo_t fbinfo;
+		multiboot2_efi_mmap_t efi_mmap;
 	};
 } __attribute__((packed)) multiboot2_tag_t;
 

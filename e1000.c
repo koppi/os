@@ -272,12 +272,10 @@ void e1000_probe(pci_device_t *d) {
     if (cmdline_has("nonet"))
         return;
 
-    uint32_t base = 0, span = 0x20000;
+    uint32_t base = 0;
     for (int i = 0; i < 6; i++)
         if (!d->bar[i].is_io && d->bar[i].addr) {
             base = d->bar[i].addr;
-            if (d->bar[i].size)
-                span = d->bar[i].size;
             break;
         }
     if (!base) {
@@ -287,14 +285,13 @@ void e1000_probe(pci_device_t *d) {
 
     int pch = is_pch_lan(d->device);
     if (pch)
-        mac_from_eeprom = 0;   /* I217/I218 have no EERD EEPROM; MAC is in RAL/RAH */
+        mac_from_eeprom = 0;
 
-    /* The register block sits in MMIO space above RAM and the low-4 MiB
-     * identity map, so map it 1:1 into the kernel directory (cache-disabled,
-     * PCD = 0x10, which matters on real hardware; QEMU ignores it). */
-    for (uint32_t off = 0; off < span; off += PAGE_SIZE)
-        vmm_map_phys(get_kern_directory(), base + off, base + off,
-                     PAGE_PRESENT | PAGE_RW | 0x10);
+    if (!vmm_map_phys(get_kern_directory(), base, base,
+                          PAGE_PRESENT | PAGE_RW | 0x10)) {
+        klogf(LOG_WARNING, "e1000: cannot map MMIO at 0x%x, skipping\n", base);
+        return;
+    }
     mmio = (volatile uint8_t *)base;
 
     pci_enable(d, PCI_CMD_MEM | PCI_CMD_MASTER);

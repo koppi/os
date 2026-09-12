@@ -418,11 +418,10 @@ void hda_probe(struct pci_device *dev) {
                       d->device);
                 return;
             }
-    uint32_t bar = 0, span = 0x4000;
+    uint32_t bar = 0;
     for (int i = 0; i < 6; i++)
         if (!d->bar[i].is_io && d->bar[i].addr) {
             bar = d->bar[i].addr;
-            if (d->bar[i].size) span = d->bar[i].size;
             break;
         }
     if (!bar) {
@@ -431,9 +430,11 @@ void hda_probe(struct pci_device *dev) {
     }
 
     pci_enable(d, PCI_CMD_MEM | PCI_CMD_MASTER);
-    for (uint32_t o = 0; o < span; o += PAGE_SIZE)
-        vmm_map_phys(get_kern_directory(), bar + o, bar + o,
-                     PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT);
+    if (!vmm_map_phys(get_kern_directory(), bar, bar,
+                         PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT)) {
+        klogf(LOG_WARNING, "hda: cannot map MMIO at 0x%x, skipping\n", bar);
+        return;
+    }
     mmio = (uint8_t *) bar;
 
     w32(REG_GCTL, r32(REG_GCTL) & ~GCTL_CRST);

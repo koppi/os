@@ -175,26 +175,45 @@ uint32_t get_max_blocks() {
 
 /** @brief Turn paging on, defensively.
  *
- * A 64-bit UEFI bootloader can leave CR4 in a 64-bit-era state (PAE/PGE/PCID)
- * at the 32-bit hand-off; with non-PAE tables that makes CR0.PG/CR3 writes #GP
- * (a silent triple-fault on real UEFI hardware). Transition in the mandated
- * order: paging off -> non-PAE CR4 -> reload CR3 -> paging on. */
+ *  A 64-bit UEFI bootloader can leave CR4 in a 64-bit-era state (PAE/PGE/PCID)
+ *  at the 32-bit hand-off; with non-PAE tables that makes CR0.PG/CR3 writes #GP
+ *  (a silent triple-fault on real UEFI hardware). Transition in the mandated
+ *  order: paging off -> non-PAE CR4 -> reload CR3 -> paging on.
+ *
+ *  Apple EFI (MacBook Air 2013 and similar) can also leave IA32_EFER.LME set.
+ *  On Haswell, CR0.PG=1 with LME=1 and PAE=0 is #GP. Clear LME after
+ *  disabling paging and PAE, before re-enabling paging. */
 void enable_paging() {
     uint32_t cr3;
     asm volatile("mov %%cr3, %0" : "=r" (cr3));
+
+    /* Single asm block: CR0.PG=0 -> CR4=0 -> EFER.LME=0 -> CR3 -> CR0.PG=1.
+     * Must be one block: splitting it risks the compiler putting `cr3` in a
+     * register that later asm clobbers. EFER.LME must be cleared with CR0.PG=0
+     * and CR4.PAE=0 (Intel SDM 2.4.4, 9.9.1). */
     asm volatile(
-        /* CLGI-worthy point: interrupts are already off here (never on until
-         * pic_init), and the whole 0-4 MiB identity map is in place. */
+        /* 1. Disable paging (CR0.PG = 0) */
         "movl %%cr0, %%eax\n\t"
-        "andl $~0x80000000, %%eax\n\t"    /* CR0.PG = 0            */
+        "andl $~0x80000000, %%eax\n\t"
         "movl %%eax, %%cr0\n\t"
+
+        /* 2. Clear CR4 (PAE, PGE, PCID) */
         "xorl %%eax, %%eax\n\t"
-        "movl %%eax, %%cr4\n\t"           /* 32-bit non-PAE state  */
-        "movl %0, %%cr3\n\t"              /* flush + install dir   */
+        "movl %%eax, %%cr4\n\t"
+
+        /* 3. Clear IA32_EFER.LME (bit 8) and NXE (bit 11): Apple EFI leaves
+         * long mode enabled. Must be done with CR0.PG=0 and CR4.PAE=0. */
+        "mov $0xC0000080, %%ecx\n\t"
+        "rdmsr\n\t"
+        "andl $~( (1<<8) | (1<<11) ), %%eax\n\t"
+        "wrmsr\n\t"
+
+        /* 4. Reload CR3 and enable paging */
+        "movl %0, %%cr3\n\t"
         "movl %%cr0, %%eax\n\t"
-        "orl $0x80000000, %%eax\n\t"      /* CR0.PG = 1            */
+        "orl $0x80000000, %%eax\n\t"
         "movl %%eax, %%cr0\n\t"
-        : : "r" (cr3) : "eax", "memory");
+        : : "r" (cr3) : "eax", "ecx", "edx", "memory");
 }
 
 /**

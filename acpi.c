@@ -90,11 +90,12 @@ static const void *g_rsdp       = 0;            /* mapped, validated RSDP */
  *        Tables sit above the low-4 MiB map, hence the on-demand 1:1 mapping.
  */
 static void *acpi_map(uint32_t phys, uint32_t len) {
-    /* Map the full span so reads beyond the first page do not fault. */
     uint32_t end = (phys + len + 0xFFF) & ~0xFFFu;
     for (uint32_t va = phys & ~0xFFFu; va < end; va += PAGE_SIZE) {
-        if (get_phys_addr(get_kern_directory(), va) == 0)
-            vmm_map_phys(get_kern_directory(), va, va, PAGE_PRESENT | PAGE_RW);
+        if (get_phys_addr(get_kern_directory(), va) == 0) {
+            if (!vmm_map_phys(get_kern_directory(), va, va, PAGE_PRESENT | PAGE_RW))
+                return 0;
+        }
     }
     return (void *) phys;
 }
@@ -123,6 +124,8 @@ extern uint32_t multiboot2_acpi_rsdp;
 /** @brief Validate a candidate RSDP at @p addr. @return the mapped struct or 0. */
 static const rsdp_t *check_rsdp(uint32_t addr) {
     const rsdp_t *r = (const rsdp_t *) acpi_map(addr, sizeof(rsdp_t));
+    if (!r)
+        return 0;
     if (bytecmp(r->signature, RSDP_SIG, 8) != 0)
         return 0;
     if (!checksum_ok((const uint8_t *) r, 20))          /* v1 checksum */
@@ -201,31 +204,41 @@ static sdt_t *acpi_find_table(const rsdp_t *rsdp, const char *sig) {
     if (rsdp->revision >= 2 && rsdp->xsdt_addr &&
         (rsdp->xsdt_addr >> 32) == 0) {
         xsdt_t *xsdt = (xsdt_t *) acpi_map((uint32_t) rsdp->xsdt_addr, sizeof(sdt_t));
+        if (!xsdt) return 0;
         if (bytecmp(xsdt->header.signature, "XSDT", 4) == 0) {
             xsdt = (xsdt_t *) acpi_map((uint32_t) rsdp->xsdt_addr, xsdt->header.length);
+            if (!xsdt) return 0;
             uint32_t count = (xsdt->header.length - sizeof(sdt_t)) / 8;
             for (uint32_t i = 0; i < count; i++) {
                 uint64_t e = xsdt->entry[i];
                 if (e == 0 || (e >> 32) != 0)
                     continue;
                 sdt_t *tbl = (sdt_t *) acpi_map((uint32_t) e, sizeof(sdt_t));
-                if (bytecmp(tbl->signature, sig, 4) == 0)
-                    return (sdt_t *) acpi_map((uint32_t) e, tbl->length);
+                if (!tbl) continue;
+                if (bytecmp(tbl->signature, sig, 4) == 0) {
+                    sdt_t *result = (sdt_t *) acpi_map((uint32_t) e, tbl->length);
+                    return result;
+                }
             }
         }
     }
 
     if (rsdp->rsdt_addr) {
         rsdt_t *rsdt = (rsdt_t *) acpi_map(rsdp->rsdt_addr, sizeof(sdt_t));
+        if (!rsdt) return 0;
         if (bytecmp(rsdt->header.signature, "RSDT", 4) == 0) {
             rsdt = (rsdt_t *) acpi_map(rsdp->rsdt_addr, rsdt->header.length);
+            if (!rsdt) return 0;
             uint32_t count = (rsdt->header.length - sizeof(sdt_t)) / 4;
             for (uint32_t i = 0; i < count; i++) {
                 if (!rsdt->entry[i])
                     continue;
                 sdt_t *tbl = (sdt_t *) acpi_map(rsdt->entry[i], sizeof(sdt_t));
-                if (bytecmp(tbl->signature, sig, 4) == 0)
-                    return (sdt_t *) acpi_map(rsdt->entry[i], tbl->length);
+                if (!tbl) continue;
+                if (bytecmp(tbl->signature, sig, 4) == 0) {
+                    sdt_t *result = (sdt_t *) acpi_map(rsdt->entry[i], tbl->length);
+                    return result;
+                }
             }
         }
     }

@@ -91,6 +91,56 @@ static void multiboot2_memmap(uint32_t length, const multiboot2_memmap_t *memmap
     }
 }
 
+/** Convert EFI memory type to E820 type. */
+static uint32_t efi_to_e820_type(uint32_t efi_type)
+{
+    switch (efi_type) {
+    case 7:  return 1;  /* EfiConventionalMemory -> RAM */
+    case 9:  return 3;  /* EfiACPIReclaimMemory -> ACPI reclaimable */
+    case 10: return 4;  /* EfiACPIMemoryNVS -> ACPI NVS */
+    case 5:  return 2;  /* EfiRuntimeServicesCode -> reserved */
+    case 6:  return 2;  /* EfiRuntimeServicesData -> reserved */
+    case 8:  return 2;  /* EfiUnusableMemory -> reserved */
+    default: return 2;  /* everything else -> reserved */
+    }
+}
+
+static void multiboot2_efi_mmap(uint32_t length, const multiboot2_efi_mmap_t *efi_mmap)
+{
+    uint32_t desc_size = efi_mmap->descriptor_size;
+    const uint8_t *entry_ptr = efi_mmap->entries;
+    uint32_t pos = offsetof(multiboot2_tag_t, efi_mmap) + sizeof(*efi_mmap);
+
+    while ((pos + desc_size <= length) && (e820counter < MEMMAP_E820_MAX_RECORDS)) {
+        const multiboot2_efi_mmap_entry_t *entry = (const multiboot2_efi_mmap_entry_t *) entry_ptr;
+        uint64_t base = entry->physical_start;
+        uint64_t size = entry->number_of_pages * 4096ULL;
+        uint32_t type = efi_to_e820_type(entry->type);
+
+        if (size == 0) {
+            entry_ptr += desc_size;
+            pos += desc_size;
+            continue;
+        }
+
+        e820table[e820counter].base_address = base;
+        e820table[e820counter].size = size;
+        e820table[e820counter].type = type;
+
+        if (type == 1) {
+            uint64_t top = base + size;
+            if (top > 0xFFFFF000ULL)
+                top = 0xFFFFF000ULL;
+            if ((uint32_t) top > multiboot2_ram_top)
+                multiboot2_ram_top = (uint32_t) top;
+        }
+
+        entry_ptr += desc_size;
+        pos += desc_size;
+        e820counter++;
+    }
+}
+
 static void multiboot2_fbinfo(const multiboot2_fbinfo_t *fbinfo)
 {
     if (fbinfo->visual == MULTIBOOT2_VISUAL_RGB) {
@@ -168,6 +218,9 @@ void multiboot2_info_parse(const multiboot2_info_t *info) {
             break;
         case MULTIBOOT2_TAG_FBINFO:
             multiboot2_fbinfo(&tag->fbinfo);
+            break;
+        case MULTIBOOT2_TAG_EFI_MMAP:
+            multiboot2_efi_mmap(tag->size, &tag->efi_mmap);
             break;
         case MULTIBOOT2_TAG_ACPI_OLD:
         case MULTIBOOT2_TAG_ACPI_NEW:

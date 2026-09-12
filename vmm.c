@@ -17,6 +17,7 @@
 #include <percpu.h>
 #include <apic.h>
 #include <spinlock.h>
+#include <log.h>
 #include <initrd.h>
 #include <bfb.h>
 #include <bootdiag.h>
@@ -48,6 +49,7 @@ extern uint32_t kernel_end;
  * Initializes the Virtual Memory Manager
  */
 void vmm_init() {
+    bootdiag_text("vmm: enter");
     memset(kern_dir, 0, PAGEDIR_SIZE);
     /* Put the page-table storage window just past the kernel image, before
      * map_kernel() allocates the first table from it. */
@@ -81,7 +83,7 @@ void map_kernel(page_dir_t *pdir) {
                 return;
             }
         }
-        ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] = phys | PAGE_PRESENT | PAGE_RW;
+        ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[PTE_IDX(virt)] = phys | PAGE_PRESENT | PAGE_RW;
     }
     // Space for RETURN_ADDR
     uint32_t ret_addr = (uint32_t) RETURN_ADDR;
@@ -89,7 +91,7 @@ void map_kernel(page_dir_t *pdir) {
         printf("Error creating page table");
         return;
     }
-    ((uint32_t *) (pdir[ret_addr >> 22] & ~0xFFF))[ret_addr << 10 >> 10 >> 12] = ret_addr | PAGE_PRESENT | PAGE_RW | PAGE_USER;
+    ((uint32_t *) (pdir[ret_addr >> 22] & ~0xFFF))[PTE_IDX(ret_addr)] = ret_addr | PAGE_PRESENT | PAGE_RW | PAGE_USER;
 }
 
 /**
@@ -123,7 +125,7 @@ int vmm_create_page_table(page_dir_t *pdir, vmm_addr_t virt, uint32_t flags) {
 static uint32_t pte_of(page_dir_t *pdir, vmm_addr_t virt) {
     if(pdir[virt >> 22] == 0)
         return 0;
-    return ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12];
+    return ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[PTE_IDX(virt)];
 }
 
 /**
@@ -147,7 +149,7 @@ int vmm_map(page_dir_t *pdir, vmm_addr_t virt, uint32_t flags) {
     } else {
         pdir[virt >> 22] |= (flags & (PAGE_PRESENT | PAGE_RW | PAGE_USER));
     }
-    ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] = phys | flags;
+    ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[PTE_IDX(virt)] = phys | flags;
 
     /* Real CPUs cache "PDE/PTE not present" in the paging-structure caches, so
      * a not-present -> present transition needs a local invlpg too, not only a
@@ -179,7 +181,7 @@ int vmm_map_phys(page_dir_t *pdir, vmm_addr_t virt, mm_addr_t phys, uint32_t fla
     } else {
         pdir[virt >> 22] |= (flags & (PAGE_PRESENT | PAGE_RW | PAGE_USER));
     }
-    ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] = phys | flags;
+    ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[PTE_IDX(virt)] = phys | flags;
 
     {
         uint32_t cr3;
@@ -199,7 +201,7 @@ int vmm_map_phys(page_dir_t *pdir, vmm_addr_t virt, mm_addr_t phys, uint32_t fla
 void *get_phys_addr(page_dir_t *pdir, vmm_addr_t virt) {
     if(pdir[virt >> 22] == 0)
         return 0;
-    return (void *) (((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] >> 12 << 12);
+    return (void *) (((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[PTE_IDX(virt)] >> 12 << 12);
 }
 
 /* Page-directory slots a driver has asked to be visible from every process's
@@ -314,7 +316,7 @@ void vmm_unmap(page_dir_t *pdir, vmm_addr_t virt) {
     if(pdir[virt >> 22] != 0) {
         void *addr = get_phys_addr(pdir, virt);
         if(addr) {
-            ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] = 0;
+            ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[PTE_IDX(virt)] = 0;
             tlb_shootdown(virt);
             pmm_free(addr);
         } else {
@@ -330,7 +332,7 @@ void vmm_unmap(page_dir_t *pdir, vmm_addr_t virt) {
 void vmm_unmap_phys(page_dir_t *pdir, vmm_addr_t virt) {
     uint32_t lf = spin_lock(&vmm_lock);
     if(pdir[virt >> 22] != 0) {
-        ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[virt << 10 >> 10 >> 12] = 0;
+        ((uint32_t *) (pdir[virt >> 22] & ~0xFFF))[PTE_IDX(virt)] = 0;
         tlb_shootdown(virt);
     }
     spin_unlock(&vmm_lock, lf);

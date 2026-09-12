@@ -832,18 +832,21 @@ set, and hands the kernel the framebuffer + the Multiboot2 memory map.
 driver that binds the first controller by class would claim HDMI and produce no
 audible output. `hda_probe()` now skips the Intel iHD (HDMI-only) controllers
 by device ID, so the analog one binds and the built-in speakers work.
-
-**The "hangs at `physical memory`" boot issue.** On real Apple EFI — but not
-under OVMF/QEMU — this kernel used to die silently right after the boot bar
-reached "physical memory": a 64-bit UEFI bootloader can hand a 32-bit Multiboot
-kernel a CPU with CR4 still in a 64-bit-era state (PAE/PGE/PCID set), which
-makes the `CR0.PG`/`CR3` writes for this kernel's non-PAE page tables #GP the
-CPU (a triple fault — invisible on a machine with no UART). `enable_paging()`
-([`mm.c`](mm.c)) now does the transition in the order x86 mandates (paging off
-→ non-PAE CR4 → reload CR3 → paging on). The `bootdiag` GRUB entry adds
-low-pitched sub-step beeps inside `vmm_init` (1 = identity map, 2 = heap, 3 =
-initrd, 4 = CR3 loaded) so a remaining hang there reports exactly which map was
-last reached.
+**The "hangs at `physical memory`" boot issue.** On real Apple EFI — but
+not under OVMF/QEMU — this kernel used to die silently right after the
+boot bar reached "physical memory": a 64-bit UEFI bootloader can hand
+a 32-bit Multiboot kernel a CPU with CR4 still in a 64-bit-era state
+(PAE/PGE/PCID set), which makes the `CR0.PG`/`CR3` writes for this
+kernel's non-PAE page tables #GP the CPU (a triple fault — invisible
+on a machine with no UART). `enable_paging()`
+([`mm.c`](mm.c)) now does the transition in the order x86 mandates
+(paging off → non-PAE CR4 → clear EFER.LME → reload CR3 → paging on).
+On Haswell-class UEFI firmware (MacBook Air 2013), the bootloader can
+also leave `IA32_EFER` Long Mode Enable (LME) bit set; with LME=1 and
+PAE=0, CR0.PG=1 is #GP on Haswell, so LME is cleared before enabling
+paging. The `bootdiag` GRUB entry adds low-pitched sub-step beeps inside
+`vmm_init` (1 = identity map, 2 = heap, 3 = initrd, 4 = CR3 loaded) so
+a remaining hang there reports exactly which map was last reached.
 
 Escape hatches on the GRUB line (press `e`): `nousb` `noahci` `nonvme`
 `nosmp` `nofb` `nosyn`; `bootdiag` beeps + colour-floods the boot progress.
