@@ -32,6 +32,10 @@ static filesystem *devs[MAX_DEVICES];
  */
 static uint32_t fs_saved_flags;
 
+/**
+ * @brief Take the filesystem lock and close the local preemption gate.
+ * @return The previous scheduler state, to hand back to @ref fs_leave.
+ */
 static int fs_enter(void) {
     fs_saved_flags = spin_lock(&fs_lock);
     int prev = get_sched_state();
@@ -39,16 +43,22 @@ static int fs_enter(void) {
     return prev;
 }
 
+/**
+ * @brief Release the filesystem lock and restore preemption.
+ * @param prev The value @ref fs_enter returned.
+ */
 static void fs_leave(int prev) {
     sched_state(prev);
     spin_unlock(&fs_lock, fs_saved_flags);
 }
 
+/** @brief Clear the mount table. No filesystem is visible until @ref vfs_mount. */
 void vfs_init() {
     for(int i = 0; i < MAX_DEVICES; i++)
         devs[i] = 0;
 }
 
+/** @brief Print the mount point of every mounted volume, plus NFS if it is up. */
 void vfs_ls() {
     for(int i = 0; i < MAX_DEVICES; i++) {
         if(devs[i] != 0) {
@@ -61,6 +71,13 @@ void vfs_ls() {
         printf("%s\n", NFS_MOUNTPOINT);
 }
 
+/**
+ * @brief Print a directory listing for the user.
+ * @param dir Device-qualified path, leading slash included ("/hda/sub").
+ *
+ * NFS paths are answered by nfs.c; everything else is dispatched to the
+ * filesystem bound to the device named in the path.
+ */
 void vfs_ls_dir(char *dir) {
     if(nfs_is_mounted() && nfs_owns_path(dir)) {
         nfs_vfs_ls(dir);
@@ -74,6 +91,16 @@ void vfs_ls_dir(char *dir) {
     }
 }
 
+/**
+ * @brief Machine-readable directory listing, for the shell's completion.
+ * @param dir   Device-qualified path.
+ * @param out   Buffer for the packed names.
+ * @param outsz Size of @p out; truncated to fit.
+ * @return Number of entries written, 0 if the path is not a mounted FAT volume.
+ *
+ * NFS returns 0 here on purpose: the NFS client can list to the console but
+ * has no packed form for a caller to parse.
+ */
 int vfs_listdir(char *dir, char *out, uint32_t outsz) {
     if(outsz)
         out[0] = 0;
@@ -88,6 +115,14 @@ int vfs_listdir(char *dir, char *out, uint32_t outsz) {
     return n;
 }
 
+/**
+ * @brief Test whether a path can be entered as a directory.
+ * @param name Device-qualified path.
+ * @return Non-zero if @p name names a directory or a bare mount point.
+ *
+ * A bare mount point ("/hda") is accepted without touching the medium; only a
+ * deeper path is looked up on the filesystem.
+ */
 int vfs_cd(char *name) {
     if(nfs_is_mounted() && nfs_owns_path(name)) {
         if(strchr(name + 1, '/')) {
@@ -111,6 +146,11 @@ int vfs_cd(char *name) {
     return ret;
 }
 
+/**
+ * @brief Create an empty file.
+ * @param name Device-qualified path.
+ * @return Non-zero on success.
+ */
 int vfs_touch(char *name) {
     if(nfs_is_mounted() && nfs_owns_path(name))
         return nfs_vfs_touch(name);
@@ -124,6 +164,11 @@ int vfs_touch(char *name) {
     return ret;
 }
 
+/**
+ * @brief Delete a file.
+ * @param name Device-qualified path.
+ * @return Non-zero on success.
+ */
 int vfs_delete(char *name) {
     if(nfs_is_mounted() && nfs_owns_path(name))
         return nfs_vfs_delete(name);
@@ -137,6 +182,13 @@ int vfs_delete(char *name) {
     return ret;
 }
 
+/**
+ * @brief Open a file into a kernel-heap handle.
+ * @param name Device-qualified path.
+ * @param mode "w" truncates; anything else opens for reading.
+ * @return A handle, never NULL. A failed open comes back with type
+ *         @c FS_NULL and @c dev 0, so @ref vfs_file_close stays in bounds.
+ */
 file *vfs_file_open(char *name, char *mode) {
     file *f = kmalloc(sizeof(file));
     f->type = FS_NULL;
@@ -157,6 +209,13 @@ file *vfs_file_open(char *name, char *mode) {
     return f;
 }
 
+/**
+ * @brief Open a file into a handle allocated on the calling process's heap.
+ * @param name Device-qualified path.
+ * @param mode "w" truncates; anything else opens for reading.
+ * @return The handle, or 0 if there is no current user process or the open
+ *         failed — unlike @ref vfs_file_open, which always returns storage.
+ */
 file *vfs_file_open_user(char *name, char *mode) {
     process_t *cur = current_user_proc();
     if(cur && cur->thread_list) {
@@ -183,6 +242,11 @@ file *vfs_file_open_user(char *name, char *mode) {
     return 0;
 }
 
+/**
+ * @brief Read the next chunk of an open file.
+ * @param f   Handle from @ref vfs_file_open.
+ * @param str Destination buffer, sized by the caller from @c f->len.
+ */
 void vfs_file_read(file *f, char *str) {
     if(f && f->dev == NFS_DEV_ID) {
         nfs_vfs_read(f, str);
@@ -195,6 +259,11 @@ void vfs_file_read(file *f, char *str) {
     }
 }
 
+/**
+ * @brief Append a NUL-terminated string to an open file.
+ * @param f   Handle from @ref vfs_file_open.
+ * @param str Text to write.
+ */
 void vfs_file_write(file *f, char *str) {
     if(f && f->dev == NFS_DEV_ID) {
         nfs_vfs_write(f, str);
@@ -207,6 +276,18 @@ void vfs_file_write(file *f, char *str) {
     }
 }
 
+/**
+ * @brief Write a whole buffer to a path in one call, creating it if needed.
+ * @param name Path, with or without a leading slash.
+ * @param buf  Bytes to write.
+ * @param len  Length of @p buf.
+ * @return @p len on success, -1 on failure.
+ *
+ * The open, the create-if-missing retry, the write and the close all happen
+ * inside one @ref fs_enter region, so a concurrent operation cannot land
+ * between creating the file and filling it. The NFS path writes text only and
+ * ignores @p len.
+ */
 int vfs_spit(char *name, char *buf, uint32_t len) {
     /* Normalise to a leading-slash device path ("/hda/foo"); the FAT hooks
      * want the device-qualified tail ("hda/foo"), i.e. path + 1. */
@@ -248,6 +329,10 @@ int vfs_spit(char *name, char *buf, uint32_t len) {
     return ret;
 }
 
+/**
+ * @brief Close a handle from @ref vfs_file_open and free it.
+ * @param f Handle, may be NULL.
+ */
 void vfs_file_close(file *f) {
     if(f) {
         if(f->dev == NFS_DEV_ID) {
@@ -264,6 +349,11 @@ void vfs_file_close(file *f) {
     }
 }
 
+/**
+ * @brief Close a handle from @ref vfs_file_open_user and free it on the
+ *        process heap.
+ * @param f Handle, may be NULL.
+ */
 void vfs_file_close_user(file *f) {
     if(f) {
         if(devs[f->dev]) {
@@ -278,6 +368,11 @@ void vfs_file_close_user(file *f) {
     }
 }
 
+/**
+ * @brief Map a legacy "hd\\..." / "fd\\..." path to a device index.
+ * @param name Path using a backslash separator after the two-letter device.
+ * @return 1 for hd, 0 for fd, -1 if the path is not in that form.
+ */
 int vfs_get_dev(char *name) {
     if(name[3] == '\\') {
         if(strncmp(name, "hd", 2) == 0)
@@ -288,6 +383,15 @@ int vfs_get_dev(char *name) {
     return -1;
 }
 
+/**
+ * @brief Mount a registered block device and make its filesystem reachable.
+ * @param name Device name as registered, e.g. "hda".
+ *
+ * Parses the BPB, and only on a real FAT volume defragments it and publishes
+ * the filesystem. A device that is not FAT — a disk partitioned for another
+ * OS, a blank one — stays registered as a block device but exposes no
+ * filesystem, and is deliberately not defragmented.
+ */
 void vfs_mount(char *name) {
     device_t *dev = get_dev_by_name(name);
     if(!dev)
@@ -309,6 +413,10 @@ void vfs_mount(char *name) {
     devs[dev->id] = &dev->fs;
 }
 
+/**
+ * @brief Remove a volume's filesystem from the mount table.
+ * @param name Device name as registered.
+ */
 void vfs_unmount(char *name) {
     device_t *dev = get_dev_by_name(name);
     devs[dev->id] = 0;
