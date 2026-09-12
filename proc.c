@@ -15,6 +15,7 @@
 #include <pit.h>
 #include <percpu.h>
 #include <spinlock.h>
+#include <log.h>
 
 /*
  * Process in memory
@@ -351,6 +352,14 @@ int start_kernel_proc(char *name, void (*thread)(void)) {
     static uint32_t kproc_stack_base = (uint32_t) KERNEL_SPACE_END + 0x5000;
 
     uint32_t plf = spin_lock(&proc_lock);
+
+    /* Stay inside the window main.c reserved in the PMM: past it, a stack VA
+     * could be handed to a driver as an identity-mapped DMA frame. */
+    if (kproc_stack_base + 0x4000 > KSTACK_BASE + KSTACK_SIZE) {
+        klogf(LOG_ERR, "proc: kernel stack window full, '%s' not started\n", name);
+        spin_unlock(&proc_lock, plf);
+        return PROC_STOPPED;
+    }
 
     process_t *proc = (process_t *) kmalloc(sizeof(process_t));
     strncpy(proc->name, name, sizeof(proc->name) - 1);

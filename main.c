@@ -292,6 +292,10 @@ void kernel_main(unsigned long magic, unsigned long addr)
     /* Reserve the kernel-heap window so pmm_malloc() never hands out a frame
      * that vmm_init() identity-maps for the heap. */
     pmm_deinit_reg(KHEAP_BASE, KHEAP_SIZE);
+    /* Same for the kernel-thread stack window: a driver that identity-maps a
+     * freshly allocated frame (xHCI scratchpad, EHCI periodic list) must never
+     * get one whose address is already a mapped kernel stack VA. */
+    pmm_deinit_reg(KSTACK_BASE, KSTACK_SIZE);
     klogf(LOG_INFO, "pmm: mem_size=%u KiB  max_frames=%u  used=%u  free=%u KiB\n",
           (unsigned) multiboot2_mem_size, (unsigned) get_max_blocks(),
           (unsigned) get_used_blocks(),
