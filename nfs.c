@@ -874,8 +874,13 @@ static int nfs_do_read(nfs_fh_t *fh, uint8_t sid[16], uint64_t off,
         if (res_op(&o, &s) || s != NFS4_OK) return -1;   /* READ */
         *eof = (int)gx32(&R);
         int dl = gopaque(&R, buf, (int)cnt);
-        if (dl < 0 || R.err) return -1;
-        return dl > (int)cnt ? (int)cnt : dl;
+        /* Same trap as in nfs_do_readdir(): more data than was asked for means
+         * gopaque() copied nothing, so clamping the count here would have
+         * reported a full buffer of uninitialised memory as file content.
+         * A server returning more than the requested count is out of spec;
+         * fail the read. */
+        if (dl < 0 || dl > (int)cnt || R.err) return -1;
+        return dl;
     }
     return -1;
 }
@@ -964,15 +969,23 @@ static void nfs_do_readdir(nfs_fh_t *dir) {
             if (!present) break;
             uint64_t ck = gx64(&R);
             char nm[256];
-            int nl = gopaque(&R, (uint8_t *)nm, 255);
+            int nl = gopaque(&R, (uint8_t *)nm, (int)sizeof nm - 1);
             if (nl < 0) return;
-            if (nl > 255) nl = 255;
-            nm[nl] = 0;
             nfs_attr_t a;
             if (parse_attrs(&a)) return;
             cookie = ck;
             any = 1;
             printed = 1;
+            /* gopaque() consumes the field either way but copies it only if
+             * it fits, so an over-long name left nm untouched - printing it
+             * would show uninitialised stack. The entry is still consumed, so
+             * the reply stream stays in sync and only the name is lost. A
+             * server should never send one: NFS caps a component at 255. */
+            if (nl > (int)sizeof nm - 1) {
+                printf("(name too long)%s  ", a.type == NF4DIR ? "/" : "");
+                continue;
+            }
+            nm[nl] = 0;
             printf("%s%s  ", nm, a.type == NF4DIR ? "/" : "");
         }
         uint32_t eof = gx32(&R);
