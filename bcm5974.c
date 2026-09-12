@@ -88,6 +88,19 @@ void bcm5974_parse_report(const uint8_t *data, int len) {
     if (len < BCM5974_MIN_REPORT)
         return;
 
+    /* First few packets only: dump the leading words of the first finger block
+     * so the real layout can be read off a boot log rather than inferred. abs_x
+     * spans about -4620..5140 and abs_y about -150..6600, so which slot holds
+     * which axis is recognisable at a glance. */
+    static int dumped;
+    if (dumped < 3) {
+        const uint8_t *f0 = data + BCM5974_TYPE3_HEADER;
+        dumped++;
+        klogf(LOG_INFO, "bcm5974: len %d finger[0] %d %d %d %d %d tmaj %d\n",
+              len, le16_to_int(f0 + 0), le16_to_int(f0 + 2), le16_to_int(f0 + 4),
+              le16_to_int(f0 + 6), le16_to_int(f0 + 8), le16_to_int(f0 + 16));
+    }
+
     /* Button state at offset 46 (integrated button for TYPE3) */
     int button_state = le16_to_int(data + BCM5974_TYPE3_BUTTON) & 0x01;
 
@@ -107,9 +120,10 @@ void bcm5974_parse_report(const uint8_t *data, int len) {
         int abs_x = le16_to_int(f + 2);  /* abs_x at offset 2 */
         int abs_y = le16_to_int(f + 4);  /* abs_y at offset 4 */
 
-        /* Invert Y: trackpad origin is top-left, screen origin is bottom-left */
-        abs_y = BCM5974_Y_MIN + BCM5974_Y_MAX - abs_y;
-
+        /* Y is passed through raw. bcm5974_apply_motion() already negates it
+         * once to turn the pad's upward-increasing axis into the screen's
+         * downward-increasing one; flipping it here as well cancelled that out
+         * and left vertical motion running backwards. */
         bcm5974_apply_motion(abs_x, abs_y, button_state);
         finger_found = 1;
         break;  /* Use first valid finger */

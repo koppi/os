@@ -451,13 +451,19 @@ static int configure_iep(int idx, int slot_id, int psi, int port,
     d->iep_dci[iep_idx] = dci;
     d->iep_iface[iep_idx] = iface;
     d->iep_proto[iep_idx] = proto;
-    d->iep_len[iep_idx] = ep_mps;
+    /* Boot reports fit in a single packet, but a BCM5974 TYPE3 report is 66 to
+     * 486 bytes and so spans several. Ask for the whole staging buffer on that
+     * endpoint: the controller then runs as many transactions as it needs and
+     * the short packet (ISP, below) ends the transfer. Requesting only
+     * wMaxPacketSize truncated every report to one packet, leaving it too short
+     * to parse as TYPE3 and misread as a boot mouse report instead. */
+    d->iep_len[iep_idx] = (proto == 3) ? (int) sizeof hid_buf[0][0] : ep_mps;
     d->n_iep++;
 
     /* Arm the first interrupt-IN transfer */
     trb_t nt = {{ 0 }};
     nt.d[0] = (uint32_t)&hid_buf[idx][iep_idx][0];
-    nt.d[2] = ep_mps;
+    nt.d[2] = d->iep_len[iep_idx];
     nt.d[3] = TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_ISP;
     ring_push(int_ring[idx][iep_idx], &d->iep_enq[iep_idx], &d->iep_cycle[iep_idx], nt);
 
