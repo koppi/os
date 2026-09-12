@@ -14,6 +14,7 @@
 #include <mm.h>
 #include <paging.h>
 #include <video.h>
+#include <percpu.h>
 
 /** @brief Kernel-mode fault: route the register dump to the framebuffer too. */
 static inline void diag_to_screen(uint32_t cs) {
@@ -30,6 +31,30 @@ static inline void diag_to_screen(uint32_t cs) {
  */
 static inline int clamp_off(int off, size_t sz) {
     return off > (int)(sz - 1) ? (int)(sz - 1) : off;
+}
+
+/**
+ * @brief Append "who was running" to a fault dump: the process name, thread id
+ *        and that thread's stack bounds.
+ *
+ * Without it a dump only says where the fault landed, not whose stack the
+ * saved ESP belongs to — which is the difference between "this thread ran off"
+ * and "somebody else scribbled on it". Every field is read defensively: the
+ * scheduler state may itself be the thing that is corrupt.
+ */
+static int append_context(char *buf, size_t sz, int off) {
+    cpu_t *c = this_cpu();
+    thread_t *t = c ? c->current : 0;
+    process_t *p = c ? c->current_proc : 0;
+
+    off += snprintf(buf + off, sz - off,
+                    "cpu: %u proc: %s pid: %d ustack: %x klimit: %x\n",
+                    c ? (unsigned) c->index : 0u,
+                    (p && p->name[0]) ? p->name : "?",
+                    t ? (int) t->pid : -1,
+                    t ? t->stack_limit : 0u,
+                    t ? t->stack_kernel_limit : 0u);
+    return clamp_off(off, sz);
 }
 
 /** Entry point jumped to in userspace to unwind a faulted process. */
@@ -269,7 +294,9 @@ void ex_page_fault(struct regs_error *re) {
            re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp,
            re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
     off = clamp_off(off, sizeof buf);
-    snprintf(buf + off, sizeof buf - off, "cr3: %x\n", get_pdbr());
+    off += snprintf(buf + off, sizeof buf - off, "cr3: %x\n", get_pdbr());
+    off = clamp_off(off, sizeof buf);
+    append_context(buf, sizeof buf, off);
     printf("%s", buf);
 
     if(is_user_mode_cs(re->cs)) {
