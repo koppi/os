@@ -54,8 +54,18 @@
 #define PORTSC_CSC      (1u << 17)
 #define PORTSC_PRC      (1u << 21)
 #define PORTSC_SPEED(v) (((v) >> 10) & 0xF)
-/* Writing PORTSC: preserve the RW bits, don't accidentally clear RW1C status. */
-#define PORTSC_RW1C     (PORTSC_CSC | PORTSC_PRC | (1u<<18) | (1u<<20) | (1u<<22))
+/* Bits to force to zero on every PORTSC write.
+ *
+ * The change bits (17-23) are RW1CS, so writing a 1 acknowledges them — but so
+ * is PED (bit 1), where a 1 *disables* the port (xHCI 5.4.8; software must
+ * write 0 there to have no effect). Leaving PED out of this mask meant every
+ * read-modify-write of PORTSC handed the enable bit straight back to the
+ * controller as a disable request: reset_port() would reset a port, the
+ * controller would enable it, and the very next write — acknowledging PRC —
+ * switched it off again, so every port reported "not enabled after reset" and
+ * no device was ever enumerated. */
+#define PORTSC_RW1C     (PORTSC_PED | PORTSC_CSC | (1u<<18) | (1u<<19) | \
+                         (1u<<20) | PORTSC_PRC | (1u<<22) | (1u<<23))
 
 /* Interrupter 0 register set, relative to the runtime base `rt`. */
 #define IR0_IMAN    (0x20 + 0x00)
