@@ -459,11 +459,19 @@ static int enumerate_port(int port) {
     /* 1. Enable Slot */
     trb_t r;
     trb_t es = {{ 0, 0, 0, TRB_TYPE(TRB_ENABLE_SLOT) }};
-    if (cmd_exec(es, &r) != CC_SUCCESS)
+    if (cmd_exec(es, &r) != CC_SUCCESS) {
+        klogf(LOG_WARNING, "xhci: Enable Slot failed on port %d\n", port);
         return -1;
+    }
     int slot_id = (r.d[3] >> 24) & 0xFF;
-    if (slot_id < 1 || slot_id >= MAX_SLOTS)
+    if (slot_id < 1 || slot_id >= MAX_SLOTS) {
+        /* The controller handed back a slot this build has no room for:
+         * MAX_SLOTS caps how many devices can be tracked at once, and the
+         * device is dropped here with no other trace. */
+        klogf(LOG_WARNING, "xhci: port %d got slot %d, past MAX_SLOTS %d\n",
+              port, slot_id, MAX_SLOTS);
         return -1;
+    }
 
     int idx = slot_id;
     xdev_t *d = &xdev[idx];
@@ -775,19 +783,29 @@ int xhci_init(void) {
     klogf(LOG_INFO, "xhci: up  ports %d  slots %d  ctx %dB  op+0x%x\n",
           max_ports, max_slots, ctx_size, caplen);
 
-    /* Power + enumerate every populated port. */
+    /* Power every port first, then let the connects settle before looking at
+     * any of them. A device has up to 100 ms to signal attach once its port is
+     * powered (USB 2.0 9.1.2), and powering one port then sampling CCS 20 ms
+     * later raced that: an always-attached device like the internal
+     * keyboard/trackpad simply read as absent and was skipped for good. */
     for (int p = 1; p <= max_ports; p++) {
         uint32_t v = opr(OP_PORTSC(p - 1));
-        if (!(v & PORTSC_PP)) {
+        if (!(v & PORTSC_PP))
             opw(OP_PORTSC(p - 1), (v & ~PORTSC_RW1C) | PORTSC_PP);
-            pit_busywait_ms(20);
-            v = opr(OP_PORTSC(p - 1));
-        }
+    }
+    pit_busywait_ms(120);
+
+    for (int p = 1; p <= max_ports; p++) {
+        uint32_t v = opr(OP_PORTSC(p - 1));
         if (!(v & PORTSC_CCS))
             continue;
+        klogf(LOG_INFO, "xhci: port %d connected, speed %d\n",
+              p, PORTSC_SPEED(v));
         reset_port(p);
         if (opr(OP_PORTSC(p - 1)) & PORTSC_PED)
             enumerate_port(p);
+        else
+            klogf(LOG_WARNING, "xhci: port %d not enabled after reset\n", p);
     }
     return 1;
 }
