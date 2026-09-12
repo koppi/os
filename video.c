@@ -149,9 +149,12 @@ static void fbcon_scroll(void) {
 }
 
 /**
- * @brief Render one character. Control characters (\n \r \b \t) are handled;
- *        the screen scrolls at the bottom. No-op before @ref vbe_init or when
- *        the framebuffer is unreachable from the running CR3.
+ * @brief Render one character.
+ *
+ * `\n`, `\r`, `\t` and `\b` move the cursor, `\a` is swallowed, and every
+ * other control character below 0x20 is ignored; the screen scrolls at the
+ * bottom. No-op before @ref vbe_init or when the framebuffer is unreachable
+ * from the running CR3.
  */
 void fbcon_putc(char c) {
     if (!fbcon_on || !fb_reachable())

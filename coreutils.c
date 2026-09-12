@@ -1427,9 +1427,16 @@ static void cmd_echo(int argc, char **argv) {
     if (nl) o_nl();
 }
 
-/** printf(1): understands %s %d/%i %u %x %X %o %c %% and backslash escapes.
- *  Field widths/precisions in the format are not supported. The format string
- *  is re-applied while arguments remain, like the real utility. */
+/**
+ * @brief printf(1): render the arguments through a format string.
+ *
+ * Understands `%s`, `%d`/`%i`, `%u`, `%x`, `%X`, `%o`, `%c` and `%%`, plus the
+ * backslash escapes @ref cu_unescape handles. Field widths and precisions are
+ * parsed off and discarded rather than applied, and an unrecognised conversion
+ * is echoed as typed. A conversion with no argument left consumes the empty
+ * string, and the format is re-applied while arguments remain, like the real
+ * utility.
+ */
 static void cmd_printf(int argc, char **argv) {
     if (argc < 2) { printf("usage: printf FORMAT [ARG...]\n"); return; }
     int ai = 2;
