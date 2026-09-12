@@ -30,7 +30,7 @@ computed from the last commit (`ver.h`, `main.c`, `Makefile`).
 * Kernel heap — [`kheap.c`](kheap.c), [`heap.c`](heap.c)
 
 ### CPU / interrupts
-* GDT — [`gdt.c`](gdt.c) / [`gdt_asm.asm`](gdt_asm.asm)
+* GDT — [`gdt.c`](gdt.c) / [`gdt_asm.S`](gdt_asm.S)
 * IDT + exception handlers — [`idt.c`](idt.c), [`exception.c`](exception.c)
 * 8259 PIC remap — [`pic.c`](pic.c)
 * TSS for ring-3 → ring-0 transitions — [`tss.c`](tss.c)
@@ -49,7 +49,7 @@ each is on.
   [`smp.c`](smp.c). `this_cpu()` resolves it from the local APIC id.
 * **AP bring-up**: the BSP parses the ACPI **MADT** ([`acpi.c`](acpi.c)),
   maps + calibrates the Local APIC ([`apic.c`](apic.c)), copies a real-mode
-  trampoline to `0x8000` ([`ap_boot.asm`](ap_boot.asm)) and raises
+  trampoline to `0x8000` ([`ap_boot.S`](ap_boot.S)) and raises
   INIT-SIPI-SIPI. Each AP loads the kernel page tables, sets up its APIC / FPU /
   TSS in `ap_main` and parks until `sched_init` releases it into the scheduler.
 * **SMP scheduler** ([`sched.c`](sched.c)): one global run queue (the process
@@ -289,10 +289,10 @@ for anything more (there is no TLS or resolver cache).
 | Area | Files |
 | --- | --- |
 | Boot RAM disk (Multiboot module, mounted `/rd`) | [`initrd.c`](initrd.c) |
-| ATA / IDE disk (PIO, probed at boot) | [`ata.c`](ata.c), [`ata_asm.asm`](ata_asm.asm) |
+| ATA / IDE disk (PIO, probed at boot) | [`ata.c`](ata.c), [`ata_asm.S`](ata_asm.S) |
 | Floppy disk (+ DMA) | [`floppy.c`](floppy.c), [`dma.c`](dma.c) |
-| PS/2 keyboard (IRQ-driven, ring-buffered) | [`keyboard.c`](keyboard.c), [`keyboard_asm.asm`](keyboard_asm.asm) |
-| PS/2 mouse | [`mouse.c`](mouse.c), [`mouse_asm.asm`](mouse_asm.asm) |
+| PS/2 keyboard (IRQ-driven, ring-buffered) | [`keyboard.c`](keyboard.c), [`keyboard_asm.S`](keyboard_asm.S) |
+| PS/2 mouse | [`mouse.c`](mouse.c), [`mouse_asm.S`](mouse_asm.S) |
 | USB host controllers, polled (UHCI 1.1 / EHCI 2.0 / xHCI 3.x) | [`uhci.c`](uhci.c), [`ehci.c`](ehci.c), [`xhci.c`](xhci.c) |
 | USB core (enumeration, control/interrupt transfers) | [`usb.c`](usb.c) |
 | USB hub (recursive enumeration + hot-plug polling) | [`usb_hub.c`](usb_hub.c) |
@@ -557,8 +557,8 @@ just run — the console has no `$?`.
 ## Layout
 
 ```
-*.c *.S *.asm      kernel sources (flat, top-level)
-*_asm.asm          NASM assembly stubs for the matching driver
+*.c *.S            kernel sources (flat, top-level)
+*_asm.S            GAS assembly stubs for the matching driver
 include/           kernel headers (also include/lib for userspace)
 lib/               minimal userspace C library
 apps/              userspace programs
@@ -587,10 +587,11 @@ This builds the userspace library and apps, compiles the kernel to
 `kernel.elf`, and (via the `iso` target) packs the userland into `initrd.img`
 and produces the bootable, self-contained `os.iso`.
 
-Toolchain: system `gcc -m32` / GNU `ld` (`-melf_i386`), NASM for `.asm` stubs.
-Kernel flags: `-Og -std=gnu11 -ffreestanding -fno-builtin -nodefaultlibs
--fno-stack-protector -m32`, warnings as errors (`-Werror -Wall -Wextra`),
-`-DDEBUG`.
+Toolchain: system `gcc -m32` / GNU `ld` (`-melf_i386`). The `.S` stubs are
+assembled by `gcc` (GNU `as`) — no NASM needed.
+Kernel flags: `-O3 -std=gnu23 -ffreestanding -fno-builtin -nodefaultlibs
+-fno-stack-protector -fno-omit-frame-pointer -m32`, warnings as errors
+(`-Werror -Wall -Wextra -Wunused -pedantic -pedantic-errors`), `-DDEBUG`.
 
 ### FAT images
 
