@@ -118,13 +118,14 @@ int start_proc(char *name, char *arguments) {
  * target process directory, zeroing each. Frames are then unmapped from the
  * kernel directory once seeding is done (stack_fill / heap_fill).
  */
-static int map_user_range(page_dir_t *pdir, vmm_addr_t base, int pages) {
+static int map_user_range(page_dir_t *pdir, vmm_addr_t base, int pages, int user) {
+    uint32_t flags = PAGE_PRESENT | PAGE_RW | (user ? PAGE_USER : 0u);
     for(int i = 0; i < pages; i++) {
         vmm_addr_t va = base + (uint32_t) i * PAGE_SIZE;
         if(!vmm_map(get_kern_directory(), va, PAGE_PRESENT | PAGE_RW) ||
            !vmm_map_phys(pdir, va,
                          (uint32_t) get_phys_addr(get_kern_directory(), va),
-                         PAGE_PRESENT | PAGE_RW | PAGE_USER))
+                         flags))
             return 0;
         memset((void *) va, 0, PAGE_SIZE);
     }
@@ -139,14 +140,20 @@ int build_stack(thread_t *thread, page_dir_t *pdir, int nthreads) {
                     (PROC_USER_STACK_PAGES + PROC_KERNEL_STACK_PAGES + PROC_HEAP_PAGES + 8);
 
     uint32_t ustack_base = thread->image_base + thread->image_size + span;
-    if(!map_user_range(pdir, ustack_base, PROC_USER_STACK_PAGES))
+    if(!map_user_range(pdir, ustack_base, PROC_USER_STACK_PAGES, 1))
         return 0;
     thread->esp = ustack_base;   /* real SP set by stack_fill() */
     thread->stack_limit = ustack_base + PROC_USER_STACK_PAGES * PAGE_SIZE;
 
-    thread->esp_kernel = thread->stack_limit;
+    /* One unmapped page between the two stacks. They used to be adjacent, so a
+     * kernel stack that ran past its bottom walked straight into the top of the
+     * user stack — both mapped, so nothing faulted and the damage only surfaced
+     * later as a return into a wrecked frame. Now it faults on the guard. */
+    thread->esp_kernel = thread->stack_limit + PAGE_SIZE;
     thread->stack_kernel_limit = thread->esp_kernel + PROC_KERNEL_STACK_PAGES * PAGE_SIZE;
-    if(!map_user_range(pdir, thread->esp_kernel, PROC_KERNEL_STACK_PAGES))
+    /* Ring 0 only: this stack holds the saved user context and every kernel
+     * frame a syscall builds. Mapped PAGE_USER it was writable from ring 3. */
+    if(!map_user_range(pdir, thread->esp_kernel, PROC_KERNEL_STACK_PAGES, 0))
         return 0;
 
     return 1;
@@ -160,7 +167,7 @@ int build_heap(thread_t *thread, page_dir_t *pdir, int nthreads) {
                     (PROC_USER_STACK_PAGES + PROC_KERNEL_STACK_PAGES + PROC_HEAP_PAGES + 8);
     vmm_addr_t heap = thread->stack_kernel_limit + span;
 
-    if(!map_user_range(pdir, heap, PROC_HEAP_PAGES))
+    if(!map_user_range(pdir, heap, PROC_HEAP_PAGES, 1))
         return 0;
 
     thread->heap = heap;
