@@ -78,7 +78,7 @@ SMP ?= 4
 # -vga virtio: the modern virtio-gpu 2D device (virtio-vga: keeps VBE for the
 # GRUB hand-off). virtio_gpu.c drives scanout 0 from the framebuffer shadow and
 # follows the SDL/GTK window as it is resized, re-moding the desktop to match.
-QEMUFLAGS += -vga virtio -m 256M -no-reboot
+QEMUFLAGS += -vga virtio -m 512M -no-reboot
 QEMUFLAGS += -smp $(SMP)
 QEMUFLAGS += -device isa-debug-exit,iobase=0xf4,iosize=0x04
 QEMUFLAGS += -enable-kvm

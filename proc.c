@@ -353,10 +353,15 @@ void remove_proc(int pid) {
  * Creates a kernel process from a function
  */
 int start_kernel_proc(char *name, void (*thread)(void)) {
-    /* Each kernel process gets its own stack window above KERNEL_SPACE_END;
-     * bump the base so a second (third, ...) kernel thread does not land on
-     * the previous one's stack. */
-    static uint32_t kproc_stack_base = (uint32_t) KERNEL_SPACE_END + 0x5000;
+    /* Each kernel process gets its own stack window below the user-image base.
+     * The old base (KERNEL_SPACE_END + 0x5000 = 0x805000) sat INSIDE the
+     * programs' address space: every `link.lds` in apps/ links at `. = 8M`, and
+     * load_elf_relocate() maps and copies the image (e.g. /rd/zsh, 27 KB) right
+     * over these live stacks, corrupting the running kernel thread. Place them
+     * in the free identity-mapped window 0x440000..0x600000, just past the
+     * page-table storage window (page_start .. 0x43c000). Bump the base so a
+     * second (third, ...) kernel thread does not land on the previous one. */
+    static uint32_t kproc_stack_base = 0x440000;
 
     uint32_t plf = spin_lock(&proc_lock);
 
