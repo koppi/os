@@ -2,6 +2,13 @@
  * This file is part of the Linux-8086 C library and is distributed
  * under the GNU Library General Public License.
  */
+/**
+ * @file ctype.c
+ * @brief Character classification and case conversion.
+ *
+ * Vendored from dev86 (Robert de Bath). Freestanding builds get no libc, so
+ * @c isalpha and friends are provided here for both kernel and userspace.
+ */
 
 /*
  *  CTYPE.C	Character classification and conversion

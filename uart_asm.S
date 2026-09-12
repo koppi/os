@@ -1,5 +1,9 @@
-/*
- *  uart_asm.S
+/**
+ * @file uart_asm.S
+ * @brief Interrupt stub for the 16550 UART.
+ *
+ * Saves the register frame, switches to the kernel data selectors and calls
+ * @c uart_handler to drain the receive FIFO into the console ring.
  */
 
     .extern uart_handler

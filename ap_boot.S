@@ -1,5 +1,6 @@
-/*
- *  ap_boot.S - SMP application-processor boot trampoline.
+/**
+ * @file ap_boot.S
+ * @brief SMP application-processor boot trampoline.
  *
  *  Assembled to a flat ELF (link script sets VMA/LMA = 0x8000) and wrapped as a
  *  flat binary via objcopy; C accesses it via

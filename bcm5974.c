@@ -4,8 +4,15 @@
  *
  * The BCM5974 is used in MacBook Air/Pro (2012-2015 era) as the internal
  * trackpad controller. It speaks a custom binary format over USB interrupt
- * endpoint 0x83 (not HID), and requires a mode switch control transfer to
- * enable "wellspring mode" (multi-touch).
+ * endpoint 0x83 rather than HID reports, even though the interface advertises
+ * itself as a HID mouse — which is what xhci.c matches on to route it here.
+ *
+ * TYPE3 needs no "wellspring mode" mode-switch control transfer (Linux's
+ * bcm5974_wellspring_mode() returns early for it); it comes up in multi-touch
+ * already. It can arrive in HID boot protocol, though, because Apple's firmware
+ * uses the topcase for its own boot-time input, so xhci.c asks for the report
+ * protocol explicitly and falls back to parsing a boot mouse report if a packet
+ * turns up too short to be a TYPE3 one.
  *
  * For MacBook Air 6,2 (2013, wellspring 8): TYPE3 trackpad format
  *   Endpoint: 0x83 (interrupt IN)

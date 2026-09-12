@@ -1,5 +1,10 @@
-/*
- *  pci_ac97_asm.S
+/**
+ * @file pci_ac97_asm.S
+ * @brief Interrupt stub for the AC'97 audio controller.
+ *
+ * Saves the register frame, switches to the kernel data selectors (an interrupt
+ * can arrive while ring 3 is current, so its segments cannot be trusted) and
+ * calls @c ac97_irq_handler.
  */
 
     .extern ac97_irq_handler

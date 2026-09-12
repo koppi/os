@@ -1,6 +1,10 @@
 /*
  *	ctype.h		Character classification and conversion
  */
+/**
+ * @file ctype.h
+ * @brief Character classification and case conversion (see ctype.c).
+ */
 
 #ifndef __CTYPE_H
 #define __CTYPE_H

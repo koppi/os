@@ -1,3 +1,10 @@
+/**
+ * @file qsort_r.c
+ * @brief Reentrant @c qsort_r(): quicksort over arbitrary element sizes.
+ *
+ * Takes an opaque argument alongside the comparator, so it needs no globals and
+ * is safe to call from more than one thread at once.
+ */
 #include <stdlib.h>
 
 

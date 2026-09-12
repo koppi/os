@@ -1,5 +1,9 @@
-/*
- *  floppy_asm.S
+/**
+ * @file floppy_asm.S
+ * @brief Interrupt stub for the floppy controller (IRQ 6).
+ *
+ * Bumps @c floppy_irq_done, which floppy.c spins on while waiting for a seek
+ * or a DMA transfer to finish, then EOIs the master PIC.
  */
 
     .extern floppy_irq_done

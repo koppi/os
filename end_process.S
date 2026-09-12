@@ -1,5 +1,9 @@
-/*
- *  end_process.S
+/**
+ * @file end_process.S
+ * @brief Syscall trampoline that terminates the calling process.
+ *
+ * Reached through the syscall table from @c syscall_disp(); forwards the
+ * process's return value to @c end_proc() and never comes back.
  */
 
     .extern end_proc

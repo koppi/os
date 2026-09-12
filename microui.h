@@ -4,6 +4,10 @@
 ** This library is free software; you can redistribute it and/or modify it
 ** under the terms of the MIT license. See `microui.c` for details.
 */
+/**
+ * @file microui.h
+ * @brief Interface to the vendored microui toolkit (see microui.c).
+ */
 
 #ifndef MICROUI_H
 #define MICROUI_H

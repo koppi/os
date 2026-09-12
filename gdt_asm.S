@@ -14,6 +14,14 @@
  *  limitations under the License.
  */
 
+/**
+ * @file gdt_asm.S
+ * @brief Loads the GDT and reloads the segment registers.
+ *
+ * @c gdt_set issues @c lgdt on the descriptor it is given, then reloads every
+ * data segment and far-jumps to reload CS, which is the only way to change it.
+ */
+
     .globl gdt_set
     .type gdt_set, @function
 gdt_set:

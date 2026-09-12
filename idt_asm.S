@@ -1,5 +1,11 @@
-/*
- *  idt_asm.S
+/**
+ * @file idt_asm.S
+ * @brief Loads the IDT and reloads the segment registers.
+ *
+ * @c idt_set takes a pointer to the IDT descriptor, issues @c lidt, then points
+ * every data segment and SS at the kernel data selector and far-jumps to reload
+ * CS — a jump is the only way to change CS, and it must happen before the new
+ * descriptors are used.
  */
 
     .globl idt_set

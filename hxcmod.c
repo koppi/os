@@ -52,6 +52,13 @@
 // -------------------------------------------
 ///////////////////////////////////////////////////////////////////////////////////
 
+/**
+ * @file hxcmod.c
+ * @brief Amiga MOD player core: pattern sequencing and sample mixing.
+ *
+ * Vendored from the HxCModPlayer project. Driven by sb16.c / hda.c, which hand
+ * it a buffer to fill each time the sound card finishes a half of its DMA ring.
+ */
 #include "hxcmod.h"
 
 ///////////////////////////////////////////////////////////////////////////////////

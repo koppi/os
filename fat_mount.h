@@ -14,6 +14,14 @@
  *  See the License for the specific language governing permissions and
  *  limitations under the License.
  */
+/**
+ * @file fat_mount.h
+ * @brief Geometry of one mounted FAT volume.
+ *
+ * Filled in by @c fat_mount() from the BPB and consulted on every read: where
+ * the FATs, the root directory and the data area start, and how big a cluster
+ * is. One of these exists per mounted volume.
+ */
 #ifndef FAT12_MOUNT_H
 #define FAT12_MOUNT_H
 

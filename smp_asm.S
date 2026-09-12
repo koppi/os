@@ -1,5 +1,6 @@
-/*
- *  smp_asm.S - Local APIC interrupt stubs.
+/**
+ * @file smp_asm.S
+ * @brief Local APIC interrupt stubs.
  *
  *  lapic_timer_int    LAPIC timer tick (drives per-CPU preemption instead of the
  *                     PIT). Bumps the local CPU's sched_ticks via a C helper,

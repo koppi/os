@@ -14,6 +14,17 @@
  *  limitations under the License.
  */
 
+/**
+ * @file exception_asm.S
+ * @brief Assembly entry points for the CPU exception and syscall vectors.
+ *
+ * Each stub saves a register frame in the layout @c struct regs / @c regs_error
+ * describes, switches to the kernel data selectors and calls the matching C
+ * handler in exception.c. The vectors that push an error code (\#GP, \#PF) and
+ * those that do not are handled separately, so the frame the C side receives is
+ * the same shape either way.
+ */
+
     .extern ex_gpf
 
     .globl gpf_handle

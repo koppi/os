@@ -26,6 +26,14 @@
  * @brief Scalable Screen Font renderer in a single ANSI C/C++ header
  *
  */
+/**
+ * @file ssfn.h
+ * @brief Scalable Screen Font renderer, header-only.
+ *
+ * Vendored from bzt's ssfn. video.c uses the simple renderer to draw the
+ * console font into the framebuffer; the font itself is the unifont.sfn blob
+ * linked into the image.
+ */
 
 #ifndef _SSFN_H_
 #define _SSFN_H_

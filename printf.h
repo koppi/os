@@ -35,6 +35,10 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+/**
+ * @file printf.h
+ * @brief Interface to the vendored freestanding printf (see printf.c).
+ */
 
 #ifndef PRINTF_H_
 #define PRINTF_H_

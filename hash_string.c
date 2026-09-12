@@ -15,6 +15,12 @@ LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,
 NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
 CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 */
+/**
+ * @file hash_string.c
+ * @brief String hash functions used by @ref hashtable.c.
+ *
+ * Vendored from Michael J Welsh's container library.
+ */
 
 #include <assert.h>
 

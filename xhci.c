@@ -1,11 +1,19 @@
 /**
  * @file xhci.c
- * @brief Polled xHCI driver for USB HID boot keyboards / mice.
+ * @brief Polled xHCI driver for USB input devices.
  *
  * Scope on purpose: controller bring-up, root-port reset, device enumeration
- * (Enable Slot / Address Device / Configure Endpoint), synchronous control
- * transfers and interrupt-IN polling for the HID boot protocol. No MSI, no
- * streams, no mass storage. Structures live in identity-mapped .bss so their
+ * (Enable Slot / Address Device / Evaluate Context / Configure Endpoint),
+ * synchronous control transfers and interrupt-IN polling. No MSI, no streams,
+ * no mass storage.
+ *
+ * Covers HID boot keyboards and mice, and the Apple topcase, which is one
+ * composite device carrying both: a boot keyboard on one interface and a
+ * BCM5974 multi-touch trackpad on another, so a slot can have more than one
+ * interrupt endpoint configured at once and each is dispatched to its own
+ * report handler (@ref bcm5974_parse_report for the trackpad).
+ *
+ * Structures live in identity-mapped .bss so their
  * address is their physical address; the register block is mapped 1:1
  * cache-disabled and shared into every address space (the USB thread is a
  * kernel thread, but keeping it uniform with AHCI costs nothing).

@@ -1,3 +1,14 @@
+/**
+ * @file boot.S
+ * @brief Multiboot headers and the kernel entry point.
+ *
+ * Carries both a Multiboot 1 and a Multiboot 2 header so the same image boots
+ * from a BIOS GRUB and from a UEFI one, and asks the loader for a linear
+ * framebuffer without pinning a mode — a laptop panel's GOP offers only its own
+ * native size, and the kernel reads whatever width and pitch it is handed.
+ * @c _start sets up the boot stack and calls @c kernel_main with the Multiboot
+ * magic and info pointer.
+ */
 #define ASM_FILE        1
 
 #include <multiboot.h>

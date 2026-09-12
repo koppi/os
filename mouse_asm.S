@@ -14,6 +14,14 @@
  *  limitations under the License.
  */
 
+/**
+ * @file mouse_asm.S
+ * @brief Interrupt stub for the PS/2 mouse (IRQ 12).
+ *
+ * Saves the register frame, switches to the kernel data selectors and calls the
+ * C handler, which assembles the three- or four-byte movement packet.
+ */
+
     .extern mouse_handler
 
     .globl mouse_int

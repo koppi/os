@@ -1,5 +1,9 @@
-/*
- *  ata_asm.S
+/**
+ * @file ata_asm.S
+ * @brief Interrupt stub for the PIO ATA/IDE driver.
+ *
+ * Bumps @c ata_irq_done so the polling code in ata.c can tell the interrupt
+ * arrived, then EOIs both PICs — the IDE channels sit on the slave.
  */
 
     .extern ata_irq_done

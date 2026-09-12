@@ -14,6 +14,14 @@
  *  limitations under the License.
  */
 
+/**
+ * @file keyboard_asm.S
+ * @brief Interrupt stub for the PS/2 keyboard (IRQ 1).
+ *
+ * Saves the register frame, switches to the kernel data selectors and calls the
+ * C handler, which reads the scancode and pushes it into the keystroke ring.
+ */
+
     .extern keyboard_read_key
 
     .globl keyboard_int

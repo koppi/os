@@ -2,10 +2,16 @@
  * @file exception.c
  * @brief C side of the CPU-exception handlers.
  *
- * Each handler prints a diagnostic. If the fault happened in kernel mode
- * (DS == 0x10) it is unrecoverable and the machine panics; if it
- * happened in ring 3 the current process is torn down via
- * @ref return_exception instead.
+ * Each handler prints a diagnostic, then either panics or tears down the
+ * offending process. Ring is decided from the RPL bits of the saved code
+ * selector (@ref is_user_mode_cs): a kernel-mode fault is unrecoverable and
+ * panics, a ring-3 fault unwinds the process through @ref return_exception.
+ * Testing the *data* selector instead gets this backwards for a kernel fault,
+ * which carries cs 0x08 but says nothing useful in DS.
+ *
+ * A dump is assembled in one stack buffer and emitted with a single printf.
+ * con_lock only spans one call, so a dump split across several would let
+ * another CPU's log output land in the middle of it.
  */
 #include <io.h>
 #include <panic.h>

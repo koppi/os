@@ -19,6 +19,14 @@
 // This software is released as-is into the public domain, as described at
 // https://unlicense.org. Do whatever you like with it.
 
+/**
+ * @file arith64.c
+ * @brief 64-bit integer arithmetic helpers that libgcc would normally supply.
+ *
+ * Vendored from github.com/glitchub/arith64. The kernel links @c -nodefaultlibs,
+ * so the @c __divdi3 / @c __moddi3 family the compiler emits for @c long @c long
+ * division has to come from somewhere in-tree.
+ */
 #define arith64_u64 unsigned long long int
 #define arith64_s64 signed long long int
 #define arith64_u32 unsigned int

@@ -14,6 +14,16 @@
  *  limitations under the License.
  */
 
+/**
+ * @file pit_asm.S
+ * @brief Timer interrupt stub (IRQ 0) and the fork return trampoline.
+ *
+ * @c pit_int saves the register frame and calls into pit.c, which advances the
+ * tick count and may run the scheduler. @c fork_eip pops the return address and
+ * jumps to it, so a freshly built thread stack returns into ordinary C code the
+ * first time it is scheduled.
+ */
+
 /* The PIT keeps running for the free-running ms clock (pit_uptime) and the
  * legacy tick counter. Preemption is no longer driven from here: it moved to the
  * per-CPU LAPIC timer (see smp_asm.S / lapic_timer_tick). */

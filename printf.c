@@ -36,6 +36,14 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE.
  */
+/**
+ * @file printf.c
+ * @brief Freestanding printf family, with no libc and no heap behind it.
+ *
+ * Vendored from eyalroz/printf. Every console path ends up here; @c vprintf_
+ * holds @ref con_lock across a whole call so one line cannot interleave with
+ * another CPU's output.
+ */
 
 // Define this globally (e.g. gcc -DPRINTF_INCLUDE_CONFIG_H=1 ...) to include the
 // printf_config.h header file

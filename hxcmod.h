@@ -16,6 +16,10 @@
 //
 // Change History (most recent first):
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @file hxcmod.h
+ * @brief Interface to the vendored HxCModPlayer core (see hxcmod.c).
+ */
 #ifndef MODPLAY_DEF
 #define MODPLAY_DEF
 

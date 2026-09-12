@@ -19,6 +19,14 @@
 ** FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
 ** IN THE SOFTWARE.
 */
+/**
+ * @file microui.c
+ * @brief Immediate-mode GUI toolkit behind the desktop.
+ *
+ * Vendored from rxi/microui. graphics.c drives it: it feeds mouse and keyboard
+ * input in, walks the resulting command list every frame, and renders through
+ * renderer.c.
+ */
 
 
 #include <stdlib.h>

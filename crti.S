@@ -1,3 +1,11 @@
+/**
+ * @file crti.S
+ * @brief Prologue halves of @c _init and @c _fini.
+ *
+ * Linked before crtbegin.o so the compiler's own .init/.fini fragments land
+ * between this and crtn.S, which closes the frames. Together they give the
+ * kernel working global constructors.
+ */
 .section .init
 .global _init
 .type _init, @function

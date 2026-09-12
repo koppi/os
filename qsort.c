@@ -1,3 +1,10 @@
+/**
+ * @file qsort.c
+ * @brief Standard @c qsort(), implemented on top of @c qsort_r().
+ *
+ * The comparator is passed through as the reentrant version's opaque argument,
+ * so there is only one sort implementation to maintain.
+ */
 #include <types.h>
 #include <stdlib.h>
 
