@@ -28,6 +28,7 @@
 #include <apic.h>
 #include <percpu.h>
 #include <spinlock.h>
+#include <panic.h>
 
 #include <commands.h>
 #include <graphics.h>
@@ -362,6 +363,11 @@ static inline int proc_runnable(process_t *proc) {
 /** @brief Pack a resume-ESP + a CR3-to-load (0 = keep current) for the stub. */
 #define SCHED_RESUME(esp, cr3) (((uint64_t)(uint32_t)(cr3) << 32) | (uint32_t)(esp))
 
+/** How far below its recorded top a thread's kernel ESP may legitimately sit.
+ *  Generous: the largest kernel stack here is 8 KiB, so anything past this is
+ *  not a deep call chain, it is the wrong stack entirely. */
+#define SCHED_KSTACK_SPAN 0x10000u
+
 uint64_t schedule(uint32_t esp) {
     if (list == 0)
         return esp;
@@ -466,6 +472,22 @@ uint64_t schedule(uint32_t esp) {
     if (nxt_t != save_from) {
         asm volatile("fxsave (%0)" :: "r"(save_from->fpu_state) : "memory");
         asm volatile("fxrstor (%0)" :: "r"(nxt_t->fpu_state) : "memory");
+    }
+
+    /* The ESP we are about to resume on must lie inside the incoming thread's
+     * own kernel stack. Anything else means its control block is carrying a
+     * stack that is not its own, and switching to it drops the thread onto
+     * memory it never owned — it then returns through whatever happens to be
+     * there, surfacing much later as a jump to a garbage address. Stop here,
+     * while the thread responsible is still named. */
+    if (nxt_t->esp_kernel > nxt_t->stack_kernel_limit ||
+        nxt_t->esp_kernel + SCHED_KSTACK_SPAN < nxt_t->stack_kernel_limit) {
+        uint32_t bad = nxt_t->esp_kernel, top = nxt_t->stack_kernel_limit;
+        int pid = (int) nxt_t->pid;
+        const char *nm = nxt_p ? nxt_p->name : "idle";
+        spin_unlock(&sched_lock, f);
+        panic("schedule: %s pid %d resume esp %x outside kernel stack (top %x)\n",
+              nm, pid, bad, top);
     }
 
     set_esp0(nxt_t->stack_kernel_limit);
