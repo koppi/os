@@ -44,23 +44,40 @@
 
 /* ------------------------------------------------------------------ output -- */
 
+/** @brief Write a NUL-terminated string to the console. */
 static void o_str(const char *s)              { for (; *s; s++) putchar_(*s); }
+/** @brief Write @p n bytes, NULs included, to the console. */
 static void o_buf(const char *s, unsigned n)  { for (unsigned i = 0; i < n; i++) putchar_(s[i]); }
+/** @brief Write a newline. */
 static void o_nl(void)                        { putchar_('\n'); }
 
 /* ---------------------------------------------------------- string helpers -- */
 
+/** @brief strlen for const strings, without the cast lib/string.h needs. */
 static int  s_len(const char *s) { int n = 0; while (s[n]) n++; return n; }
+/** @brief String equality. @return Non-zero if @p a and @p b match. */
 static int  s_eq(const char *a, const char *b) { return strcmp((char *)a, (char *)b) == 0; }
 
+/**
+ * @brief Copy @p s into @p d, always NUL-terminating.
+ * @param d   Destination.
+ * @param s   Source.
+ * @param cap Size of @p d; at most @p cap - 1 characters are copied.
+ *
+ * Unlike strncpy this never leaves @p d unterminated, which the fixed-size
+ * buffers all over this file rely on.
+ */
 static void s_cpy(char *d, const char *s, int cap) {
     int i = 0;
     for (; s[i] && i < cap - 1; i++) d[i] = s[i];
     d[i] = 0;
 }
 
+/** @brief ASCII lowercase. Bytes outside A-Z pass through unchanged. */
 static char lc(char c) { return (c >= 'A' && c <= 'Z') ? (char)(c + 32) : c; }
+/** @brief True for the six ASCII whitespace characters isspace() accepts. */
 static int  is_ws(char c) { return c == ' ' || c == '\t' || c == '\r' || c == '\n' || c == '\f' || c == '\v'; }
+/** @brief True for ASCII '0'-'9'. */
 static int  is_digit(char c) { return c >= '0' && c <= '9'; }
 
 /** Signed decimal parse that stops at the first non-digit (unlike lib/atoi). */
@@ -96,6 +113,15 @@ static const char *s_find(const char *hay, const char *needle, int fold) {
 static char  cu_linebuf[512];
 static char *cu_argv[CU_MAXARG];
 
+/**
+ * @brief Split a command line into argv on spaces and tabs.
+ * @param line The line; it is copied first, so the caller's buffer is untouched.
+ * @return The argument count, at most @ref CU_MAXARG.
+ *
+ * Words are cut in a private copy (@c cu_linebuf) and @c cu_argv points into
+ * it, so both stay valid until the next call. There is no quoting and no
+ * escaping: the console has no shell grammar, so "a b" is two arguments.
+ */
 static int cu_split(char *line) {
     s_cpy(cu_linebuf, line, sizeof cu_linebuf);
     int argc = 0;
@@ -112,6 +138,12 @@ static int cu_split(char *line) {
 
 /* --------------------------------------------------------- file reading ----- */
 
+/**
+ * @brief Resolve @p name against the console's cwd and open it for reading.
+ * @param name Path as typed, absolute or relative.
+ * @return An open handle, or 0 after printing the reason (path too long, or
+ *         no such file). A directory counts as "no such file" here.
+ */
 static file *cu_fopen(const char *name) {
     char path[96];
     if (!console_resolve_path(path, sizeof path, name)) {
@@ -154,6 +186,12 @@ struct cu_lines {
     void       *ctx;
 };
 
+/**
+ * @brief @ref cu_chunks callback that reassembles lines for @ref cu_lines.
+ *
+ * Drops CR so CRLF files read the same as LF ones, and silently truncates a
+ * line longer than @c struct @c cu_lines::line rather than splitting it.
+ */
 static int cu__line_chunk(const char *buf, unsigned n, void *v) {
     struct cu_lines *L = v;
     for (unsigned i = 0; i < n; i++) {
@@ -170,6 +208,16 @@ static int cu__line_chunk(const char *buf, unsigned n, void *v) {
     return 0;
 }
 
+/**
+ * @brief Feed @p f to @p fn one line at a time.
+ * @param f   Open file.
+ * @param fn  Called per line with (text, length, 1-based number, @p ctx);
+ *            a non-zero return stops the scan.
+ * @param ctx Passed through to @p fn.
+ *
+ * A trailing fragment with no final newline is delivered as a last line, but
+ * only if @p fn did not already ask to stop.
+ */
 static void cu_lines(file *f, cu_line_fn fn, void *ctx) {
     struct cu_lines L;
     L.len = 0; L.no = 0; L.fn = fn; L.ctx = ctx;
@@ -191,6 +239,12 @@ static char cu_pool[CU_POOL_LINES][CU_POOL_W];
 static int  cu_pool_n;
 static int  cu_pool_over;
 
+/**
+ * @brief @ref cu_lines callback that copies lines into @ref cu_pool.
+ *
+ * Stops the scan and sets @c cu_pool_over once the pool is full; a line wider
+ * than @ref CU_POOL_W is truncated rather than dropped.
+ */
 static int cu__pool_line(const char *line, unsigned len, unsigned no, void *ctx) {
     (void)no; (void)ctx;
     if (cu_pool_n >= CU_POOL_LINES) { cu_pool_over = 1; return 1; }
@@ -222,6 +276,12 @@ static char     *cu_io;
 static unsigned  cu_io_len;
 
 struct cu_io_fill { unsigned cap; };
+/**
+ * @brief @ref cu_chunks callback that appends to the @ref cu_io heap buffer.
+ *
+ * Stops the scan rather than overrunning if the file turns out longer than the
+ * block that was sized from @c f->len.
+ */
 static int cu__io_chunk(const char *b, unsigned n, void *v) {
     struct cu_io_fill *s = v;
     if (cu_io_len + n > s->cap) return 1;
@@ -256,6 +316,11 @@ static int cu_slurp_heap(const char *name) {
     return 0;
 }
 
+/**
+ * @brief Release the buffer @ref cu_slurp_heap allocated.
+ *
+ * Safe to call when no buffer is live, so an error path can call it blindly.
+ */
 static void cu_free_heap(void) {
     if (cu_io) { kfree(cu_io); cu_io = 0; }
     cu_io_len = 0;
@@ -265,9 +330,16 @@ static void cu_free_heap(void) {
  *  file / text commands
  * ========================================================================= */
 
+/** @brief @ref cu_chunks callback for plain `cat`: copy bytes straight out. */
 static int cu__cat_raw(const char *b, unsigned n, void *c) { (void)c; o_buf(b, n); return 0; }
 
 struct catn { unsigned no; };
+/**
+ * @brief @ref cu_lines callback for `cat -n`.
+ *
+ * Numbers from its own counter rather than @p no so that several files
+ * numbered in one command continue the sequence, as cat(1) does.
+ */
 static int cu__cat_num(const char *l, unsigned len, unsigned no, void *v) {
     (void)len; (void)no;
     struct catn *c = v;
@@ -276,6 +348,12 @@ static int cu__cat_num(const char *l, unsigned len, unsigned no, void *v) {
     return 0;
 }
 
+/**
+ * @brief cat(1): concatenate files to the console.
+ *
+ * Accepts -n (number lines) and --. Without -n the bytes are streamed
+ * untouched, so binary files come out verbatim.
+ */
 static void cmd_cat(int argc, char **argv) {
     int number = 0, first = 1;
     struct catn cn = { 0 };
@@ -293,6 +371,7 @@ static void cmd_cat(int argc, char **argv) {
 }
 
 struct headctx { int limit, printed; };
+/** @brief @ref cu_lines callback for `head`: print until the limit is hit. */
 static int cu__head_line(const char *l, unsigned len, unsigned no, void *v) {
     (void)len; (void)no;
     struct headctx *h = v;
@@ -317,6 +396,11 @@ static int ht_parse(int argc, char **argv, int *limit, char **files) {
     return nf;
 }
 
+/**
+ * @brief head(1): print the first N lines of each file. N defaults to 10.
+ *
+ * Prints a "==> name <==" banner when given more than one file.
+ */
 static void cmd_head(int argc, char **argv) {
     int limit = 10;
     char *files[CU_MAXARG];
@@ -332,6 +416,13 @@ static void cmd_head(int argc, char **argv) {
     }
 }
 
+/**
+ * @brief tail(1): print the last N lines of each file. N defaults to 10.
+ *
+ * The file has to be buffered to find its end, so this goes through
+ * @ref cu_pool and sees only the first @ref CU_POOL_LINES lines of a long
+ * file — it says so rather than printing the wrong tail silently.
+ */
 static void cmd_tail(int argc, char **argv) {
     int limit = 10;
     char *files[CU_MAXARG];
@@ -348,6 +439,12 @@ static void cmd_tail(int argc, char **argv) {
 }
 
 struct wcctx { unsigned l, w, c; int inword; };
+/**
+ * @brief @ref cu_chunks callback for `wc`: count lines, words and bytes.
+ *
+ * A word ends at any @ref is_ws byte, and the line count is newline
+ * characters, so a file without a final newline counts one line fewer.
+ */
 static int cu__wc_chunk(const char *b, unsigned n, void *v) {
     struct wcctx *x = v;
     for (unsigned i = 0; i < n; i++) {
@@ -359,6 +456,13 @@ static int cu__wc_chunk(const char *b, unsigned n, void *v) {
     return 0;
 }
 
+/**
+ * @brief wc(1): count lines, words and bytes.
+ *
+ * Accepts -l, -w and -c; -m is treated as -c, there being no multibyte
+ * decoding. With no selector all three are printed. A "total" line follows
+ * when more than one file was read successfully.
+ */
 static void cmd_wc(int argc, char **argv) {
     int wl = 0, ww = 0, wc = 0, files = 0;
     for (int i = 1; i < argc; i++) {
@@ -398,6 +502,11 @@ struct grepctx {
     int fold, invert, showno, count, prefix;
     unsigned hits;
 };
+/**
+ * @brief @ref cu_lines callback for `grep`: match, count and print one line.
+ *
+ * Always scans to the end of the file, since -c needs the full count.
+ */
 static int cu__grep_line(const char *l, unsigned len, unsigned no, void *v) {
     (void)len;
     struct grepctx *g = v;
@@ -411,6 +520,13 @@ static int cu__grep_line(const char *l, unsigned len, unsigned no, void *v) {
     return 0;
 }
 
+/**
+ * @brief grep(1): print lines containing a pattern.
+ *
+ * Accepts bundled -i, -v, -n and -c. The pattern is a literal substring, not
+ * a regular expression, which is also why egrep and fgrep are aliases of this
+ * same function. With several files each line is prefixed with its filename.
+ */
 static void cmd_grep(int argc, char **argv) {
     struct grepctx g = { 0, 0, 0, 0, 0, 0, 0, 0 };
     int ai = 1, files = 0;
@@ -443,6 +559,12 @@ static void cmd_grep(int argc, char **argv) {
     }
 }
 
+/**
+ * @brief @ref cu_lines callback for `nl`.
+ *
+ * Empty lines are echoed without consuming a number, matching nl(1)'s default
+ * numbering of non-empty lines only.
+ */
 static int cu__nl_line(const char *l, unsigned len, unsigned no, void *v) {
     unsigned *n = v;
     (void)no;
@@ -450,6 +572,11 @@ static int cu__nl_line(const char *l, unsigned len, unsigned no, void *v) {
     else o_nl();
     return 0;
 }
+/**
+ * @brief nl(1): number the non-empty lines of each file.
+ *
+ * The count runs across all the files named in one command.
+ */
 static void cmd_nl(int argc, char **argv) {
     if (argc < 2) { printf("usage: nl FILE...\n"); return; }
     unsigned n = 0;
@@ -461,6 +588,12 @@ static void cmd_nl(int argc, char **argv) {
     }
 }
 
+/**
+ * @brief tac(1): print each file's lines in reverse.
+ *
+ * Buffered through @ref cu_pool, so a file longer than @ref CU_POOL_LINES
+ * lines is reversed only as far as the pool reached.
+ */
 static void cmd_tac(int argc, char **argv) {
     if (argc < 2) { printf("usage: tac FILE...\n"); return; }
     for (int i = 1; i < argc; i++) {
@@ -469,12 +602,14 @@ static void cmd_tac(int argc, char **argv) {
     }
 }
 
+/** @brief @ref cu_lines callback for `rev`: print one line back to front. */
 static int cu__rev_line(const char *l, unsigned len, unsigned no, void *v) {
     (void)no; (void)v;
     for (int i = (int)len - 1; i >= 0; i--) putchar_(l[i]);
     o_nl();
     return 0;
 }
+/** @brief rev(1): reverse the characters of every line. Streams, unlike tac. */
 static void cmd_rev(int argc, char **argv) {
     if (argc < 2) { printf("usage: rev FILE...\n"); return; }
     for (int i = 1; i < argc; i++) {
@@ -488,11 +623,25 @@ static void cmd_rev(int argc, char **argv) {
 /* cut -----------------------------------------------------------------------*/
 struct cutctx { int mode_c; char delim; unsigned lo[16], hi[16]; int nr; };
 
+/**
+ * @brief Test a field or column number against the parsed -f/-c list.
+ * @param c     Parsed cut state.
+ * @param field 1-based field or character position.
+ * @return Non-zero if it falls in any of the selected ranges.
+ */
 static int cut_wanted(struct cutctx *c, unsigned field) {
     for (int i = 0; i < c->nr; i++)
         if (field >= c->lo[i] && field <= c->hi[i]) return 1;
     return 0;
 }
+/**
+ * @brief Parse a cut(1) range list such as "1,3-5,7-" into @p c.
+ * @param c Receives up to 16 lo/hi pairs.
+ * @param s The list.
+ *
+ * An open upper bound ("3-") becomes a very large hi, and an open lower bound
+ * ("-5") starts at 1. Ranges past the sixteenth are dropped.
+ */
 static void cut_parse_list(struct cutctx *c, const char *s) {
     c->nr = 0;
     while (*s && c->nr < 16) {
@@ -514,6 +663,13 @@ static void cut_parse_list(struct cutctx *c, const char *s) {
         else break;
     }
 }
+/**
+ * @brief @ref cu_lines callback for `cut`, in both -c and -f mode.
+ *
+ * In field mode the delimiter is re-inserted between the fields that survive.
+ * A line with no delimiter at all is emitted as a single field, so it is kept
+ * only if field 1 was selected — cut(1)'s behaviour without -s.
+ */
 static int cu__cut_line(const char *l, unsigned len, unsigned no, void *v) {
     (void)no;
     struct cutctx *c = v;
@@ -537,6 +693,12 @@ static int cu__cut_line(const char *l, unsigned len, unsigned no, void *v) {
     o_nl();
     return 0;
 }
+/**
+ * @brief cut(1): select fields (-f) or character columns (-c) from each line.
+ *
+ * The delimiter (-d) defaults to tab. Both the separated ("-f 1") and joined
+ * ("-f1") option forms are accepted.
+ */
 static void cmd_cut(int argc, char **argv) {
     struct cutctx c = { 0, '\t', {0}, {0}, 0 };
     const char *list = 0;
@@ -563,6 +725,15 @@ static void cmd_cut(int argc, char **argv) {
 }
 
 /* tr ----------------------------------------------------------------------- */
+/**
+ * @brief Expand a tr(1) set, turning "a-z" ranges into their members.
+ * @param s   The set as typed.
+ * @param out Receives up to 255 bytes.
+ * @return The number of bytes written.
+ *
+ * Backslash escapes and character classes ([:alpha:] and friends) are not
+ * supported; every other byte stands for itself.
+ */
 static int tr_expand(const char *s, unsigned char *out) {
     int n = 0;
     while (*s && n < 255) {
@@ -576,6 +747,12 @@ static int tr_expand(const char *s, unsigned char *out) {
     return n;
 }
 struct trctx { unsigned char map[256]; int del; unsigned char set1[256]; int n1; };
+/**
+ * @brief @ref cu_chunks callback for `tr`, deleting or translating bytes.
+ *
+ * Translation goes through a precomputed 256-entry map, so it costs one
+ * lookup per byte; deletion scans the set, which is short in practice.
+ */
 static int cu__tr_chunk(const char *b, unsigned n, void *v) {
     struct trctx *t = v;
     for (unsigned i = 0; i < n; i++) {
@@ -590,6 +767,13 @@ static int cu__tr_chunk(const char *b, unsigned n, void *v) {
     }
     return 0;
 }
+/**
+ * @brief tr(1): translate or delete bytes of a file.
+ *
+ * `tr SET1 SET2 FILE` translates, `tr -d SET1 FILE` deletes. A SET2 shorter
+ * than SET1 is padded with its own last character, as tr(1) does. Squeezing
+ * (-s) and complementing (-c) are not implemented.
+ */
 static void cmd_tr(int argc, char **argv) {
     struct trctx t;
     memset(&t, 0, sizeof t);
@@ -619,6 +803,15 @@ static void cmd_tr(int argc, char **argv) {
 }
 
 /* sort ------------------------------------------------------------------- */
+/**
+ * @brief Compare two lines for `sort`.
+ * @param a       First line.
+ * @param b       Second line.
+ * @param numeric Non-zero to compare leading integers instead of bytes.
+ * @return Negative, zero or positive like strcmp.
+ *
+ * Numeric mode uses @ref s_num, so a line with no leading number sorts as 0.
+ */
 static int sort_cmp(const char *a, const char *b, int numeric) {
     if (numeric) {
         long x = s_num(a), y = s_num(b);
@@ -628,6 +821,14 @@ static int sort_cmp(const char *a, const char *b, int numeric) {
     }
     return strcmp((char *)a, (char *)b);
 }
+/**
+ * @brief sort(1): sort the lines of the named files together.
+ *
+ * Accepts bundled -r (reverse), -n (numeric) and -u (drop adjacent
+ * duplicates). Several files are merged into one pool and sorted as a whole.
+ * The sort itself is an O(n^2) selection pass, which is fine for a pool
+ * capped at @ref CU_POOL_LINES lines, and it says so when input was truncated.
+ */
 static void cmd_sort(int argc, char **argv) {
     int rev = 0, num = 0, uniq = 0, files = 0, reset = 1;
     for (int i = 1; i < argc; i++) {
@@ -661,6 +862,13 @@ static void cmd_sort(int argc, char **argv) {
     if (cu_pool_over) printf("sort: input truncated to %d lines\n", CU_POOL_LINES);
 }
 
+/**
+ * @brief uniq(1): collapse runs of identical adjacent lines.
+ *
+ * Accepts -c (prefix each run with its length), -d (only repeated runs) and
+ * -u (only runs of one). Like uniq(1) it compares adjacent lines only, so
+ * unsorted input keeps its scattered duplicates.
+ */
 static void cmd_uniq(int argc, char **argv) {
     int count = 0, only_dup = 0, only_uniq = 0;
     const char *fname = 0;
@@ -690,6 +898,14 @@ static void cmd_uniq(int argc, char **argv) {
 
 /* strings --------------------------------------------------------------- */
 struct strctx { int min; char cur[256]; int n; };
+/**
+ * @brief @ref cu_chunks callback for `strings`.
+ *
+ * Accumulates printable ASCII and flushes on the first non-printable byte.
+ * A run crossing a 512-byte chunk boundary is carried in the context, so it
+ * is reported whole; the run in progress at end-of-file is flushed by the
+ * caller.
+ */
 static int cu__str_chunk(const char *b, unsigned n, void *v) {
     struct strctx *s = v;
     for (unsigned i = 0; i < n; i++) {
@@ -703,6 +919,12 @@ static int cu__str_chunk(const char *b, unsigned n, void *v) {
     }
     return 0;
 }
+/**
+ * @brief strings(1): print runs of printable ASCII in a file.
+ *
+ * The minimum run length comes from "-n N" or "-N" and defaults to 4. Runs
+ * longer than 255 characters are truncated to that.
+ */
 static void cmd_strings(int argc, char **argv) {
     int min = 4, files = 0;
     for (int i = 1; i < argc; i++) {
@@ -722,6 +944,13 @@ static void cmd_strings(int argc, char **argv) {
 
 /* hexdump / xxd / od --------------------------------------------------- */
 struct hexctx { unsigned off; };
+/**
+ * @brief @ref cu_chunks callback for `hexdump`: emit 16-byte rows.
+ *
+ * The running offset lives in the context so rows stay numbered across
+ * chunks. Because chunks are 512 bytes, a short final chunk is the only one
+ * that can produce a partial row.
+ */
 static int cu__hex_chunk(const char *b, unsigned n, void *v) {
     struct hexctx *h = v;
     for (unsigned i = 0; i < n; i += 16) {
@@ -742,6 +971,12 @@ static int cu__hex_chunk(const char *b, unsigned n, void *v) {
     h->off += n;
     return 0;
 }
+/**
+ * @brief hexdump(1) -C: canonical hex + ASCII dump. Also reached as xxd/od/hd.
+ *
+ * The output format is fixed; no option selects a different one. Repeated
+ * identical rows are not collapsed the way hexdump(1) does with '*'.
+ */
 static void cmd_hexdump(int argc, char **argv) {
     if (argc < 2) { printf("usage: %s FILE...\n", argv[0]); return; }
     for (int i = 1; i < argc; i++) {
@@ -755,6 +990,14 @@ static void cmd_hexdump(int argc, char **argv) {
     }
 }
 
+/**
+ * @brief cmp(1): report the first byte at which two files differ.
+ *
+ * Reads both in lockstep, 512 bytes at a time, and stops at the first
+ * difference. If the shared prefix matches but the lengths differ, it reports
+ * which file ended early. There is no exit status for the caller to read, so
+ * the answer is the printed line.
+ */
 static void cmd_cmp(int argc, char **argv) {
     if (argc < 3) { printf("usage: cmp FILE1 FILE2\n"); return; }
     file *a = cu_fopen(argv[1]);
@@ -796,6 +1039,11 @@ static void cmd_cmp(int argc, char **argv) {
 /* CRC-32 (IEEE, reflected) for cksum-style output. */
 static uint32_t crc32_tab[256];
 static int      crc32_ready;
+/**
+ * @brief Build the reflected CRC-32 (IEEE, polynomial 0xEDB88320) table.
+ *
+ * Called on the first `cksum`; the table then stays in BSS for later runs.
+ */
 static void crc32_init(void) {
     for (uint32_t i = 0; i < 256; i++) {
         uint32_t c = i;
@@ -805,6 +1053,7 @@ static void crc32_init(void) {
     crc32_ready = 1;
 }
 struct crcctx { uint32_t crc; unsigned len; };
+/** @brief @ref cu_chunks callback for `cksum`: fold bytes into the CRC. */
 static int cu__crc_chunk(const char *b, unsigned n, void *v) {
     struct crcctx *x = v;
     for (unsigned i = 0; i < n; i++)
@@ -812,6 +1061,13 @@ static int cu__crc_chunk(const char *b, unsigned n, void *v) {
     x->len += n;
     return 0;
 }
+/**
+ * @brief cksum-style checksum: print "CRC LENGTH NAME" per file.
+ *
+ * The CRC is reflected CRC-32 over the file bytes only. POSIX cksum uses a
+ * different, unreflected polynomial and also folds in the length, so these
+ * numbers do not match GNU coreutils' cksum; they match `crc32`.
+ */
 static void cmd_cksum(int argc, char **argv) {
     if (!crc32_ready) crc32_init();
     if (argc < 2) { printf("usage: cksum FILE...\n"); return; }
@@ -827,7 +1083,13 @@ static void cmd_cksum(int argc, char **argv) {
 
 /* MD5 (RFC 1321), incremental. */
 struct md5 { uint32_t a, b, c, d; uint64_t len; uint8_t buf[64]; unsigned n; };
+/** @brief Rotate @p x left by @p c bits. @p c is always 1..31 here. */
 static uint32_t md5_rol(uint32_t x, int c) { return (x << c) | (x >> (32 - c)); }
+/**
+ * @brief Mix one 64-byte block into the MD5 state (RFC 1321 section 3.4).
+ * @param m State to update.
+ * @param p Exactly 64 bytes.
+ */
 static void md5_block(struct md5 *m, const uint8_t *p) {
     static const uint32_t K[64] = {
         0xd76aa478,0xe8c7b756,0x242070db,0xc1bdceee,0xf57c0faf,0x4787c62a,0xa8304613,0xfd469501,
@@ -861,10 +1123,12 @@ static void md5_block(struct md5 *m, const uint8_t *p) {
     }
     m->a += A; m->b += B; m->c += C; m->d += D;
 }
+/** @brief Set the MD5 state to the RFC 1321 initial chaining values. */
 static void md5_init(struct md5 *m) {
     m->a = 0x67452301; m->b = 0xefcdab89; m->c = 0x98badcfe; m->d = 0x10325476;
     m->len = 0; m->n = 0;
 }
+/** @brief @ref cu_chunks callback for `md5sum`: absorb bytes, 64 at a time. */
 static int cu__md5_chunk(const char *b, unsigned n, void *v) {
     struct md5 *m = v;
     m->len += n;
@@ -874,6 +1138,11 @@ static int cu__md5_chunk(const char *b, unsigned n, void *v) {
     }
     return 0;
 }
+/**
+ * @brief Pad the MD5 state and write the little-endian digest.
+ * @param m   State; unusable afterwards without a fresh @ref md5_init.
+ * @param out Receives 16 bytes.
+ */
 static void md5_final(struct md5 *m, uint8_t out[16]) {
     uint64_t bits = m->len * 8;
     m->buf[m->n++] = 0x80;
@@ -885,6 +1154,7 @@ static void md5_final(struct md5 *m, uint8_t out[16]) {
     for (int i = 0; i < 4; i++)
         for (int j = 0; j < 4; j++) out[i * 4 + j] = (uint8_t)(v[i] >> (8 * j));
 }
+/** @brief md5sum(1): print the MD5 digest and name of each file. */
 static void cmd_md5sum(int argc, char **argv) {
     if (argc < 2) { printf("usage: md5sum FILE...\n"); return; }
     for (int i = 1; i < argc; i++) {
@@ -902,11 +1172,13 @@ static void cmd_md5sum(int argc, char **argv) {
 }
 
 struct shactx { sha256_ctx c; };
+/** @brief @ref cu_chunks callback for `sha256sum`, feeding sha2.c. */
 static int cu__sha_chunk(const char *b, unsigned n, void *v) {
     struct shactx *s = v;
     sha256_update(&s->c, b, n);
     return 0;
 }
+/** @brief sha256sum(1): print the SHA-256 digest and name of each file. */
 static void cmd_sha256sum(int argc, char **argv) {
     if (argc < 2) { printf("usage: sha256sum FILE...\n"); return; }
     for (int i = 1; i < argc; i++) {
@@ -925,6 +1197,10 @@ static void cmd_sha256sum(int argc, char **argv) {
 
 /* base64 --------------------------------------------------------------- */
 static const char B64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+/**
+ * @brief Map one base64 character to its 6-bit value.
+ * @return 0-63, or -1 for any other byte, including '=' and whitespace.
+ */
 static int b64val(char c) {
     if (c >= 'A' && c <= 'Z') return c - 'A';
     if (c >= 'a' && c <= 'z') return c - 'a' + 26;
@@ -933,6 +1209,13 @@ static int b64val(char c) {
     if (c == '/') return 63;
     return -1;
 }
+/**
+ * @brief base64(1): encode, or with -d/--decode decode, a whole file.
+ *
+ * Needs the file in RAM (@ref cu_slurp_heap), so it is bounded by the kernel
+ * heap. Encoding wraps at 76 columns; decoding ignores every character
+ * outside the alphabet, so wrapped input and stray padding are fine.
+ */
 static void cmd_base64(int argc, char **argv) {
     int decode = 0;
     const char *fname = 0;
@@ -970,6 +1253,14 @@ static void cmd_base64(int argc, char **argv) {
 
 /* -------------------------------------------------------- file management -- */
 
+/**
+ * @brief cp(1): copy SRC to DST.
+ *
+ * Reads the whole source into the kernel heap and writes it in one
+ * @ref vfs_spit, because the FAT driver has no partial-write path worth
+ * streaming into. Only the two-operand form exists — there is no directory
+ * destination, since the FAT layer is root-directory-only.
+ */
 static void cmd_cp(int argc, char **argv) {
     if (argc < 3) { printf("usage: cp SRC DST\n"); return; }
     char dst[96];
@@ -980,6 +1271,13 @@ static void cmd_cp(int argc, char **argv) {
     cu_free_heap();
 }
 
+/**
+ * @brief mv(1): move SRC to DST, as a copy followed by a delete.
+ *
+ * The FAT driver has no rename, so this is not atomic: the destination is
+ * written first and the source removed only if that succeeded. A failed
+ * delete leaves both copies and says so rather than losing the file.
+ */
 static void cmd_mv(int argc, char **argv) {
     if (argc < 3) { printf("usage: mv SRC DST\n"); return; }
     char dst[96], src[96];
@@ -992,6 +1290,13 @@ static void cmd_mv(int argc, char **argv) {
     if (!vfs_delete(src)) printf("mv: warning: could not remove %s\n", argv[1]);
 }
 
+/**
+ * @brief basename(1): strip the directory, and optionally a suffix.
+ *
+ * Prints "/" for a path that is nothing but slashes. Unlike basename(1),
+ * trailing slashes are not stripped first, so "a/b/" yields an empty
+ * component and therefore "/".
+ */
 static void cmd_basename(int argc, char **argv) {
     if (argc < 2) { printf("usage: basename NAME [SUFFIX]\n"); return; }
     const char *p = argv[1];
@@ -1006,6 +1311,12 @@ static void cmd_basename(int argc, char **argv) {
     printf("%s\n", out[0] ? out : "/");
 }
 
+/**
+ * @brief dirname(1): strip the last path component.
+ *
+ * Trailing slashes are removed first, then the component, then any slashes
+ * that separated it. A path with no slash left gives ".".
+ */
 static void cmd_dirname(int argc, char **argv) {
     if (argc < 2) { printf("usage: dirname NAME\n"); return; }
     char out[128];
@@ -1018,7 +1329,15 @@ static void cmd_dirname(int argc, char **argv) {
 }
 
 struct dusz { unsigned bytes; };
+/** @brief @ref cu_chunks callback for `du`: add the chunk's length. */
 static int cu__du_chunk(const char *b, unsigned n, void *v) { (void)b; ((struct dusz *)v)->bytes += n; return 0; }
+/**
+ * @brief du(1): report the size of each file.
+ *
+ * Sizes are rounded up to whole KiB, or with -h scaled to K/M with one
+ * decimal. This takes files only: there is no directory recursion, the FAT
+ * layer having no subdirectories to recurse into.
+ */
 static void cmd_du(int argc, char **argv) {
     int human = 0, files = 0;
     for (int i = 1; i < argc; i++) {
@@ -1045,8 +1364,18 @@ static void cmd_du(int argc, char **argv) {
  *  system / misc
  * ========================================================================= */
 
+/** @brief pwd(1): print the console's working directory. */
 static void cmd_pwd(int argc, char **argv) { (void)argc; (void)argv; printf("%s\n", console_cwd()); }
 
+/**
+ * @brief Decode one character, resolving a backslash escape if there is one.
+ * @param s Cursor; advanced past whatever was consumed.
+ * @return The decoded character.
+ *
+ * Understands `\n` `\t` `\r` `\a` `\b` `\f` `\v` `\0` and `\\`. An unknown
+ * escape is left alone: the cursor is rewound and a literal backslash
+ * returned, so `\q` prints as typed. Shared by `echo -e` and `printf`.
+ */
 static char cu_unescape(const char **s) {
     char c = *(*s)++;
     if (c != '\\' || !**s) return c;
@@ -1065,6 +1394,14 @@ static char cu_unescape(const char **s) {
     }
 }
 
+/**
+ * @brief echo(1): print the arguments separated by single spaces.
+ *
+ * Accepts -n (no trailing newline), -e and -E (escape processing on/off).
+ * With -e, `\c` stops output immediately, as in echo(1). The first argument
+ * that is not a recognised option ends option parsing, so "echo -x" prints
+ * "-x".
+ */
 static void cmd_echo(int argc, char **argv) {
     int nl = 1, esc = 0, start = 1;
     while (start < argc && argv[start][0] == '-' && argv[start][1]) {
@@ -1121,9 +1458,18 @@ static void cmd_printf(int argc, char **argv) {
     } while (ai < argc);
 }
 
+/** @brief true(1). The console has no exit status, so this does nothing. */
 static void cmd_true(int argc, char **argv)  { (void)argc; (void)argv; }
+/** @brief false(1). Indistinguishable from @ref cmd_true without a status. */
 static void cmd_false(int argc, char **argv) { (void)argc; (void)argv; }
 
+/**
+ * @brief seq(1): print a sequence of integers.
+ *
+ * Takes LAST, FIRST LAST, or FIRST INCR LAST. Integers only — there is no
+ * floating point in the kernel. A zero increment is refused, and the run is
+ * capped at 100000 lines so a typo cannot wedge the console.
+ */
 static void cmd_seq(int argc, char **argv) {
     long first = 1, incr = 1, last;
     if (argc == 2)      { last = s_num(argv[1]); }
@@ -1138,11 +1484,23 @@ static void cmd_seq(int argc, char **argv) {
     }
 }
 
+/**
+ * @brief Yield the CPU until @p ms milliseconds of PIT time have passed.
+ *
+ * Yields rather than spinning, so other threads keep running; the wait is
+ * therefore at least @p ms, not exactly.
+ */
 static void cu_delay_ms(unsigned ms) {
     unsigned start = pit_ms();
     while (pit_ms() - start < ms) sched_yield();
 }
 
+/**
+ * @brief sleep(1): wait for a number of seconds.
+ *
+ * A fractional part is accepted and parsed to millisecond resolution
+ * ("sleep 0.25"); suffixes such as "1m" are not.
+ */
 static void cmd_sleep(int argc, char **argv) {
     if (argc < 2) { printf("usage: sleep SECONDS\n"); return; }
     const char *s = argv[1];
@@ -1157,12 +1515,25 @@ static void cmd_sleep(int argc, char **argv) {
     cu_delay_ms(ms);
 }
 
+/**
+ * @brief usleep(1): wait for a number of microseconds.
+ *
+ * The PIT gives millisecond resolution, so anything under 1000 microseconds
+ * waits one millisecond.
+ */
 static void cmd_usleep(int argc, char **argv) {
     if (argc < 2) { printf("usage: usleep MICROSECONDS\n"); return; }
     unsigned us = (unsigned)s_num(argv[1]);
     cu_delay_ms(us < 1000 ? 1 : us / 1000);
 }
 
+/**
+ * @brief yes(1): repeat a line ("y" by default) until interrupted.
+ *
+ * Stops on any keystroke, and in any case after 100000 lines — an SSH or
+ * script caller has no keyboard to interrupt with and there is no job
+ * control. The keystroke that stopped it is consumed.
+ */
 static void cmd_yes(int argc, char **argv) {
     char msg[128];
     if (argc > 1) {
@@ -1184,6 +1555,15 @@ static void cmd_yes(int argc, char **argv) {
     keyboard_invalidate_lastkey();
 }
 
+/**
+ * @brief expr(1): evaluate a small arithmetic or string expression.
+ *
+ * Supports `A OP B` for `+` `-` `*` `/` `%` `<` `<=` `>` `>=` `=` `==` `!=`,
+ * plus the `length`, `substr` and `index` forms. A leading backslash on the
+ * operator is tolerated so a shell-escaped `\*` works. Division or modulo
+ * by zero yields 0 rather than faulting. The result is printed; there is no
+ * exit status.
+ */
 static void cmd_expr(int argc, char **argv) {
     if (argc == 4 && s_eq(argv[1], "index")) {
         int pos = 0;
@@ -1226,6 +1606,12 @@ static void cmd_expr(int argc, char **argv) {
     printf("usage: expr A OP B | expr length S | expr substr S P L | expr index S C\n");
 }
 
+/**
+ * @brief factor(1): print the prime factorisation of each number.
+ *
+ * Trial division up to the square root, on unsigned long, so a large prime
+ * takes a visible moment.
+ */
 static void cmd_factor(int argc, char **argv) {
     if (argc < 2) { printf("usage: factor NUMBER...\n"); return; }
     for (int i = 1; i < argc; i++) {
@@ -1239,11 +1625,27 @@ static void cmd_factor(int argc, char **argv) {
     }
 }
 
+/**
+ * @brief Day of the week for a Gregorian date, by Sakamoto's method.
+ * @param y Year.
+ * @param m Month, 1-12.
+ * @param d Day of month.
+ * @return 0 for Sunday through 6 for Saturday.
+ */
 static int dow(int y, int m, int d) {
     static const int t[] = { 0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4 };
     if (m < 3) y -= 1;
     return (y + y / 4 - y / 100 + y / 400 + t[m - 1] + d) % 7;
 }
+/**
+ * @brief Read today's date from the RTC.
+ * @param y Receives the year.
+ * @param m Receives the month, 1-12.
+ * @param d Receives the day of month.
+ *
+ * Parses the fixed-width string @c unix_to_str() renders
+ * ("Ddd YYYY-MM-DD HH:MM:SS UTC") by offset, so it depends on that layout.
+ */
 static void cur_ymd(int *y, int *m, int *d) {
     char buf[40];
     unix_to_str(rtc_now_unix(), buf, sizeof buf);   /* "Ddd YYYY-MM-DD HH:MM:SS UTC" */
@@ -1251,6 +1653,13 @@ static void cur_ymd(int *y, int *m, int *d) {
     *m = (int)s_num(buf + 9);
     *d = (int)s_num(buf + 12);
 }
+/**
+ * @brief cal(1): print a month or a whole year.
+ *
+ * With no argument, the current month; with one, that whole year; with two,
+ * that month of that year. Leap years follow the Gregorian rule. The months
+ * of a year print one under the other rather than three across.
+ */
 static void cmd_cal(int argc, char **argv) {
     int y, m, d;
     cur_ymd(&y, &m, &d);
@@ -1276,6 +1685,13 @@ static void cmd_cal(int argc, char **argv) {
     }
 }
 
+/**
+ * @brief uname(1): print system information.
+ *
+ * Accepts bundled -s -n -r -v -m -o and -a. The release is the kernel version
+ * from ver.h and the "version" field is the build timestamp. With no option,
+ * -s is assumed.
+ */
 static void cmd_uname(int argc, char **argv) {
     const char *sys = "os", *node = "os", *mach = "i686";
     char rel[24];
@@ -1303,17 +1719,36 @@ static void cmd_uname(int argc, char **argv) {
 }
 
 static char cu_hostname[32] = "os";
+/**
+ * @brief hostname(1): print the hostname, or set it when given an argument.
+ *
+ * The name lives only in this file's static buffer; nothing else in the
+ * kernel, the network stack included, reads it.
+ */
 static void cmd_hostname(int argc, char **argv) {
     if (argc > 1) s_cpy(cu_hostname, argv[1], sizeof cu_hostname);
     else printf("%s\n", cu_hostname);
 }
+/** @brief arch(1): the architecture is always i686. */
 static void cmd_arch(int argc, char **argv)   { (void)argc; (void)argv; printf("i686\n"); }
+/** @brief whoami(1). There are no users; everything runs as root. */
 static void cmd_whoami(int argc, char **argv) { (void)argc; (void)argv; printf("root\n"); }
+/** @brief id(1). Fixed output: there is no credential system. */
 static void cmd_id(int argc, char **argv)     { (void)argc; (void)argv; printf("uid=0(root) gid=0(root) groups=0(root)\n"); }
+/** @brief groups(1). Fixed output, as with @ref cmd_id. */
 static void cmd_groups(int argc, char **argv) { (void)argc; (void)argv; printf("root\n"); }
+/** @brief logname(1). Fixed output, as with @ref cmd_id. */
 static void cmd_logname(int argc, char **argv){ (void)argc; (void)argv; printf("root\n"); }
+/** @brief nproc(1): CPUs the ACPI tables reported, whether or not smp.c
+ *         managed to start them. */
 static void cmd_nproc(int argc, char **argv)  { (void)argc; (void)argv; printf("%d\n", acpi_cpu_count()); }
 
+/**
+ * @brief uptime(1): time since boot as "up [D days, ]HH:MM:SS".
+ *
+ * Measured from the PIT tick count, so it is wall time since the timer came
+ * up rather than since reset. No load averages: nothing tracks them.
+ */
 static void cmd_uptime(int argc, char **argv) {
     (void)argc; (void)argv;
     unsigned s = pit_ms() / 1000;
@@ -1323,6 +1758,13 @@ static void cmd_uptime(int argc, char **argv) {
     printf("%02u:%02u:%02u\n", hh, mm, ss);
 }
 
+/**
+ * @brief free(1): physical frames and kernel heap, used and free.
+ *
+ * Accepts -b, -k (the default) and -m. "Mem:" comes from the PMM frame
+ * bitmap in 4 KiB units; "Heap:" is the kmalloc arena, which is a small
+ * fraction of it.
+ */
 static void cmd_free(int argc, char **argv) {
     unsigned div = 1024;
     const char *unit = "KiB";
@@ -1339,11 +1781,23 @@ static void cmd_free(int argc, char **argv) {
     printf("%-8s %12u %12u %12u\n", "Heap:", hs / div, hu / div, (hs - hu) / div);
 }
 
+/**
+ * @brief clear(1) / reset(1): scroll the screen clear with blank lines.
+ *
+ * No escape sequence and no cursor move: the console is not a terminal
+ * emulator, and this works the same over SSH.
+ */
 static void cmd_clear(int argc, char **argv) {
     (void)argc; (void)argv;
     for (int i = 0; i < 40; i++) o_nl();
 }
 
+/**
+ * @brief env(1) / printenv(1): print a fixed, synthetic environment.
+ *
+ * There is no environment to inherit, so the table is built here; only PWD
+ * and HOSTNAME vary. Invoked as printenv with a name, prints that one value.
+ */
 static void cmd_env(int argc, char **argv) {
     const char *only = 0;
     int printenv = s_eq(argv[0], "printenv");
@@ -1359,25 +1813,52 @@ static void cmd_env(int argc, char **argv) {
     }
 }
 
+/** @brief sync(1). A no-op: writes reach the driver before the command
+ *         returns, so there is nothing buffered to flush. */
 static void cmd_sync(int argc, char **argv) { (void)argc; (void)argv; }
 
+/**
+ * @brief mount(1): list the mounted volumes, or mount the named device.
+ *
+ * The device must already be registered by its driver; this only asks the VFS
+ * to parse and expose its filesystem.
+ */
 static void cmd_mount(int argc, char **argv) {
     if (argc < 2) { vfs_ls(); return; }
     vfs_mount(argv[1]);
     printf("mounted %s\n", argv[1]);
 }
+/**
+ * @brief umount(1): drop a device's filesystem from the mount table.
+ *
+ * Reports success unconditionally — @ref vfs_unmount ignores a name that is
+ * not mounted.
+ */
 static void cmd_umount(int argc, char **argv) {
     if (argc < 2) { printf("usage: umount DEVICE\n"); return; }
     vfs_unmount(argv[1]);
     printf("unmounted %s\n", argv[1]);
 }
 
+/**
+ * @brief halt(1): stop the machine.
+ *
+ * Uses the QEMU debug-exit port, so on real hardware it prints the message
+ * and returns to the prompt instead of powering off.
+ */
 static void cmd_halt(int argc, char **argv) {
     (void)argc; (void)argv;
     printf("System halted.\n");
     exit_qemu(0);
 }
 
+/**
+ * @brief time(1): run a console command and report how long it took.
+ *
+ * The operands are re-joined into one line and handed to @ref console_exec,
+ * so the command can be any console built-in, not only one from this file.
+ * Only real time is reported; nothing accounts user and system time.
+ */
 static void cmd_time(int argc, char **argv) {
     if (argc < 2) { printf("usage: time COMMAND [ARGS...]\n"); return; }
     char sub[256];
@@ -1393,6 +1874,12 @@ static void cmd_time(int argc, char **argv) {
     printf("\nreal\t%um%u.%03us\n", dt / 60000, (dt / 1000) % 60, dt % 1000);
 }
 
+/**
+ * @brief date(1): print the RTC time, optionally through a +FORMAT string.
+ *
+ * Understands `%s` `%Y` `%m` `%d` `%H` `%M` `%S` and `%%`. The time is UTC,
+ * and there is no -s: setting the RTC is not supported.
+ */
 static void cmd_date(int argc, char **argv) {
     uint32_t now = rtc_now_unix();
     char buf[40];
@@ -1430,6 +1917,17 @@ static uint32_t wg_ip;
 static char    *wg_buf;
 static unsigned wg_len;
 
+/**
+ * @brief The body of `wget`, run on the network stack's own thread.
+ * @return 0 on success, -1 after printing the reason.
+ *
+ * Issues one HTTP/1.0 GET with "Connection: close", drops everything up to
+ * the first CRLFCRLF and keeps the body, up to @ref WG_MAX bytes. Its
+ * parameters come from the wg_* statics because @c net_exec() takes a
+ * no-argument function. Chunked transfer encoding is not decoded, so a
+ * server that ignores HTTP/1.0 and chunks anyway yields a file with the
+ * chunk framing still in it.
+ */
 static int wg_task(void) {
     int h = tcp_connect(wg_ip, 80);
     if (h < 0) { printk("wget: connect failed\n"); return -1; }
@@ -1463,6 +1961,14 @@ static int wg_task(void) {
     return 0;
 }
 
+/**
+ * @brief wget(1): fetch an HTTP URL into a file.
+ *
+ * Accepts "-O FILE"; otherwise the name is the last path component, or
+ * index.html for a bare host. Parses only http:// URLs, with no port, no user
+ * info and no redirect following. Resolves the host, allocates the
+ * @ref WG_MAX transfer buffer, then runs @ref wg_task on the network thread.
+ */
 static void cmd_wget(int argc, char **argv) {
     const char *url = 0, *out = 0;
     for (int i = 1; i < argc; i++) {
@@ -1530,6 +2036,15 @@ static const struct cu_cmd cu_table[] = {
     { "halt", cmd_halt }, { "time", cmd_time }, { "date", cmd_date }, { "wget", cmd_wget },
 };
 
+/**
+ * @brief Run @p line if its first word names a command in this file.
+ * @param line The command line, leading whitespace tolerated.
+ * @return 1 if a command matched and ran, 0 if the verb is not ours.
+ *
+ * @ref console_exec calls this after its own built-ins have had a chance, so
+ * a native built-in of the same name wins. A verb longer than 23 characters
+ * is truncated before the lookup and therefore cannot match.
+ */
 int coreutils_try(char *line) {
     while (*line == ' ' || *line == '\t') line++;
     char verb[24];
@@ -1551,6 +2066,7 @@ int coreutils_try(char *line) {
     return 0;
 }
 
+/** @brief Print the command list for the console's `help`. */
 void coreutils_help(void) {
     printf(
         "\nfile/text: cat head tail wc grep nl tac rev cut tr sort uniq strings\n"
