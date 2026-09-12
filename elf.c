@@ -147,6 +147,18 @@ int load_elf_relocate(thread_t *thread, page_dir_t *pdir, elf_header_t *eh) {
          * every page of a segment onto the single frame backing its first
          * page, so any program larger than one page per segment was corrupt. */
         for(uint32_t va = seg_lo; va < seg_hi; va += PAGE_SIZE) {
+            /* The image is mapped at the program's own link address into the
+             * kernel directory, so it can be filled while that directory is
+             * active - but every kernel thread is also running on that
+             * directory. If the range is already mapped there it belongs to
+             * something else, and vmm_map() would silently repoint it and then
+             * memcpy the file over whatever was living there (a running
+             * thread's stack, for instance). Say so instead of corrupting it. */
+            if(get_phys_addr(get_kern_directory(), va)) {
+                printf("elf: segment va %x already mapped in the kernel "
+                       "directory - refusing to load over it\n", va);
+                return 0;
+            }
             if(!vmm_map(get_kern_directory(), va, PAGE_PRESENT | PAGE_RW) ||
                !vmm_map_phys(pdir, va,
                              (uint32_t) get_phys_addr(get_kern_directory(), va),
