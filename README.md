@@ -117,10 +117,16 @@ every PC from the QEMU `pc` machine to a modern ThinkPad:
   ThinkPad's PS/2 keyboard, so it stays off unless asked for. See
   **Booting on real hardware (ThinkPad X220 and similar)**.
 * **xHCI** (USB 3.x) — [`xhci.c`](xhci.c). The only controller on a recent
-  laptop (X250 / T470s). Controller bring-up, root-port reset, Enable Slot /
-  Address Device / Configure Endpoint, then polled interrupt-IN. EHCI and
-  xHCI both do their own enumeration and feed reports straight to the HID
-  driver rather than going through `usb.c`.
+  laptop (X250 / T470s / MacBook Air 2013). Controller bring-up, root-port
+  reset, Enable Slot / Address Device / Configure Endpoint, then polled
+  interrupt-IN. Endpoint 0's max packet size is corrected from
+  `bMaxPacketSize0` with an Evaluate Context before the full device descriptor
+  is read, and a composite device can have several interrupt endpoints
+  configured at once — which is how the MacBook Air's keyboard and its
+  multi-touch trackpad ([`bcm5974.c`](bcm5974.c)), one device with two
+  interfaces, are driven together. EHCI and xHCI both do their own enumeration
+  and feed reports straight to the HID driver rather than going through
+  `usb.c`.
 * **USB core** — [`usb.c`](usb.c). Synchronous EP0 control transfers, port
   reset, and single-device-per-port enumeration (device descriptor →
   `SET_ADDRESS` → configuration → `SET_CONFIGURATION`). The same routine
@@ -291,6 +297,7 @@ for anything more (there is no TLS or resolver cache).
 | USB core (enumeration, control/interrupt transfers) | [`usb.c`](usb.c) |
 | USB hub (recursive enumeration + hot-plug polling) | [`usb_hub.c`](usb_hub.c) |
 | USB HID boot devices (keyboard, mouse) | [`usb_hid.c`](usb_hid.c) |
+| Apple BCM5974 multi-touch trackpad (MacBook Air topcase) | [`bcm5974.c`](bcm5974.c) |
 | PCI bus (enumeration, naming, driver binding) | [`pci.c`](pci.c), [`pci_ids.c`](pci_ids.c) |
 | i440FX / PIIX3 chipset (host bridge, ISA bridge, IDE) | [`pci_piix.c`](pci_piix.c) |
 | PIIX4 ACPI power management (poweroff / reboot) | [`pci_acpi.c`](pci_acpi.c) |
@@ -820,7 +827,7 @@ set, and hands the kernel the framebuffer + the Multiboot2 memory map.
 | Subsystem | Driver | Notes |
 |-----------|--------|-------|
 | Display | multiboot2 GOP framebuffer ([`video.c`](video.c)), WC via PAT ([`pat.c`](pat.c)) | Haswell HD 5000 (`8086:0a26`); 13" panel is 1440×900, 11" is 1366×768 — the kernel reads the real size/pitch from the framebuffer tag |
-| Keyboard / trackpad | xHCI HID ([`xhci.c`](xhci.c)) | xHCI-only PCH (`8086:9c31`) — external USB HID only (the MacBook's own keyboard is on a Broadcom device that speaks an HID-over-HT transport, unsupported) |
+| Keyboard / trackpad | xHCI HID + BCM5974 ([`xhci.c`](xhci.c), [`bcm5974.c`](bcm5974.c)) | xHCI-only PCH (`8086:9c31`). The built-in topcase works: it is one composite USB device (`05ac:0290`) whose interface 0 is a boot keyboard and whose trackpad is driven natively as a "wellspring 8" multi-touch pad (see below) |
 | Storage | **AHCI** ([`ahci.c`](ahci.c)) | Samsung S4LN053X01 PCIe SSD (`144d:1600`, `8086:9c03` PCH), mounted `/hda` |
 | Ethernet | — | no wired NIC; the BCM4360 WiFi (`14e4:43a0`) is unsupported |
 | Audio | Intel HD Audio ([`hda.c`](hda.c)) | PCH analog controller `8086:9c20` with the Cirrus CS4208 codec is chosen over the digital-only Haswell HDMI controller `8086:0a0c` (see below) |
@@ -832,6 +839,49 @@ set, and hands the kernel the framebuffer + the Multiboot2 memory map.
 driver that binds the first controller by class would claim HDMI and produce no
 audible output. `hda_probe()` now skips the Intel iHD (HDMI-only) controllers
 by device ID, so the analog one binds and the built-in speakers work.
+
+**The internal keyboard and trackpad.** There is no PS/2 controller and no EHCI
+companion on this machine, so the topcase is reachable only through xHCI. It
+enumerates as a single composite device (`05ac:0290`, "Apple Internal Keyboard /
+Trackpad"): interface 0 is a HID boot keyboard, while the trackpad advertises
+itself as a HID *mouse* — the same thing Linux matches `bcm5974` on — and is
+then driven in its native TYPE3 multi-touch format ([`bcm5974.c`](bcm5974.c))
+rather than as a boot mouse. Reaching that meant fixing most of the xHCI path,
+and every one of these was invisible under QEMU:
+
+* **Every port disabled itself.** `PORTSC.PED` is RW1CS: writing a 1 *disables*
+  the port. Preserving it across a read-modify-write of the register therefore
+  handed the enable bit straight back as a disable request, so each port
+  reported "not enabled after reset" immediately after the controller enabled
+  it, and nothing was ever enumerated.
+* **Port power was sampled too early.** A device may take up to 100 ms to signal
+  attach once its port is powered; sampling connect status 20 ms after powering
+  one port raced the always-attached topcase and skipped it for good.
+* **The doorbell was never rung** for an endpoint's first interrupt transfer, so
+  the transfer never started, no completion event arrived, and the re-arm path
+  that rings it for every later transfer was never reached.
+* **Endpoint 0's max packet size was never corrected.** A full-speed device may
+  use 8, 16, 32 or 64 bytes, known only from `bMaxPacketSize0` in the first 8
+  descriptor bytes; without an Evaluate Context the 18-byte read failed and the
+  device was discarded as having no descriptor.
+* **Reports were truncated to a single packet.** A TYPE3 report is 66–486 bytes
+  and spans several packets, so requesting `wMaxPacketSize` per transfer cut
+  every one short and left it too small to parse.
+* **The trackpad arrived in boot protocol.** Apple's firmware sets the topcase
+  up for its own boot-time input, so the interface emits 3-byte mouse reports
+  until it is explicitly asked for the report protocol.
+
+**The 4 MiB identity map.** `map_kernel()` used to identity-map only the low
+4 MiB, which left just four usable blocks in the page-table storage window —
+but boot needs six (the two `map_kernel` slots, the heap window, two initrd
+tables at 128 MiB and the framebuffer). The fifth allocation quietly returned
+NULL, so the top half of the initrd and the framebuffer were never mapped and
+the first access after paging came up triple-faulted the machine, while
+QEMU/OVMF happened to fit. The map now covers 8 MiB. The kernel's own thread
+stacks moved below the user-image base with it: every `link.lds` in `apps/`
+links at `. = 8M`, and `load_elf_relocate()` maps and copies the image over
+that address range, which was landing on the running kernel threads' stacks.
+
 **The "hangs at `physical memory`" boot issue.** On real Apple EFI — but
 not under OVMF/QEMU — this kernel used to die silently right after the
 boot bar reached "physical memory": a 64-bit UEFI bootloader can hand
@@ -848,8 +898,11 @@ paging. The `bootdiag` GRUB entry adds low-pitched sub-step beeps inside
 `vmm_init` (1 = identity map, 2 = heap, 3 = initrd, 4 = CR3 loaded) so
 a remaining hang there reports exactly which map was last reached.
 
-Escape hatches on the GRUB line (press `e`): `nousb` `noahci` `nonvme`
+Escape hatches on the GRUB line (press `e`): `nousb` `noxhci` `noahci` `nonvme`
 `nosmp` `nofb` `nosyn`; `bootdiag` beeps + colour-floods the boot progress.
+Note that `nousb` and `noxhci` also take out the built-in keyboard and trackpad
+here, since xHCI is the only thing they are attached to; `ehci` enables the
+otherwise-disabled EHCI driver for external USB input on machines that have one.
 
 `test/mba-boot.sh` (`make qemu-mba`) boots `os.iso` in MBA-shaped QEMU configs
 (q35 + xHCI-only + QXL GOP-like video under OVMF), capturing a serial log and a
