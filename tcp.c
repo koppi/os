@@ -59,10 +59,25 @@ static struct conn conns[TCP_NCONN];
 static uint8_t segbuf[64 + TCP_MSS] __attribute__((aligned(4)));
 
 /* ---- sequence arithmetic (mod 2^32) ---- */
+/**
+ * @brief Is @p a before @p b in sequence space?
+ *
+ * The subtraction is done in modular arithmetic and the result read as
+ * signed, so the comparison stays correct across the 2^32 wrap. It is only
+ * meaningful while the two values are within 2^31 of each other, which they
+ * always are here: one MSS is in flight at a time.
+ */
 static int seq_lt(uint32_t a, uint32_t b) { return (int32_t)(a - b) < 0; }
+/** @brief Is @p a at or before @p b in sequence space? See @ref seq_lt. */
 static int seq_le(uint32_t a, uint32_t b) { return (int32_t)(a - b) <= 0; }
+/** @brief Is @p a after @p b in sequence space? See @ref seq_lt. */
 static int seq_gt(uint32_t a, uint32_t b) { return (int32_t)(a - b) > 0; }
 
+/**
+ * @brief Find the connection for an inbound segment's four-tuple.
+ * @return The connection, or NULL — which is how @ref tcp_input decides
+ *         between a passive open and an RST.
+ */
 static struct conn *find_conn(uint32_t rip, uint16_t rport, uint16_t lport) {
     for (int i = 0; i < TCP_NCONN; i++)
         if (conns[i].used && conns[i].remote_ip == rip &&
@@ -71,6 +86,13 @@ static struct conn *find_conn(uint32_t rip, uint16_t rport, uint16_t lport) {
     return NULL;
 }
 
+/**
+ * @brief Find a listening socket bound to @p lport.
+ * @return The listener, or NULL.
+ *
+ * A listener has no remote end, so it is matched on the local port alone and
+ * can never be found by @ref find_conn.
+ */
 static struct conn *find_listener(uint16_t lport) {
     for (int i = 0; i < TCP_NCONN; i++)
         if (conns[i].used && conns[i].state == ST_LISTEN && conns[i].local_port == lport)
@@ -83,6 +105,22 @@ static int alloc(void);
 /* ------------------------------------------------------------------ *
  *  Segment output                                                     *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Build and transmit one segment. Pure output: no state is touched.
+ * @param c        The connection, for the ports, the peer and @c rcv_nxt.
+ * @param flags    TCP flag bits.
+ * @param seq      Sequence number to stamp on it.
+ * @param data     Payload, or NULL.
+ * @param dlen     Payload length.
+ * @param with_mss Non-zero to append the MSS option, which only a SYN wants.
+ *
+ * The advertised window is whatever is free in the receive buffer, so a
+ * consumer that stops reading closes the window and the peer stalls rather
+ * than overruns. Nothing here advances @c snd_nxt or arms the retransmit
+ * timer — use @ref seg_send_tracked for a segment that consumes sequence
+ * space. Writes through the one shared @ref segbuf, which is safe only
+ * because the whole stack runs on the net thread.
+ */
 static void seg_send(struct conn *c, uint8_t flags, uint32_t seq,
                      const void *data, int dlen, int with_mss) {
     struct tcp_hdr *h = (struct tcp_hdr *)segbuf;
@@ -130,10 +168,27 @@ static void seg_send_tracked(struct conn *c, uint8_t flags,
     if (flags & F_FIN) c->snd_nxt++;
 }
 
+/**
+ * @brief Send a bare ACK.
+ *
+ * Carries no data and consumes no sequence space, so it is never tracked for
+ * retransmission: if it is lost, the peer's own retransmit produces another.
+ */
 static void seg_ack(struct conn *c) {
     seg_send(c, F_ACK, c->snd_nxt, NULL, 0, 0);
 }
 
+/**
+ * @brief Send an RST to a peer this host has no connection with.
+ * @param rip   Remote address.
+ * @param rport Remote port.
+ * @param lport Local port the segment was addressed to.
+ * @param seq   Sequence number for the RST: the segment's ACK field if it had
+ *              one, otherwise 0.
+ *
+ * Takes no @c conn because there is none — this is the reply to a segment
+ * that matched neither a connection nor a listener.
+ */
 static void seg_rst(uint32_t rip, uint16_t rport, uint16_t lport, uint32_t seq) {
     struct tcp_hdr *h = (struct tcp_hdr *)segbuf;
     memset(h, 0, 20);
@@ -149,6 +204,15 @@ static void seg_rst(uint32_t rip, uint16_t rport, uint16_t lport, uint32_t seq) 
 /* ------------------------------------------------------------------ *
  *  Retransmit timer + pump                                            *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Retransmit any segment unacknowledged for more than a second.
+ *
+ * A flat 1 s timer with no backoff and no RTT estimate, and six attempts
+ * before the connection is marked reset — about seven seconds to notice a
+ * dead peer. A retransmitted SYN goes out bare: the original carried the MSS
+ * option and no ACK, and repeating the option is pointless while an ACK on a
+ * SYN would make it a SYN-ACK.
+ */
 static void tcp_retransmit(void) {
     for (int i = 0; i < TCP_NCONN; i++) {
         struct conn *c = &conns[i];
@@ -169,6 +233,14 @@ static void tcp_retransmit(void) {
     }
 }
 
+/**
+ * @brief Drive the stack for @p ms milliseconds: poll the ring, run the timer.
+ *
+ * The primitive under every blocking call in this file. Because the loop is
+ * do-while it always makes one pass, so @c pump(0) still services the ring
+ * once. Sleeps 20 ms per pass, so @p ms is a floor rather than a deadline,
+ * and it must only ever run on the net thread.
+ */
 static void pump(int ms) {
     uint32_t start = pit_ms();
     do {
@@ -181,6 +253,30 @@ static void pump(int ms) {
 /* ------------------------------------------------------------------ *
  *  Input                                                              *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Process one inbound TCP segment: the whole state machine.
+ * @param src_ip Source address, host order.
+ * @param p      The segment, header included.
+ * @param len    Segment length.
+ *
+ * Validates the checksum and data offset, then:
+ *   - no matching connection: a bare SYN to a listening port opens a new
+ *     connection passively, anything else earns an RST;
+ *   - RST marks the connection reset and closed;
+ *   - in SYN_SENT, a SYN-ACK acknowledging our SYN establishes it;
+ *   - an ACK advances @c snd_una, clears the retransmit timer once it covers
+ *     the tracked segment, and drives the closing states forward;
+ *   - data is accepted only at @c rcv_nxt and only as far as the receive
+ *     buffer has room, and @c rcv_nxt advances by what was actually buffered.
+ *     An out-of-order or window-overflowing segment is dropped, but still
+ *     ACKed: that duplicate ACK is what prompts the peer to retransmit.
+ *   - a FIN ending exactly at @c rcv_nxt is acknowledged and moves the state
+ *     to CLOSE_WAIT, CLOSING or CLOSED.
+ *
+ * There is no reassembly queue and no TIME_WAIT: a closed connection's slot
+ * is reused at once, which is why callers that reconnect quickly should vary
+ * their local port (nfs.c does).
+ */
 void tcp_input(uint32_t src_ip, const uint8_t *p, int len) {
     if (len < 20)
         return;
@@ -288,6 +384,14 @@ void tcp_input(uint32_t src_ip, const uint8_t *p, int len) {
 /* ------------------------------------------------------------------ *
  *  Public API                                                         *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Claim a free connection slot, zeroed.
+ * @return The slot index, or -1 when all @ref TCP_NCONN are in use.
+ *
+ * Each slot carries its own 8 KiB receive buffer and a retransmit copy, so
+ * the table is the largest thing this file puts in BSS — which is why there
+ * are six slots and not sixty. A listener occupies one of them.
+ */
 static int alloc(void) {
     for (int i = 0; i < TCP_NCONN; i++)
         if (!conns[i].used) {
@@ -298,6 +402,14 @@ static int alloc(void) {
     return -1;
 }
 
+/**
+ * @brief Open a listening socket.
+ * @param port Local port, host order.
+ * @return A handle for @ref tcp_accept, or -1 if no slot is free.
+ *
+ * The listener holds a slot of its own for as long as it exists, leaving that
+ * many fewer for the connections it accepts.
+ */
 int tcp_listen(uint16_t port) {
     int h = alloc();
     if (h < 0)
@@ -307,6 +419,15 @@ int tcp_listen(uint16_t port) {
     return h;
 }
 
+/**
+ * @brief Take the next connection established on a listener's port.
+ * @param listen_h Handle from @ref tcp_listen.
+ * @return A connection handle, or -1 if none is waiting.
+ *
+ * Does not block and does not pump the stack, so a caller polls it from its
+ * own loop. A -1 is the normal "nothing yet", not an error — the handshake
+ * itself is completed by @ref tcp_input as segments arrive.
+ */
 int tcp_accept(int listen_h) {
     if (listen_h < 0 || listen_h >= TCP_NCONN || !conns[listen_h].used ||
         conns[listen_h].state != ST_LISTEN)
@@ -322,6 +443,13 @@ int tcp_accept(int listen_h) {
     return -1;
 }
 
+/**
+ * @brief Can more data still arrive on this connection?
+ * @return Non-zero only in ESTABLISHED.
+ *
+ * CLOSE_WAIT is deliberately excluded: the peer has sent its FIN, so no
+ * further data is coming even though this end may still be able to write.
+ */
 int tcp_is_open(int h) {
     if (h < 0 || h >= TCP_NCONN || !conns[h].used || conns[h].reset)
         return 0;
@@ -330,10 +458,29 @@ int tcp_is_open(int h) {
     return conns[h].state == ST_ESTABLISHED;
 }
 
+/**
+ * @brief Active open from an ephemeral local port.
+ * @param ip   Remote address, host order.
+ * @param port Remote port.
+ * @return A connection handle, or -1.
+ */
 int tcp_connect(uint32_t ip, uint16_t port) {
     return tcp_connect_lport(ip, port, 0);
 }
 
+/**
+ * @brief Active open, optionally from a chosen local port.
+ * @param ip    Remote address, host order.
+ * @param port  Remote port.
+ * @param lport Local port, or 0 for an ephemeral one.
+ * @return A connection handle, or -1 if the link is down, no slot is free, or
+ *         the handshake did not complete.
+ *
+ * Blocks, pumping the stack, for up to about six seconds. The explicit local
+ * port exists for servers that insist on a reserved source port; nfs.c uses
+ * it, and varies the port precisely because this stack keeps no TIME_WAIT.
+ * A failed open releases its slot.
+ */
 int tcp_connect_lport(uint32_t ip, uint16_t port, uint16_t lport) {
     if (!net_is_up())
         return -1;
@@ -361,6 +508,19 @@ int tcp_connect_lport(uint32_t ip, uint16_t port, uint16_t lport) {
     return h;
 }
 
+/**
+ * @brief Send data, waiting for each piece to be acknowledged.
+ * @param h    Connection handle.
+ * @param data Bytes to send.
+ * @param len  Length.
+ * @return Bytes actually sent — which may be fewer than @p len — or -1 if
+ *         nothing at all went out.
+ *
+ * Stop-and-wait: one MSS in flight at a time, each chunk waited on for about
+ * six seconds before giving up and returning short. Callers must check the
+ * count rather than assume the whole buffer went. Sending continues in
+ * CLOSE_WAIT, since a peer that has finished sending can still receive.
+ */
 int tcp_send(int h, const void *data, int len) {
     if (h < 0 || h >= TCP_NCONN || !conns[h].used)
         return -1;
@@ -390,6 +550,17 @@ int tcp_send(int h, const void *data, int len) {
     return off;
 }
 
+/**
+ * @brief Take whatever is already buffered, without waiting.
+ * @param h   Connection handle.
+ * @param buf Destination.
+ * @param max Capacity of @p buf.
+ * @return Bytes copied, 0 if nothing has arrived yet, -1 on a bad handle or
+ *         a reset connection.
+ *
+ * A 0 means "not yet", never end of stream, and the caller is responsible for
+ * pumping the stack — this neither polls the ring nor runs the timer.
+ */
 int tcp_recv_nb(int h, void *buf, int max) {
     if (h < 0 || h >= TCP_NCONN || !conns[h].used)
         return -1;
@@ -408,6 +579,18 @@ int tcp_recv_nb(int h, void *buf, int max) {
     return n;
 }
 
+/**
+ * @brief Wait for data and copy it out.
+ * @param h   Connection handle.
+ * @param buf Destination.
+ * @param max Capacity of @p buf.
+ * @return Bytes copied, 0, or -1 on a bad handle or a reset connection.
+ *
+ * Pumps the stack for up to about ten seconds, returning early once the peer
+ * closes. The 0 is ambiguous — end of stream and "nothing arrived in ten
+ * seconds" look the same — so a caller reading to completion should treat 0
+ * as the end, as nfs.c and wget do, and rely on the -1 for a real failure.
+ */
 int tcp_recv(int h, void *buf, int max) {
     if (h < 0 || h >= TCP_NCONN || !conns[h].used)
         return -1;
@@ -433,6 +616,17 @@ int tcp_recv(int h, void *buf, int max) {
     return n;
 }
 
+/**
+ * @brief Close a connection and release its slot.
+ * @param h Connection handle.
+ * @return 0, or -1 for a handle that was not open.
+ *
+ * Sends a FIN from ESTABLISHED or CLOSE_WAIT and an RST from a half-open
+ * handshake, then pumps for up to about three seconds for the shutdown to
+ * settle. The slot is freed either way: there is no TIME_WAIT, so a segment
+ * still in flight for this four-tuple could be delivered to whatever reuses
+ * the slot next.
+ */
 int tcp_close(int h) {
     if (h < 0 || h >= TCP_NCONN || !conns[h].used)
         return -1;
