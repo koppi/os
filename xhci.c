@@ -339,6 +339,29 @@ static void reset_port(int port) {
 /* ------------------------------------------------------------------ *
  *  Helper: configure one interrupt IN endpoint for a device slot      *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Encode a USB bInterval as an xHCI Endpoint Context Interval.
+ *
+ * xHCI 6.2.3.6 wants an exponent: the endpoint is serviced every 2^Interval
+ * 125us microframes. bInterval does not mean the same thing at every speed —
+ * high/super speed already give an exponent, while full/low speed count whole
+ * 1 ms frames — so the raw descriptor value cannot be used directly.
+ */
+static int iep_interval(int psi, int bival) {
+    if (psi == 3 || psi == 4) {          /* high / super speed: already an exponent */
+        int e = bival - 1;
+        if (e < 0) e = 0;
+        return e > 15 ? 15 : e;
+    }
+    /* Full / low speed: bInterval is in frames. Take the largest exponent whose
+     * microframe count still fits inside it (valid range 3..10). */
+    if (bival < 1) bival = 1;
+    int e = 3;
+    while (e < 10 && (1 << (e + 1)) <= bival * 8)
+        e++;
+    return e;
+}
+
 static int configure_iep(int idx, int slot_id, int psi, int port,
                          int iface, int proto, int ep_addr, int ep_mps, int ep_ival) {
     xdev_t *d = &xdev[idx];
@@ -348,23 +371,41 @@ static int configure_iep(int idx, int slot_id, int psi, int port,
     int dci = ((ep_addr & 0x0F) * 2) + 1;   /* IN endpoint */
     int iep_idx = d->n_iep;
 
+    /* The packet size now comes from the descriptor, so bound it by the buffer
+     * the transfers land in before it reaches a TRB length. */
+    if (ep_mps <= 0)
+        ep_mps = 8;
+    if (ep_mps > (int) sizeof hid_buf[0][0])
+        ep_mps = (int) sizeof hid_buf[0][0];
+
     ring_init(int_ring[idx][iep_idx], (uint32_t)&int_ring[idx][iep_idx][0]);
     d->iep_enq[iep_idx] = 0; d->iep_cycle[iep_idx] = 1;
 
     memset(in_ctx[idx], 0, sizeof(in_ctx[idx]));
     in_ctrl(in_ctx[idx])[1] = 0x1 | (1u << dci);   /* A0 (slot) + A<dci> */
     uint32_t *sc = (uint32_t *)in_dev(in_ctx[idx]);
-    sc[0] = (dci << 27) | (psi << 20);
+    /* Context Entries has to span every endpoint the slot owns, not just the
+     * one being added — the keyboard and trackpad are two endpoints on one
+     * device, and adding the lower-numbered one second would otherwise shrink
+     * the slot context back and drop the one already configured above it. */
+    int max_dci = dci;
+    for (int i = 0; i < d->n_iep; i++)
+        if (d->iep_dci[i] > max_dci)
+            max_dci = d->iep_dci[i];
+    sc[0] = (max_dci << 27) | (psi << 20);
     sc[1] = (port << 16);
 
     uint32_t *ie = (uint32_t *)(in_dev(in_ctx[idx]) + dci * ctx_size);
-    int interval = ep_ival ? ep_ival : 8;
-    if (interval > 15) interval = 15;
+    int interval = iep_interval(psi, ep_ival);
     ie[0] = (uint32_t)interval << 16;
-    ie[1] = (7u << 3) | (3u << 1) | (ep_mps << 16);
+    ie[1] = (7u << 3) | (3u << 1) | (ep_mps << 16);   /* EP type 7 = Interrupt IN */
     ie[2] = (uint32_t)&int_ring[idx][iep_idx][0] | 1;
     ie[3] = 0;
-    ie[4] = ep_mps;
+    /* Average TRB Length, plus Max ESIT Payload Lo in the high half. A periodic
+     * endpoint left at zero payload is one the controller schedules no bandwidth
+     * for, so it is configured but never delivers — max burst is 0 here, so the
+     * payload is just one packet. */
+    ie[4] = (uint32_t)ep_mps | ((uint32_t)ep_mps << 16);
 
     trb_t ce = {{ (uint32_t)&in_ctx[idx][0], 0, 0,
                   TRB_TYPE(TRB_CONFIG_EP) | (slot_id << 24) }};
@@ -530,23 +571,20 @@ static int enumerate_port(int port) {
                     configure_iep(idx, slot_id, psi, port, current_iface, 2,
                                   addr, ep_mps, ep_ival);
                 } else if (current_proto == 3 && !found_trackpad) {
-                    /* For BCM5974 trackpad (wellspring 8), the endpoint is 0x83
-                     * regardless of what the descriptor says. The trackpad uses
-                     * a custom binary format, not HID boot protocol. */
-                    int trackpad_ep = 0x83;
-                    int trackpad_mps = 64;  /* TYPE3 report size ~100 bytes, use 64 */
+                    /* BCM5974 (wellspring 8) speaks a custom binary format on
+                     * interrupt IN 0x83, not HID boot protocol. Take the packet
+                     * size from the descriptor: a TYPE3 report is a 38-byte
+                     * header plus 28 bytes per finger, so anything under 66
+                     * bytes is dropped by bcm5974_parse_report() and the pad
+                     * looks dead. Hard-coding 64 here did exactly that.
+                     *
+                     * No mode switch is sent: TYPE3 comes up in multi-touch
+                     * already (Linux bcm5974_wellspring_mode() returns early
+                     * for it), and the malformed class request that used to be
+                     * issued here could only stall endpoint 0. */
                     configure_iep(idx, slot_id, psi, port, current_iface, 3,
-                                  trackpad_ep, trackpad_mps, 4);
-                    /* Switch to wellspring mode (multi-touch) via control transfer */
-                    usb_setup_t s = {
-                        .bmRequestType = USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-                        .bRequest = 0x09,  /* BCM5974 mode switch request */
-                        .wValue = 0x01,    /* Enable wellspring mode */
-                        .wIndex = current_iface,
-                        .wLength = 0,
-                    };
-                    ctrl_xfer(idx, &s, 0, 0, 0);
-                    bcm5974_init();  /* Initialize parsing state */
+                                  0x83, ep_mps, ep_ival);
+                    bcm5974_init();
                     found_trackpad = 1;
                 }
             }
