@@ -21,6 +21,17 @@ static inline void diag_to_screen(uint32_t cs) {
         fbcon_resume();
 }
 
+/**
+ * @brief Clamp an snprintf() return value to stay inside a buffer of size @p sz.
+ *
+ * snprintf() reports how many bytes it *would* have written, which can exceed
+ * @p sz on truncation; used to keep a running offset safe to pass back into
+ * `buf + off, sz - off` on the next call.
+ */
+static inline int clamp_off(int off, size_t sz) {
+    return off > (int)(sz - 1) ? (int)(sz - 1) : off;
+}
+
 /** Entry point jumped to in userspace to unwind a faulted process. */
 void (*return_error)(void) = (void (*)(void)) RETURN_ADDR;
 
@@ -82,10 +93,14 @@ void default_ir_handler() {
  *         user-mode unwinds the process. */
 void ex_divide_by_zero(struct regs *re) {
     diag_to_screen(re->cs);
-    printf("\nDivision by zero\n");
-    printf("eip: %x cs: %x\neax: %x ebx: %x ecx: %x edx: %x\nesp: %x ebp: %x esi: %x edi: %x\nds: %x es: %x fs: %x gs: %x\n",
-           re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp,
-           re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
+    char buf[384];
+    int off = snprintf(buf, sizeof buf, "\nDivision by zero\n");
+    off = clamp_off(off, sizeof buf);
+    snprintf(buf + off, sizeof buf - off,
+             "eip: %x cs: %x\neax: %x ebx: %x ecx: %x edx: %x\nesp: %x ebp: %x esi: %x edi: %x\nds: %x es: %x fs: %x gs: %x\n",
+             re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp,
+             re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
+    printf("%s", buf);
     if (is_user_mode_cs(re->cs))
         return_exception();
     panic("");
@@ -140,8 +155,13 @@ void ex_bounds_check() {
  */
 void ex_invalid_opcode(struct regs *re) {
     diag_to_screen(re->cs);
-    printf("Invalid opcode\n");
-    printf("eip: %x cs: %x\neax: %u ebx: %u ecx: %u edx: %u\nesp: %x ebp: %x esi: %u edi: %u\nds: %x es: %x fs: %x gs: %x\n", re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp, re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
+    char buf[384];
+    int off = snprintf(buf, sizeof buf, "Invalid opcode\n");
+    off = clamp_off(off, sizeof buf);
+    snprintf(buf + off, sizeof buf - off,
+             "eip: %x cs: %x\neax: %u ebx: %u ecx: %u edx: %u\nesp: %x ebp: %x esi: %u edi: %u\nds: %x es: %x fs: %x gs: %x\n",
+             re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp, re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
+    printf("%s", buf);
     if(is_user_mode_cs(re->cs)) {
         return_exception();
     } else {
@@ -198,9 +218,15 @@ void ex_stack_fault() {
  */
 void ex_gpf(struct regs_error *re) {
     diag_to_screen(re->cs);
-    printf("\nGeneral protection fault\nError code: %u\n", re->error);
-    printf("eip: %x cs: %x\neax: %u ebx: %u ecx: %u edx: %u\nesp: %x ebp: %x esi: %u edi: %u\nds: %x es: %x fs: %x gs: %x\n", re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp, re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
-    printf("cr2: %x cr3: %x\n", get_cr2(), get_pdbr());
+    char buf[384];
+    int off = snprintf(buf, sizeof buf, "\nGeneral protection fault\nError code: %u\n", re->error);
+    off = clamp_off(off, sizeof buf);
+    off += snprintf(buf + off, sizeof buf - off,
+             "eip: %x cs: %x\neax: %u ebx: %u ecx: %u edx: %u\nesp: %x ebp: %x esi: %u edi: %u\nds: %x es: %x fs: %x gs: %x\n",
+             re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp, re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
+    off = clamp_off(off, sizeof buf);
+    snprintf(buf + off, sizeof buf - off, "cr2: %x cr3: %x\n", get_cr2(), get_pdbr());
+    printf("%s", buf);
 
     if(is_user_mode_cs(re->cs)) {
         return_exception();
@@ -219,13 +245,15 @@ void ex_page_fault(struct regs_error *re) {
     int virt_addr = get_cr2();
     mm_addr_t phys_addr = (mm_addr_t) get_phys_addr(get_page_directory(), virt_addr);
 
-    int present = !(re->error & 1);   // Page not present
-    int rw = re->error & 0x2;         // Write operation
-    int us = re->error & 0x4;         // User mode?
+    int present  = re->error & 0x1;   // Page was present (protection violation, not a missing mapping)
+    int rw       = re->error & 0x2;   // Write operation
+    int us       = re->error & 0x4;   // User mode?
     int reserved = re->error & 0x8;   // Overwritten CPU-reserved bits of page entry
-    int id = re->error & 0x10;        // Caused by an instruction fetch?
+    int id       = re->error & 0x10;  // Caused by an instruction fetch?
 
-    printf("\nPage fault occurs while %s address 0x%x\nPage attributes: %s%s%s%s",
+    char buf[512];
+    int off = snprintf(buf, sizeof buf,
+           "\nPage fault occurs while %s address 0x%x\nPage attributes: %s%s%s%s",
            rw?"writing":"reading",
            (unsigned)virt_addr,
            present?"\0":"not-present ",
@@ -233,13 +261,17 @@ void ex_page_fault(struct regs_error *re) {
            reserved?"cpu-reserved ":"\0",
            id?"instruction-fetch":"\0"
     );
-
-    //printf("\nPage fault at addr: 0x%x\n", (unsigned)virt_addr);
-    printf("Phys addr: 0x%x\n", phys_addr);
-    printf("eip: %x cs: %x\neax: %x ebx: %x ecx: %x edx: %x\nesp: %x ebp: %x esi: %x edi: %x\nds: %x es: %x fs: %x gs: %x\n",
+    off = clamp_off(off, sizeof buf);
+    off += snprintf(buf + off, sizeof buf - off, "Phys addr: 0x%x\n", phys_addr);
+    off = clamp_off(off, sizeof buf);
+    off += snprintf(buf + off, sizeof buf - off,
+           "eip: %x cs: %x\neax: %x ebx: %x ecx: %x edx: %x\nesp: %x ebp: %x esi: %x edi: %x\nds: %x es: %x fs: %x gs: %x\n",
            re->eip, re->cs, re->eax, re->ebx, re->ecx, re->edx, re->esp, re->ebp,
            re->esi, re->edi, re->ds, re->es, re->fs, re->gs);
-    printf("cr3: %x\n", get_pdbr());
+    off = clamp_off(off, sizeof buf);
+    snprintf(buf + off, sizeof buf - off, "cr3: %x\n", get_pdbr());
+    printf("%s", buf);
+
     if(is_user_mode_cs(re->cs)) {
         return_exception();
     } else {
