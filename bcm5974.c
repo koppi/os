@@ -39,7 +39,6 @@
 static int bcm5974_finger_down = 0;
 static int bcm5974_last_x = 0;
 static int bcm5974_last_y = 0;
-static int bcm5974_button_state = 0;
 
 /** @brief Convert little-endian uint16_t to signed int. */
 static inline int le16_to_int(const uint8_t *p) {
@@ -47,12 +46,11 @@ static inline int le16_to_int(const uint8_t *p) {
 }
 
 /** @brief Apply absolute trackpad coordinates to relative mouse deltas. */
-static void bcm5974_apply_motion(int x, int y, int button_state) {
+static void bcm5974_apply_motion(int x, int y) {
     if (!bcm5974_finger_down) {
         bcm5974_last_x = x;
         bcm5974_last_y = y;
         bcm5974_finger_down = 1;
-        bcm5974_button_state = button_state;
         return;
     }
 
@@ -73,14 +71,6 @@ static void bcm5974_apply_motion(int x, int y, int button_state) {
 
     bcm5974_last_x = x;
     bcm5974_last_y = y;
-
-    /* Button handling: trackpad is a ClickPad - integrated button in data */
-    if (button_state & 0x01) {
-        mouse_info.curr_button = LEFT_CLICK;
-    } else {
-        mouse_info.curr_button = 0;
-    }
-    bcm5974_button_state = button_state;
 }
 
 /** @brief Parse BCM5974 TYPE3 trackpad data. */
@@ -101,8 +91,18 @@ void bcm5974_parse_report(const uint8_t *data, int len) {
               le16_to_int(f0 + 6), le16_to_int(f0 + 8), le16_to_int(f0 + 16));
     }
 
-    /* Button state at offset 46 (integrated button for TYPE3) */
+    /* Button state at offset 46 (integrated button for TYPE3).
+     *
+     * The ClickPad's physical button lives in the report header and is
+     * independent of finger tracking, so apply it on every report. Deciding it
+     * inside the motion path meant the first report of a touch returned before
+     * ever setting it, and any report whose fingers failed the touch_major test
+     * cleared it again — so a real press flickered on and off between reports
+     * and the frame-rate edge the UI looks for (mouse_left_button_down(), which
+     * compares against a once-per-frame snapshot) landed on a zero and the
+     * click was dropped. */
     int button_state = le16_to_int(data + BCM5974_TYPE3_BUTTON) & 0x01;
+    mouse_info.curr_button = button_state ? LEFT_CLICK : 0;
 
     /* Finger data starts right after header (delta = 0 for TYPE3) */
     const uint8_t *finger_base = data + BCM5974_TYPE3_HEADER;
@@ -124,15 +124,16 @@ void bcm5974_parse_report(const uint8_t *data, int len) {
          * once to turn the pad's upward-increasing axis into the screen's
          * downward-increasing one; flipping it here as well cancelled that out
          * and left vertical motion running backwards. */
-        bcm5974_apply_motion(abs_x, abs_y, button_state);
+        bcm5974_apply_motion(abs_x, abs_y);
         finger_found = 1;
         break;  /* Use first valid finger */
     }
 
-    if (!finger_found && bcm5974_finger_down) {
+    /* Only drop the motion anchor here. The button is not cleared: it follows
+     * the header bit above, and a click held while the fingers momentarily fail
+     * the touch_major test is still a click. */
+    if (!finger_found)
         bcm5974_finger_down = 0;
-        mouse_info.curr_button = 0;
-    }
 }
 
 /** @brief Initialize BCM5974 trackpad parsing state. */
@@ -140,6 +141,5 @@ void bcm5974_init(void) {
     bcm5974_finger_down = 0;
     bcm5974_last_x = 0;
     bcm5974_last_y = 0;
-    bcm5974_button_state = 0;
     klogf(LOG_INFO, "bcm5974: initialized for wellspring 8 (TYPE3)\n");
 }
