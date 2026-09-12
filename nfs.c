@@ -75,14 +75,28 @@
  * ------------------------------------------------------------------ */
 typedef struct { uint8_t *b; int cap; int pos; int err; } xdr_t;
 
+/**
+ * @brief Append a big-endian uint32_t.
+ *
+ * On overflow it sets the cursor's sticky @c err and writes nothing. None of
+ * the encode helpers is checked at the call site: a COMPOUND is built
+ * optimistically and @ref co_send refuses to transmit if @c err ended up set.
+ */
 static void px32(xdr_t *x, uint32_t v) {
     if (x->pos + 4 > x->cap) { x->err = 1; return; }
     x->b[x->pos++] = v >> 24; x->b[x->pos++] = v >> 16;
     x->b[x->pos++] = v >> 8;  x->b[x->pos++] = v;
 }
+/** @brief Append a big-endian uint64_t, as XDR requires: high word first. */
 static void px64(xdr_t *x, uint64_t v) {
     px32(x, (uint32_t)(v >> 32)); px32(x, (uint32_t)v);
 }
+/**
+ * @brief Append @p n raw bytes, zero-padded to the next 4-byte boundary.
+ *
+ * This is XDR's fixed-length opaque: no length prefix. Use @ref popaque when
+ * the length has to go on the wire.
+ */
 static void pbytes(xdr_t *x, const void *p, int n) {
     int pad = (4 - (n & 3)) & 3;
     if (n < 0 || x->pos + n + pad > x->cap) { x->err = 1; return; }
@@ -90,13 +104,27 @@ static void pbytes(xdr_t *x, const void *p, int n) {
     x->pos += n;
     while (pad--) x->b[x->pos++] = 0;
 }
+/** @brief Append a variable-length opaque: a uint32_t length, then the padded bytes. */
 static void popaque(xdr_t *x, const void *p, int n) { px32(x, (uint32_t)n); pbytes(x, p, n); }
+/** @brief Append a NUL-terminated string as an XDR opaque, without the NUL. */
 static void pstr(xdr_t *x, const char *s) { popaque(x, s, strlen(s)); }
+/**
+ * @brief Overwrite the uint32_t at byte @p off, for a length filled in later.
+ *
+ * Used for the RPC record mark, the AUTH_SYS body length and the COMPOUND
+ * operation count. @p off is assumed to be inside an already-written region,
+ * so unlike @ref px32 this does not check the cursor's capacity.
+ */
 static void patch32(xdr_t *x, int off, uint32_t v) {
     x->b[off] = v >> 24; x->b[off + 1] = v >> 16;
     x->b[off + 2] = v >> 8; x->b[off + 3] = v;
 }
 
+/**
+ * @brief Decode a big-endian uint32_t.
+ * @return The value, or 0 with the cursor's sticky @c err set if the buffer
+ *         ran out — so a 0 return is not by itself an error.
+ */
 static uint32_t gx32(xdr_t *x) {
     if (x->pos + 4 > x->cap) { x->err = 1; return 0; }
     uint32_t v = ((uint32_t)x->b[x->pos] << 24) | ((uint32_t)x->b[x->pos + 1] << 16) |
@@ -104,12 +132,31 @@ static uint32_t gx32(xdr_t *x) {
     x->pos += 4;
     return v;
 }
+/** @brief Decode a big-endian uint64_t as two words, high first. */
 static uint64_t gx64(xdr_t *x) { uint64_t h = gx32(x); return (h << 32) | gx32(x); }
+/**
+ * @brief Consume @p n bytes of fixed-length opaque.
+ * @param x   Cursor.
+ * @param dst Destination, or 0 to skip the field without copying it.
+ * @param n   Byte count; callers pass a multiple of 4, so no padding is read.
+ */
 static void graw(xdr_t *x, uint8_t *dst, int n) {          /* fixed array, n%4==0 */
     if (x->pos + n > x->cap) { x->err = 1; return; }
     if (dst) memcpy(dst, x->b + x->pos, n);
     x->pos += n;
 }
+/**
+ * @brief Consume a variable-length opaque and optionally copy it out.
+ * @param x   Cursor.
+ * @param dst Destination, or 0 to skip the field.
+ * @param max Capacity of @p dst.
+ * @return The length the server declared, or -1 on a decode error.
+ *
+ * The cursor always advances past the padded field, but the copy happens only
+ * if the value fits — so a return greater than @p max means @p dst was left
+ * untouched, and callers that care (@ref nfs_resolve with a file handle) must
+ * compare the result against their buffer size rather than trust it.
+ */
 static int gopaque(xdr_t *x, uint8_t *dst, int max) {
     uint32_t n = gx32(x);
     if (x->err) return -1;
@@ -162,6 +209,12 @@ static struct nofile {
 /* ------------------------------------------------------------------ *
  *  RPC framing                                                        *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Append an AUTH_SYS credential: uid 0, gid 0, no aux groups.
+ *
+ * The body length is back-patched once the contents are known. Exports
+ * mapping root (root_squash) will therefore see this client as nobody.
+ */
 static void auth_sys(xdr_t *x) {
     px32(x, 1);                        /* AUTH_SYS */
     int lenoff = x->pos; px32(x, 0);   /* body length, patched below */
@@ -174,6 +227,15 @@ static void auth_sys(xdr_t *x) {
     patch32(x, lenoff, (uint32_t)(x->pos - s));
 }
 
+/**
+ * @brief Start a new COMPOUND in @ref callbuf: RPC header, then minorversion 1.
+ * @param xid_out Receives the XID assigned to this call, for @ref co_send.
+ *
+ * Leaves a placeholder for the record mark and for the operation count, both
+ * patched at send time, and resets the operation counter. There is one call
+ * buffer, so only one COMPOUND may be under construction at a time — which the
+ * single @ref nfs_busy lock guarantees.
+ */
 static void co_begin(uint32_t *xid_out) {
     X.b = callbuf; X.cap = sizeof callbuf; X.pos = 0; X.err = 0;
     px32(&X, 0);                       /* record mark placeholder */
@@ -193,8 +255,18 @@ static void co_begin(uint32_t *xid_out) {
     co_nop = 0;
 }
 
+/** @brief Append an operation number and count it for the COMPOUND's
+ *         back-patched op count. */
 static void op(uint32_t n) { px32(&X, n); co_nop++; }
 
+/**
+ * @brief Read exactly @p n bytes from the NFS connection.
+ * @return 0 once @p n bytes are in @p buf, -1 on error or if the peer stalls.
+ *
+ * @c tcp_recv() returns 0 when nothing has arrived yet rather than blocking,
+ * so a few empty reads are tolerated; five in a row are treated as a dead
+ * connection, which is what breaks a stuck mount out of a spin.
+ */
 static int recv_all(uint8_t *buf, int n) {
     int got = 0, zeros = 0;
     while (got < n) {
@@ -268,12 +340,24 @@ static int res_op(uint32_t *opn, uint32_t *st) {
 /* ------------------------------------------------------------------ *
  *  Attribute helpers                                                  *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Append the GETATTR bitmap this client asks for.
+ *
+ * Two words: type, size and fileid live in word 0, mode is attribute 33 and
+ * so lives in word 1. @ref parse_attrs decodes exactly these.
+ */
 static void put_attr_request(xdr_t *x) {
     px32(x, 2);
     px32(x, (1u << FATTR4_TYPE) | (1u << FATTR4_SIZE) | (1u << FATTR4_FILEID));
     px32(x, (1u << (FATTR4_MODE - 32)));
 }
 
+/**
+ * @brief Append the attributes an OPEN with CREATE sets: mode 0644 only.
+ *
+ * Word 0 of the bitmap is empty; only the word-1 mode bit is set. Size is
+ * left to the server's default of 0.
+ */
 static void put_create_attrs(xdr_t *x) {
     px32(x, 2);
     px32(x, 0);
@@ -282,6 +366,15 @@ static void put_create_attrs(xdr_t *x) {
     px32(x, 0644);
 }
 
+/**
+ * @brief Decode a fattr4 into @p a.
+ * @return 0 on success, -1 on a decode error.
+ *
+ * Reads only the four attributes @ref put_attr_request asks for, in the
+ * bitmap order XDR mandates, then jumps to the end of the declared attribute
+ * list — so a server that returns more than was asked for does not desync the
+ * reply stream. Anything not returned is left zero.
+ */
 static int parse_attrs(nfs_attr_t *a) {
     memset(a, 0, sizeof *a);
     uint32_t bmlen = gx32(&R), bm0 = 0, bm1 = 0;
@@ -301,6 +394,7 @@ static int parse_attrs(nfs_attr_t *a) {
     return 0;
 }
 
+/** @brief Consume one nfsace4 (type, flag, access mask, who) without decoding it. */
 static void skip_ace(void) { gx32(&R); gx32(&R); gx32(&R); gopaque(&R, 0, 0); }
 
 /* Skip an open_delegation4 in the reply stream.
@@ -325,6 +419,13 @@ static void skip_delegation(void) {
 /* ------------------------------------------------------------------ *
  *  Session bring-up                                                   *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Append the channel attributes for CREATE_SESSION.
+ *
+ * Requests a single slot (maxrequests 1), which is why the whole client needs
+ * only the one @ref slot_seq counter and one in-flight COMPOUND. The 8 KiB
+ * request/response limits are well inside @ref callbuf and @ref replybuf.
+ */
 static void put_chan_attrs(xdr_t *x) {
     px32(x, 0);        /* headerpad */
     px32(x, 8192);     /* maxrequestsize */
@@ -334,12 +435,22 @@ static void put_chan_attrs(xdr_t *x) {
     px32(x, 1);        /* maxrequests: single slot */
     px32(x, 0);        /* rdma_ird<>: none */
 }
+/** @brief Consume a channel_attrs4 from the reply: six words plus the rdma list. */
 static void skip_chan_attrs(void) {
     for (int i = 0; i < 6; i++) gx32(&R);
     uint32_t n = gx32(&R);
     for (uint32_t i = 0; i < n; i++) gx32(&R);
 }
 
+/**
+ * @brief EXCHANGE_ID: introduce this client and learn its clientid.
+ * @return 0 on success, -1 on any transport or protocol failure.
+ *
+ * Sent outside a SEQUENCE — there is no session yet. The verifier is the TSC,
+ * so a reboot presents a new one and the server discards the old client
+ * record instead of refusing the owner id as already in use. SP4_NONE: no
+ * state protection.
+ */
 static int do_exchange_id(void) {
     uint32_t xid;
     co_begin(&xid);
@@ -367,6 +478,14 @@ static int do_exchange_id(void) {
     return R.err ? -1 : 0;
 }
 
+/**
+ * @brief CREATE_SESSION: turn the clientid into a session id.
+ * @return 0 on success, -1 otherwise.
+ *
+ * Also sent outside a SEQUENCE. The back channel is described but no callback
+ * program is registered (cb_program 0), so the server cannot recall a
+ * delegation — which is why OPEN always asks for none.
+ */
 static int do_create_session(void) {
     uint32_t xid;
     co_begin(&xid);
@@ -390,6 +509,13 @@ static int do_create_session(void) {
     return R.err ? -1 : 0;
 }
 
+/**
+ * @brief Append the SEQUENCE that must lead every post-bring-up COMPOUND.
+ *
+ * Always slot 0 with @ref slot_seq as the sequence id, and cachethis false:
+ * with one slot there is no reply cache to populate. @ref co_exchange
+ * advances @ref slot_seq only after the server accepts the SEQUENCE.
+ */
 static void put_sequence(void) {
     op(OP_SEQUENCE);
     pbytes(&X, nfs_sessionid, 16);
@@ -423,6 +549,12 @@ static int parse_dotted_quad(const char *s, uint32_t *out) {
     return 1;
 }
 
+/**
+ * @brief Is @p s an nfsstat4 that means "the session is gone, re-establish"?
+ * @return Non-zero for BADSESSION, DEADSESSION, BADSLOT, SEQ_MISORDERED and
+ *         STALE_CLIENTID — the codes a server returns after it forgot this
+ *         client, typically because it restarted.
+ */
 static int is_sess_err(uint32_t s) {
     return s == 10052 || s == 10048 || s == 10051 || s == 10022 || s == 10011;
 }
@@ -515,6 +647,14 @@ static int nfs_establish(void) {
     return rc;
 }
 
+/**
+ * @brief Establish the session if it is not up.
+ * @return 0 if a session is usable, -1 if bring-up failed.
+ *
+ * Returns success while @ref establishing is set: the bring-up path itself
+ * issues COMPOUNDs, and without this guard those calls would recurse back
+ * into @ref nfs_establish.
+ */
 static int ensure_session(void) {
     if (nfs_mounted || establishing) return 0;
     return nfs_establish();
@@ -592,6 +732,15 @@ static int nfs_resolve(char comp[][64], int n, nfs_fh_t *fh, nfs_attr_t *a) {
     return -1;
 }
 
+/**
+ * @brief Fetch the export root's file handle and attributes.
+ * @param fh Receives the handle.
+ * @param a  Receives the attributes.
+ * @return 0 on success.
+ *
+ * @ref nfs_resolve with zero path components, so it stops at whatever
+ * @ref nfs_probe_export decided the export root is.
+ */
 static int nfs_lookup_root(nfs_fh_t *fh, nfs_attr_t *a) {
     char comp[NFS_MAXCOMP][64];
     return nfs_resolve(comp, 0, fh, a);
@@ -676,6 +825,17 @@ static int nfs_do_open(char comp[][64], int n, int create, int wr,
     return -1;
 }
 
+/**
+ * @brief CLOSE an open stateid.
+ * @param fh  The file's handle.
+ * @param sid The stateid OPEN returned.
+ * @return 0 if the COMPOUND reached the server, -1 otherwise.
+ *
+ * CLOSE's own status is read but ignored: the local slot is dropped either
+ * way, and a server that has already forgotten the state is not a failure the
+ * caller can do anything about. Unlike the other operations this does not
+ * retry on a dead session — a re-established session has no stateid to close.
+ */
 static int nfs_do_close(nfs_fh_t *fh, uint8_t sid[16]) {
     if (ensure_session() != 0) return -1;
     uint32_t xid;
@@ -742,6 +902,10 @@ static int nfs_do_write(nfs_fh_t *fh, uint8_t sid[16], uint64_t off,
     return R.err ? -1 : (int)wrote;
 }
 
+/**
+ * @brief REMOVE @p name from the directory @p parent.
+ * @return 0 on success, -1 on any failure, including "no such file".
+ */
 static int nfs_do_remove(nfs_fh_t *parent, const char *name) {
     if (ensure_session() != 0) return -1;
     uint32_t xid;
@@ -756,6 +920,16 @@ static int nfs_do_remove(nfs_fh_t *parent, const char *name) {
     return 0;
 }
 
+/**
+ * @brief READDIR a directory and print its entries to the console.
+ *
+ * Pages through the directory with the cookie and cookie verifier the server
+ * returns, asking for the type attribute so directories can be marked with a
+ * trailing '/'. Capped at 64 pages so a pathological or looping server cannot
+ * hold the net thread forever; prints "(empty)" if nothing was listed. There
+ * is no machine-readable form of this — @ref vfs_listdir deliberately returns
+ * 0 for NFS paths.
+ */
 static void nfs_do_readdir(nfs_fh_t *dir) {
     uint8_t verf[8];
     uint64_t cookie = 0;
@@ -824,9 +998,22 @@ static struct {
 } NR;
 
 static volatile int nfs_busy;
+/** @brief Take the client lock guarding the single @c NR request block,
+ *         sleeping 20 ms between attempts rather than spinning. */
 static void nfs_acquire(void) { while (__sync_lock_test_and_set(&nfs_busy, 1)) sleep(20); }
+/** @brief Release the client lock taken by @ref nfs_acquire. */
 static void nfs_release(void) { __sync_lock_release(&nfs_busy); }
 
+/**
+ * @brief NREQ_OPEN on the net thread: resolve, then OPEN if it is a file.
+ *
+ * A bare mount point or an existing directory comes back as @c FS_DIR without
+ * consuming an open slot. A real file takes a slot in @ref noft, and the
+ * slot index is stored in @c file::current_cluster — the field FAT uses for
+ * its start cluster, reused here because @c file has nowhere else to put it.
+ * @ref NFS_MAX_OPEN in that field means "no slot", so a file that failed to
+ * open, or opened when all eight slots were busy, reads back as @c FS_NULL.
+ */
 static void task_open(void) {
     char comp[NFS_MAXCOMP][64];
     int n = split_path(NR.path, comp);
@@ -876,6 +1063,14 @@ static void task_open(void) {
     NR.f = f;
 }
 
+/**
+ * @brief NREQ_READ on the net thread: fill one 512-byte block from the file.
+ *
+ * The VFS read interface has no length, so the buffer is always treated as
+ * 512 bytes and zero-filled first. Sets @c f->eof at the server's EOF, on a
+ * short read, or once the offset reaches the size recorded at open — so a
+ * file another client grows while it is open is not followed.
+ */
 static void task_read(void) {
     file *f = &NR.f;
     memset(NR.buf, 0, 512);
@@ -893,6 +1088,13 @@ static void task_read(void) {
     if (eof || dl == 0 || of->off >= of->size) f->eof = 1;
 }
 
+/**
+ * @brief NREQ_WRITE on the net thread: append a string at the file offset.
+ *
+ * The length comes from @c strlen(), so this writes text only: an embedded
+ * NUL truncates the write. WRITE_FILE_SYNC4 means the server has committed
+ * the data before it replies, so there is no COMMIT to follow.
+ */
 static void task_write(void) {
     file *f = &NR.f;
     uint32_t sl = f->current_cluster;
@@ -908,6 +1110,12 @@ static void task_write(void) {
     }
 }
 
+/**
+ * @brief NREQ_CLOSE on the net thread: CLOSE the stateid and free the slot.
+ *
+ * Tolerates a handle with no slot (a directory, or a failed open), and always
+ * marks the handle @c FS_NULL so a double close is harmless.
+ */
 static void task_close(void) {
     file *f = &NR.f;
     uint32_t sl = f->current_cluster;
@@ -918,6 +1126,12 @@ static void task_close(void) {
     f->type = FS_NULL;
 }
 
+/**
+ * @brief NREQ_LS on the net thread: list a directory to the console.
+ *
+ * Reports "not found" or "not a directory" itself; the console has no other
+ * channel for the error, since the VFS ls hook returns void.
+ */
 static void task_ls(void) {
     char comp[NFS_MAXCOMP][64];
     int n = split_path(NR.path, comp);
@@ -929,6 +1143,12 @@ static void task_ls(void) {
     printf("\n");
 }
 
+/**
+ * @brief NREQ_CD on the net thread: test whether a path is a directory.
+ *
+ * Returns a handle of type @c FS_DIR or @c FS_NULL; nothing is opened, so no
+ * slot is consumed and no close is needed.
+ */
 static void task_cd(void) {
     char comp[NFS_MAXCOMP][64];
     int n = split_path(NR.path, comp);
@@ -942,6 +1162,14 @@ static void task_cd(void) {
     NR.f = f;
 }
 
+/**
+ * @brief NREQ_TOUCH on the net thread: create a file, then close it again.
+ *
+ * OPEN with CREATE/UNCHECKED4, so an existing file is left as it is and still
+ * reports success, matching touch(1). Sets @c NR.rc to 1 on success, 0 on
+ * failure — the VFS convention, the opposite of the 0-is-success used inside
+ * this file.
+ */
 static void task_touch(void) {
     char comp[NFS_MAXCOMP][64];
     int n = split_path(NR.path, comp);
@@ -954,6 +1182,11 @@ static void task_touch(void) {
     NR.rc = 1;
 }
 
+/**
+ * @brief NREQ_DELETE on the net thread: resolve the parent, then REMOVE.
+ *
+ * Sets @c NR.rc to 1 on success, 0 on failure.
+ */
 static void task_delete(void) {
     char comp[NFS_MAXCOMP][64];
     int n = split_path(NR.path, comp);
@@ -964,6 +1197,13 @@ static void task_delete(void) {
     NR.rc = (nfs_do_remove(&parent, comp[n - 1]) == 0) ? 1 : 0;
 }
 
+/**
+ * @brief The single entry point @c net_exec() runs on the net thread.
+ * @return @c NR.rc, which only the touch and delete paths set.
+ *
+ * Every nfs_vfs_* wrapper fills in @c NR and routes through here, so all
+ * socket traffic stays on the one thread that owns the TCP stack.
+ */
 static int nfs_task(void) {
     NR.rc = 0;
     switch (NR.op) {
@@ -982,8 +1222,18 @@ static int nfs_task(void) {
 /* ------------------------------------------------------------------ *
  *  Public API                                                         *
  * ------------------------------------------------------------------ */
+/** @brief Is the export mounted? @return Non-zero once bring-up succeeded. */
 int nfs_is_mounted(void) { return nfs_mounted; }
 
+/**
+ * @brief Does @p name fall under the NFS mount point?
+ * @param name A VFS path, with or without a leading slash.
+ * @return Non-zero for "/nfs", "nfs/x" and the like, 0 otherwise.
+ *
+ * The component must end at a '/', a space or the end of the string, so
+ * "nfsroot" does not match. vfs.c consults this before the device table, so
+ * a real device called "nfs" would be shadowed.
+ */
 int nfs_owns_path(const char *name) {
     const char *p = name;
     if (!p) return 0;
@@ -993,12 +1243,24 @@ int nfs_owns_path(const char *name) {
     return c == 0 || c == '/' || c == ' ';
 }
 
+/**
+ * @brief One line of mount status for the console.
+ * @return A static string; not a copy, so it must not be modified.
+ */
 const char *nfs_status_str(void) {
     return nfs_mounted
         ? "nfs: " NFS_HOST ":" NFS_EXPORT " mounted at /" NFS_MOUNTPOINT
         : "nfs: not mounted (auto-retry every 10s once the link is up)";
 }
 
+/**
+ * @brief Try to mount the export; called repeatedly from @ref net_thread.
+ *
+ * Does nothing once mounted or while the link is down, and otherwise retries
+ * at most every 10 seconds, so a server that is not there costs one connect
+ * attempt per interval rather than a spin. Runs on the net thread already, so
+ * unlike the nfs_vfs_* wrappers it calls @ref nfs_establish directly.
+ */
 void nfs_boot_tick(void) {
     static uint32_t next_ms;
     if (nfs_mounted || !net_is_up()) return;
@@ -1013,6 +1275,10 @@ void nfs_boot_tick(void) {
         klogf(LOG_WARNING, "nfs: mount of %s:%s failed, will retry\n", NFS_HOST, NFS_EXPORT);
 }
 
+/**
+ * @brief VFS hook: list an NFS directory to the console.
+ * @param dir Device-qualified path under the mount point.
+ */
 void nfs_vfs_ls(char *dir) {
     nfs_acquire();
     NR.op = NREQ_LS;
@@ -1021,6 +1287,11 @@ void nfs_vfs_ls(char *dir) {
     nfs_release();
 }
 
+/**
+ * @brief VFS hook: test whether an NFS path is a directory.
+ * @param dir Device-qualified path.
+ * @return A handle of type @c FS_DIR, or @c FS_NULL if it is not one.
+ */
 file nfs_vfs_cd(char *dir) {
     nfs_acquire();
     NR.op = NREQ_CD;
@@ -1031,6 +1302,12 @@ file nfs_vfs_cd(char *dir) {
     return f;
 }
 
+/**
+ * @brief VFS hook: open an NFS file.
+ * @param name Device-qualified path.
+ * @param mode "w" creates and truncates; anything else opens for reading.
+ * @return A handle, of type @c FS_NULL if the open failed.
+ */
 file nfs_vfs_open(char *name, const char *mode) {
     nfs_acquire();
     NR.op = NREQ_OPEN;
@@ -1042,6 +1319,11 @@ file nfs_vfs_open(char *name, const char *mode) {
     return f;
 }
 
+/**
+ * @brief VFS hook: read the next 512 bytes of an open NFS file.
+ * @param f   Handle; its offset and @c eof flag are updated in place.
+ * @param buf Destination, which must have room for 512 bytes.
+ */
 void nfs_vfs_read(file *f, char *buf) {
     nfs_acquire();
     NR.op = NREQ_READ; NR.f = *f; NR.buf = buf;
@@ -1050,6 +1332,11 @@ void nfs_vfs_read(file *f, char *buf) {
     nfs_release();
 }
 
+/**
+ * @brief VFS hook: append a NUL-terminated string to an open NFS file.
+ * @param f   Handle; its length is updated in place.
+ * @param str Text to write. Binary data with embedded NULs is truncated.
+ */
 void nfs_vfs_write(file *f, char *str) {
     nfs_acquire();
     NR.op = NREQ_WRITE; NR.f = *f; NR.buf = str;
@@ -1058,6 +1345,10 @@ void nfs_vfs_write(file *f, char *str) {
     nfs_release();
 }
 
+/**
+ * @brief VFS hook: close an open NFS file and release its slot.
+ * @param f Handle; marked @c FS_NULL on return.
+ */
 void nfs_vfs_close(file *f) {
     nfs_acquire();
     NR.op = NREQ_CLOSE; NR.f = *f;
@@ -1066,6 +1357,11 @@ void nfs_vfs_close(file *f) {
     nfs_release();
 }
 
+/**
+ * @brief VFS hook: create an empty NFS file.
+ * @param name Device-qualified path.
+ * @return 1 on success, 0 on failure. An existing file counts as success.
+ */
 int nfs_vfs_touch(char *name) {
     nfs_acquire();
     NR.op = NREQ_TOUCH;
@@ -1076,6 +1372,11 @@ int nfs_vfs_touch(char *name) {
     return rc;
 }
 
+/**
+ * @brief VFS hook: delete an NFS file.
+ * @param name Device-qualified path.
+ * @return 1 on success, 0 on failure.
+ */
 int nfs_vfs_delete(char *name) {
     nfs_acquire();
     NR.op = NREQ_DELETE;
