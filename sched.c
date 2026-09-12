@@ -415,7 +415,11 @@ uint64_t schedule(uint32_t esp) {
     if (out_t)
         out_t->esp_kernel = esp;
     if (!idle_now) {
-        out_p->cpu = -1;
+        /* out_p->cpu deliberately stays claimed here: this CPU is still running
+         * on out_t's kernel stack and only leaves it when the stub reloads ESP.
+         * Releasing it now would let another CPU resume one of out_p's threads
+         * and run down that same stack, over the frames we are still unwinding.
+         * sched_switch_done() performs the release once we are off it. */
         thread_t *start = out_t ? out_t : out_p->thread_list;
         thread_t *t = start;
         do {
@@ -430,7 +434,9 @@ uint64_t schedule(uint32_t esp) {
     {
         process_t *p = list;
         for (int i = 0; i < n_proc; i++, p = p->next) {
-            if (!proc_runnable(p) || p->cpu >= 0)
+            /* out_p is still claimed by this CPU (released after the switch),
+             * so admit it here the way the priority scan above does. */
+            if (!proc_runnable(p) || (p->cpu >= 0 && p != out_p))
                 continue;
             if (p->thread_list->priority < top)
                 continue;
@@ -452,6 +458,10 @@ uint64_t schedule(uint32_t esp) {
         c->current = c->idle;
     }
 
+    /* Hand the outgoing process to sched_switch_done(). Re-picking it means we
+     * never left its stack, so there is nothing to release. */
+    c->prev_proc = (!idle_now && nxt_p != out_p) ? out_p : 0;
+
     thread_t *save_from = out_t ? out_t : c->idle;
     if (nxt_t != save_from) {
         asm volatile("fxsave (%0)" :: "r"(save_from->fpu_state) : "memory");
@@ -468,6 +478,26 @@ uint64_t schedule(uint32_t esp) {
 
     spin_unlock(&sched_lock, f);
     return SCHED_RESUME(nxt_t->esp_kernel, nd != entry_dir ? nd : 0);
+}
+
+/**
+ * @brief Release the process this CPU just switched away from.
+ *
+ * Called from the context-switch stubs (smp_asm.S) immediately after ESP has
+ * moved to the incoming thread's kernel stack. Until it runs, the outgoing
+ * process stays claimed by this CPU, so no other CPU can resume one of its
+ * threads while we are still unwinding on its stack. Only this CPU can clear
+ * the claim, so no other CPU can have taken the process in the meantime.
+ */
+void sched_switch_done(void) {
+    cpu_t *c = this_cpu();
+    process_t *prev = c->prev_proc;
+    if (!prev)
+        return;
+    c->prev_proc = 0;
+    uint32_t f = spin_lock(&sched_lock);
+    prev->cpu = -1;
+    spin_unlock(&sched_lock, f);
 }
 
 void sched_yield(void) {

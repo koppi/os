@@ -79,6 +79,14 @@ process_t *current_user_proc(void);
  */
 uint64_t schedule(uint32_t esp);
 /**
+ * @brief Release the process this CPU switched away from.
+ *
+ * Called by the context-switch stubs once ESP is on the incoming thread's
+ * kernel stack. @ref schedule leaves the outgoing process claimed so that no
+ * other CPU can resume it while this one is still unwinding on its stack.
+ */
+void sched_switch_done(void);
+/**
  * @brief Voluntarily give up the CPU.
  *
  * Marks the caller's thread as yielding and halts until the next tick runs the

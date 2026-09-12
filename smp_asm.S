@@ -14,6 +14,7 @@
     .extern lapic_timer_tick
     .extern ipi_tlb_handler
     .extern ipi_resched_tick
+    .extern sched_switch_done
     .extern lapic_eoi
 
     .macro LAPIC_EOI
@@ -54,6 +55,9 @@ lapic_timer_int:
     jz 1f                    /*   ESP is the new stack (mapped there, not here) */
     movl %edx, %cr3
 1:
+    /* Off the outgoing thread's stack: only now may another CPU resume it.
+     * Scratches eax/ecx/edx, which are restored from the frame below. */
+    call sched_switch_done
 
     LAPIC_EOI
 
@@ -129,6 +133,7 @@ ipi_resched_int:
     jz 1f
     movl %edx, %cr3
 1:
+    call sched_switch_done   /* see lapic_timer_int */
 
     LAPIC_EOI
 

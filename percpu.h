@@ -55,6 +55,9 @@ typedef struct cpu {
     process_t *current_proc;   /**< Process owning @c current. */
     thread_t *idle;            /**< This CPU's idle thread (never leaves it). */
     page_dir_t *current_dir;   /**< Page directory loaded on this CPU. */
+    process_t *prev_proc;      /**< Process switched away from but not yet
+                                    released: it stays claimed by this CPU until
+                                    @ref sched_switch_done runs. */
 
     int preempt_disable;       /**< Per-CPU preemption gate (was sched_state). */
     tss_t tss;                 /**< This CPU's TSS (ESP0/SS0 for ring-3 entry). */
