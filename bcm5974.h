@@ -6,6 +6,11 @@
 
 #include <types.h>
 
+/** Shortest packet that can hold a TYPE3 report: the 38-byte header plus one
+ *  28-byte finger block. Anything shorter arrived in some other format — a
+ *  boot-protocol mouse report, typically — and is not a trackpad packet. */
+#define BCM5974_MIN_REPORT 66
+
 /** @brief Initialize BCM5974 trackpad parsing state. */
 void bcm5974_init(void);
 

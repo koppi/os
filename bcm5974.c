@@ -85,7 +85,7 @@ static void bcm5974_apply_motion(int x, int y, int button_state) {
 
 /** @brief Parse BCM5974 TYPE3 trackpad data. */
 void bcm5974_parse_report(const uint8_t *data, int len) {
-    if (len < BCM5974_TYPE3_HEADER + BCM5974_TYPE3_FSIZE)
+    if (len < BCM5974_MIN_REPORT)
         return;
 
     /* Button state at offset 46 (integrated button for TYPE3) */

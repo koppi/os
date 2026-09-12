@@ -434,6 +434,18 @@ static int configure_iep(int idx, int slot_id, int psi, int port,
         s = (usb_setup_t){ .bmRequestType = 0x21, .bRequest = HID_REQ_SET_IDLE,
                            .wValue = 0, .wIndex = iface, .wLength = 0 };
         ctrl_xfer(idx, &s, 0, 0, 0);
+    } else if (proto == 3) {
+        /* Ask explicitly for the report protocol. Apple's firmware sets up the
+         * topcase for its own boot-time input, so the interface can arrive
+         * still in boot protocol, emitting 3-byte mouse reports that are far
+         * too short for a TYPE3 packet and get dropped on the floor. A device
+         * that does not implement the request just stalls, which is harmless. */
+        usb_setup_t s = (usb_setup_t){ .bmRequestType = 0x21, .bRequest = HID_REQ_SET_PROTOCOL,
+                                       .wValue = HID_PROTO_REPORT, .wIndex = iface, .wLength = 0 };
+        ctrl_xfer(idx, &s, 0, 0, 0);
+        s = (usb_setup_t){ .bmRequestType = 0x21, .bRequest = HID_REQ_SET_IDLE,
+                           .wValue = 0, .wIndex = iface, .wLength = 0 };
+        ctrl_xfer(idx, &s, 0, 0, 0);
     }
 
     d->iep_dci[iep_idx] = dci;
@@ -602,7 +614,15 @@ static int enumerate_port(int port) {
             uint8_t iproto = cfg[off + 7];
 
             if (iclass == USB_CLASS_HID) {
-                if (isubclass == 1 && (iproto == 1 || iproto == 2)) {
+                if (is_apple_trackpad && iproto == HID_PROTOCOL_MOUSE &&
+                    !found_trackpad) {
+                    /* On the topcase the trackpad advertises itself as a mouse
+                     * — Linux matches bcm5974 on HID class + protocol 2 — and
+                     * may or may not also claim the boot subclass. Claim it for
+                     * the BCM5974 path either way, rather than letting the boot
+                     * branch below put it into boot protocol. */
+                    current_proto = 3;
+                } else if (isubclass == 1 && (iproto == 1 || iproto == 2)) {
                     /* Boot protocol keyboard or mouse */
                     current_proto = iproto;
                 } else if (is_apple_trackpad && !found_trackpad) {
@@ -611,6 +631,8 @@ static int enumerate_port(int port) {
                 } else {
                     current_proto = 0;
                 }
+                klogf(LOG_INFO, "xhci: iface %d HID class %d/%d/%d -> proto %d\n",
+                      current_iface, iclass, isubclass, iproto, current_proto);
             } else {
                 current_proto = 0;
             }
@@ -876,7 +898,14 @@ void xhci_poll(void) {
                 } else if (proto == 2) {
                     usb_hid_report_mouse(buf, n);
                 } else if (proto == 3) {
-                    bcm5974_parse_report(buf, n);
+                    /* The trackpad is asked for the report protocol at setup,
+                     * but honour whatever it actually sends: a packet too short
+                     * to be a TYPE3 report is the boot-protocol mouse report,
+                     * which still carries usable movement and buttons. */
+                    if (n >= BCM5974_MIN_REPORT)
+                        bcm5974_parse_report(buf, n);
+                    else
+                        usb_hid_report_mouse(buf, n);
                 }
             }
 
