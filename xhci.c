@@ -15,6 +15,7 @@
 #include <pci.h>
 #include <usb.h>
 #include <usb_hid.h>
+#include <bcm5974.h>
 
 #include <mm.h>
 #include <paging.h>
@@ -96,6 +97,8 @@ typedef struct { uint32_t d[4]; } trb_t;
  *  Static DMA structures (identity-mapped .bss)                       *
  * ------------------------------------------------------------------ */
 #define MAX_SLOTS 4
+#define MAX_INT_EP 2      /* HID interfaces per device: e.g. an Apple topcase */
+                          /* reports a boot keyboard AND a BCM5974 trackpad.  */
 
 static uint64_t dcbaa[64]      __attribute__((aligned(64)));
 static uint64_t scratch_arr[64] __attribute__((aligned(64)));  /* scratchpad ptrs */
@@ -108,9 +111,11 @@ static struct { uint64_t base; uint32_t size; uint32_t rsv; }
 static uint8_t  dev_ctx  [MAX_SLOTS][32 * 64] __attribute__((aligned(64)));
 static uint8_t  in_ctx   [MAX_SLOTS][33 * 64] __attribute__((aligned(64)));
 static trb_t    ep0_ring [MAX_SLOTS][RING_SZ] __attribute__((aligned(64)));
-static trb_t    int_ring [MAX_SLOTS][RING_SZ] __attribute__((aligned(64)));
+static trb_t    int_ring [MAX_SLOTS][MAX_INT_EP][RING_SZ] __attribute__((aligned(64)));
 static uint8_t  xfer_buf [MAX_SLOTS][256] __attribute__((aligned(64)));
-static uint8_t  hid_buf  [MAX_SLOTS][16]  __attribute__((aligned(64)));
+/* One HID report staging buffer per interrupt endpoint. 512 bytes covers the
+ * largest BCM5974 multi-touch package (type-3 header + 16 finger blocks). */
+static uint8_t  hid_buf  [MAX_SLOTS][MAX_INT_EP][512] __attribute__((aligned(64)));
 
 /* ------------------------------------------------------------------ *
  *  Controller / device state                                          *
@@ -127,15 +132,20 @@ static int max_ports;
 static uint32_t cmd_enq, cmd_cycle = 1;
 static uint32_t evt_deq, evt_cycle = 1;
 
+#define MAX_IEP_PER_DEV 2  /* keyboard + trackpad */
+
 typedef struct {
     int      in_use;
     int      slot_id;
     int      port;              /* 1-based root port */
-    int      hid_dci;           /* DCI of the interrupt endpoint, or 0 */
-    int      hid_proto;         /* 1 = keyboard, 2 = mouse */
+    int      n_iep;             /* # of configured interrupt IN endpoints    */
+    int      iep_dci[MAX_IEP_PER_DEV];   /* DCI of the interrupt endpoint         */
+    int      iep_iface[MAX_IEP_PER_DEV]; /* owning interface number               */
+    int      iep_proto[MAX_IEP_PER_DEV]; /* 1 = keyboard, 2 = mouse, 3 = BCM5974  */
+    int      iep_len[MAX_IEP_PER_DEV];   /* bytes requested per transfer          */
     uint32_t ep0_enq, ep0_cycle;
-    uint32_t int_enq, int_cycle;
-    uint8_t  hid_prev[8];
+    uint32_t iep_enq[MAX_IEP_PER_DEV], iep_cycle[MAX_IEP_PER_DEV];
+    uint8_t  hid_prev[8];       /* previous keyboard report (edge detection) */
 } xdev_t;
 static xdev_t xdev[MAX_SLOTS];
 
@@ -283,8 +293,23 @@ static int get_descriptor(int idx, uint8_t type, uint8_t index, void *buf, int l
 }
 
 /* ------------------------------------------------------------------ *
- *  Enumeration                                                        *
+ *  MacBook Air / Apple device helpers                                 *
  * ------------------------------------------------------------------ */
+/* The internal keyboard + trackpad of a MacBook Air 6,x (2013) is a single
+ * composite USB HID device ("Apple Internal Keyboard / Trackpad", widekeys
+ * "wellspring 8", Linux bcm5974). Interface 0 is a boot keyboard; interface 1
+ * is the BCM5974 multi-touch trackpad which needs its own endpoint and its own
+ * report handler, and must NOT be switched to the HID boot protocol. */
+#define APPLE_VENDOR       0x05ac
+#define APPLE_TP_PID_ANSI  0x0290   /* MacBookAir6,x wellspring 8            */
+#define APPLE_TP_PID_ISO   0x0291
+#define APPLE_TP_PID_JIS   0x0292
+
+static int is_apple_tp_pid(uint16_t pid) {
+    return pid == APPLE_TP_PID_ANSI || pid == APPLE_TP_PID_ISO ||
+           pid == APPLE_TP_PID_JIS;
+}
+
 /* xHCI PSI speed id -> USB max packet 0 for the control endpoint. */
 static int ep0_mps_for_speed(int psi) {
     switch (psi) {
@@ -311,7 +336,76 @@ static void reset_port(int port) {
     pit_busywait_ms(10);
 }
 
-/** @brief Bring up whatever is on root @p port. @return slot idx or -1. */
+/* ------------------------------------------------------------------ *
+ *  Helper: configure one interrupt IN endpoint for a device slot      *
+ * ------------------------------------------------------------------ */
+static int configure_iep(int idx, int slot_id, int psi, int port,
+                         int iface, int proto, int ep_addr, int ep_mps, int ep_ival) {
+    xdev_t *d = &xdev[idx];
+    if (d->n_iep >= MAX_IEP_PER_DEV)
+        return -1;
+
+    int dci = ((ep_addr & 0x0F) * 2) + 1;   /* IN endpoint */
+    int iep_idx = d->n_iep;
+
+    ring_init(int_ring[idx][iep_idx], (uint32_t)&int_ring[idx][iep_idx][0]);
+    d->iep_enq[iep_idx] = 0; d->iep_cycle[iep_idx] = 1;
+
+    memset(in_ctx[idx], 0, sizeof(in_ctx[idx]));
+    in_ctrl(in_ctx[idx])[1] = 0x1 | (1u << dci);   /* A0 (slot) + A<dci> */
+    uint32_t *sc = (uint32_t *)in_dev(in_ctx[idx]);
+    sc[0] = (dci << 27) | (psi << 20);
+    sc[1] = (port << 16);
+
+    uint32_t *ie = (uint32_t *)(in_dev(in_ctx[idx]) + dci * ctx_size);
+    int interval = ep_ival ? ep_ival : 8;
+    if (interval > 15) interval = 15;
+    ie[0] = (uint32_t)interval << 16;
+    ie[1] = (7u << 3) | (3u << 1) | (ep_mps << 16);
+    ie[2] = (uint32_t)&int_ring[idx][iep_idx][0] | 1;
+    ie[3] = 0;
+    ie[4] = ep_mps;
+
+    trb_t ce = {{ (uint32_t)&in_ctx[idx][0], 0, 0,
+                  TRB_TYPE(TRB_CONFIG_EP) | (slot_id << 24) }};
+    trb_t r;
+    if (cmd_exec(ce, &r) != CC_SUCCESS) {
+        klogf(LOG_WARNING, "xhci: Configure Endpoint failed (iface %d)\n", iface);
+        return -1;
+    }
+
+    /* For boot protocol devices (keyboard/mouse), set protocol + idle.
+     * For BCM5974 trackpad (proto == 3), do NOT set boot protocol. */
+    if (proto == 1 || proto == 2) {
+        usb_setup_t s = (usb_setup_t){ .bmRequestType = 0x21, .bRequest = HID_REQ_SET_PROTOCOL,
+                                       .wValue = HID_PROTO_BOOT, .wIndex = iface, .wLength = 0 };
+        ctrl_xfer(idx, &s, 0, 0, 0);
+        s = (usb_setup_t){ .bmRequestType = 0x21, .bRequest = HID_REQ_SET_IDLE,
+                           .wValue = 0, .wIndex = iface, .wLength = 0 };
+        ctrl_xfer(idx, &s, 0, 0, 0);
+    }
+
+    d->iep_dci[iep_idx] = dci;
+    d->iep_iface[iep_idx] = iface;
+    d->iep_proto[iep_idx] = proto;
+    d->iep_len[iep_idx] = ep_mps;
+    d->n_iep++;
+
+    /* Arm the first interrupt-IN transfer */
+    trb_t nt = {{ 0 }};
+    nt.d[0] = (uint32_t)&hid_buf[idx][iep_idx][0];
+    nt.d[2] = ep_mps;
+    nt.d[3] = TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_ISP;
+    ring_push(int_ring[idx][iep_idx], &d->iep_enq[iep_idx], &d->iep_cycle[iep_idx], nt);
+
+    klogf(LOG_INFO, "xhci: slot %d iface %d proto %d ep 0x%x configured\n",
+          slot_id, iface, proto, ep_addr);
+    return 0;
+}
+
+/* ------------------------------------------------------------------ *
+ *  Enumeration                                                        *
+ * ------------------------------------------------------------------ */
 static int enumerate_port(int port) {
     int psi = PORTSC_SPEED(opr(OP_PORTSC(port - 1)));
 
@@ -330,7 +424,7 @@ static int enumerate_port(int port) {
     d->in_use = 1;
     d->slot_id = slot_id;
     d->port = port;
-    d->ep0_cycle = d->int_cycle = 1;
+    d->ep0_cycle = 1;
 
     memset(dev_ctx[idx], 0, sizeof(dev_ctx[idx]));
     dcbaa[slot_id] = (uint32_t)&dev_ctx[idx][0];
@@ -340,17 +434,17 @@ static int enumerate_port(int port) {
     in_ctrl(in_ctx[idx])[1] = 0x3;                 /* A0 (slot) | A1 (EP0) */
 
     uint32_t *sc = (uint32_t *)in_dev(in_ctx[idx]);
-    sc[0] = (1u << 27) | (psi << 20);              /* context entries = 1, speed */
-    sc[1] = (port << 16);                          /* root hub port number */
+    sc[0] = (1u << 27) | (psi << 20);
+    sc[1] = (port << 16);
 
     ring_init(ep0_ring[idx], (uint32_t)&ep0_ring[idx][0]);
     uint32_t *e0 = (uint32_t *)(in_dev(in_ctx[idx]) + 1 * ctx_size);
     int mps = ep0_mps_for_speed(psi);
     e0[0] = 0;
-    e0[1] = (4u << 3) | (3u << 1) | (mps << 16);   /* EP type Control, CErr 3 */
-    e0[2] = (uint32_t)&ep0_ring[idx][0] | 1;       /* TR dequeue | DCS */
+    e0[1] = (4u << 3) | (3u << 1) | (mps << 16);
+    e0[2] = (uint32_t)&ep0_ring[idx][0] | 1;
     e0[3] = 0;
-    e0[4] = 8;                                     /* average TRB length */
+    e0[4] = 8;
 
     /* 3. Address Device */
     trb_t ad = {{ (uint32_t)&in_ctx[idx][0], 0, 0,
@@ -361,7 +455,7 @@ static int enumerate_port(int port) {
         return -1;
     }
 
-    /* 4. Device descriptor (first 8, then full) */
+    /* 4. Device descriptor */
     usb_device_desc_t dd;
     memset(&dd, 0, sizeof(dd));
     if (get_descriptor(idx, USB_DT_DEVICE, 0, &dd, 8) < 0 ||
@@ -380,88 +474,85 @@ static int enumerate_port(int port) {
     if (get_descriptor(idx, USB_DT_CONFIG, 0, cfg, total) < 0)
         { d->in_use = 0; return -1; }
 
-    /* 6. Find a HID boot keyboard/mouse interface + its interrupt IN EP */
-    int off = 0, want_iface = -1, proto = 0, ep_addr = 0, ep_mps = 8, ep_ival = 8;
-    while (off + 2 <= total) {
-        int blen = cfg[off], btype = cfg[off + 1];
-        if (blen < 2) break;
-        if (btype == USB_DT_INTERFACE) {
-            if (cfg[off + 5] == USB_CLASS_HID && cfg[off + 6] == 1 /* boot */) {
-                want_iface = cfg[off + 2];
-                proto = cfg[off + 7];
-            } else {
-                want_iface = -1;
-            }
-        } else if (btype == USB_DT_ENDPOINT && want_iface >= 0) {
-            int attr = cfg[off + 3], addr = cfg[off + 2];
-            if ((attr & 3) == 3 && (addr & 0x80)) {
-                ep_addr = addr;
-                ep_mps  = cfg[off + 4] | (cfg[off + 5] << 8);
-                ep_ival = cfg[off + 6];
-                break;
-            }
-        }
-        off += blen;
-    }
-
-    /* 7. SET_CONFIGURATION */
+    /* 6. SET_CONFIGURATION */
     usb_setup_t s = { .bmRequestType = USB_DIR_OUT,
                       .bRequest = USB_REQ_SET_CONFIGURATION,
                       .wValue = cfg[5], .wIndex = 0, .wLength = 0 };
     ctrl_xfer(idx, &s, 0, 0, 0);
 
-    klogf(LOG_INFO, "xhci: port %d dev %04x:%04x%s\n", port,
+    int is_apple_trackpad = (dd.idVendor == APPLE_VENDOR && is_apple_tp_pid(dd.idProduct));
+
+    klogf(LOG_INFO, "xhci: port %d dev %04x:%04x %s\n", port,
           dd.idVendor, dd.idProduct,
-          proto == 1 ? " (HID keyboard)" : proto == 2 ? " (HID mouse)" : "");
+          is_apple_trackpad ? "(Apple Internal Keyboard/Trackpad)" : "");
 
-    if (proto != 1 && proto != 2)
-        return idx;    /* enumerated but no driver */
+    /* 7. Walk interfaces to find HID endpoints */
+    int off = 0;
+    int current_iface = -1;
+    int current_proto = 0;
+    int found_keyboard = 0;
+    int found_trackpad = 0;
 
-    /* 8. Configure Endpoint: add the interrupt IN EP */
-    int dci = ((ep_addr & 0x0F) * 2) + 1;   /* IN endpoint */
-    ring_init(int_ring[idx], (uint32_t)&int_ring[idx][0]);
-    d->int_enq = 0; d->int_cycle = 1;
+    while (off + 2 <= total) {
+        int blen = cfg[off], btype = cfg[off + 1];
+        if (blen < 2) break;
 
-    memset(in_ctx[idx], 0, sizeof(in_ctx[idx]));
-    in_ctrl(in_ctx[idx])[1] = 0x1 | (1u << dci);   /* A0 (slot) + A<dci> */
-    sc = (uint32_t *)in_dev(in_ctx[idx]);
-    sc[0] = (dci << 27) | (psi << 20);
-    sc[1] = (port << 16);
+        if (btype == USB_DT_INTERFACE) {
+            current_iface = cfg[off + 2];
+            uint8_t iclass = cfg[off + 5];
+            uint8_t isubclass = cfg[off + 6];
+            uint8_t iproto = cfg[off + 7];
 
-    uint32_t *ie = (uint32_t *)(in_dev(in_ctx[idx]) + dci * ctx_size);
-    int interval = ep_ival ? ep_ival : 8;
-    if (interval > 15) interval = 15;
-    ie[0] = (uint32_t)interval << 16;                 /* Interval [23:16] */
-    ie[1] = (7u << 3) | (3u << 1) | (ep_mps << 16);   /* EP type Interrupt IN, CErr 3 */
-    ie[2] = (uint32_t)&int_ring[idx][0] | 1;          /* TR dequeue | DCS */
-    ie[3] = 0;
-    ie[4] = ep_mps;                                   /* avg TRB length */
+            if (iclass == USB_CLASS_HID) {
+                if (isubclass == 1 && (iproto == 1 || iproto == 2)) {
+                    /* Boot protocol keyboard or mouse */
+                    current_proto = iproto;
+                } else if (is_apple_trackpad && !found_trackpad) {
+                    /* Apple BCM5974 trackpad: subclass 0, protocol 0, not boot */
+                    current_proto = 3;  /* Custom proto for BCM5974 */
+                } else {
+                    current_proto = 0;
+                }
+            } else {
+                current_proto = 0;
+            }
+        } else if (btype == USB_DT_ENDPOINT && current_iface >= 0 && current_proto > 0) {
+            int attr = cfg[off + 3], addr = cfg[off + 2];
+            if ((attr & 3) == 3 && (addr & 0x80)) {
+                int ep_mps = cfg[off + 4] | (cfg[off + 5] << 8);
+                int ep_ival = cfg[off + 6];
 
-    trb_t ce = {{ (uint32_t)&in_ctx[idx][0], 0, 0,
-                  TRB_TYPE(TRB_CONFIG_EP) | (slot_id << 24) }};
-    if (cmd_exec(ce, &r) != CC_SUCCESS) {
-        klogf(LOG_WARNING, "xhci: Configure Endpoint failed on port %d\n", port);
-        return idx;
+                if (current_proto == 1 && !found_keyboard) {
+                    configure_iep(idx, slot_id, psi, port, current_iface, 1,
+                                  addr, ep_mps, ep_ival);
+                    found_keyboard = 1;
+                } else if (current_proto == 2) {
+                    configure_iep(idx, slot_id, psi, port, current_iface, 2,
+                                  addr, ep_mps, ep_ival);
+                } else if (current_proto == 3 && !found_trackpad) {
+                    /* For BCM5974 trackpad (wellspring 8), the endpoint is 0x83
+                     * regardless of what the descriptor says. The trackpad uses
+                     * a custom binary format, not HID boot protocol. */
+                    int trackpad_ep = 0x83;
+                    int trackpad_mps = 64;  /* TYPE3 report size ~100 bytes, use 64 */
+                    configure_iep(idx, slot_id, psi, port, current_iface, 3,
+                                  trackpad_ep, trackpad_mps, 4);
+                    /* Switch to wellspring mode (multi-touch) via control transfer */
+                    usb_setup_t s = {
+                        .bmRequestType = USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+                        .bRequest = 0x09,  /* BCM5974 mode switch request */
+                        .wValue = 0x01,    /* Enable wellspring mode */
+                        .wIndex = current_iface,
+                        .wLength = 0,
+                    };
+                    ctrl_xfer(idx, &s, 0, 0, 0);
+                    bcm5974_init();  /* Initialize parsing state */
+                    found_trackpad = 1;
+                }
+            }
+        }
+        off += blen;
     }
-
-    /* 9. HID: SET_PROTOCOL(boot) + SET_IDLE(0) */
-    s = (usb_setup_t){ .bmRequestType = 0x21, .bRequest = HID_REQ_SET_PROTOCOL,
-                       .wValue = HID_PROTO_BOOT, .wIndex = want_iface, .wLength = 0 };
-    ctrl_xfer(idx, &s, 0, 0, 0);
-    s = (usb_setup_t){ .bmRequestType = 0x21, .bRequest = HID_REQ_SET_IDLE,
-                       .wValue = 0, .wIndex = want_iface, .wLength = 0 };
-    ctrl_xfer(idx, &s, 0, 0, 0);
-
-    d->hid_dci = dci;
-    d->hid_proto = proto;
-
-    /* 10. Arm the first interrupt-IN transfer */
-    trb_t nt = {{ 0 }};
-    nt.d[0] = (uint32_t)&hid_buf[idx][0];
-    nt.d[2] = 8;
-    nt.d[3] = TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_ISP;
-    ring_push(int_ring[idx], &d->int_enq, &d->int_cycle, nt);
-    db[slot_id] = dci;
 
     return idx;
 }
@@ -624,6 +715,8 @@ int xhci_init(void) {
     return 1;
 }
 
+#include <bcm5974.h>
+
 /* ------------------------------------------------------------------ *
  *  Poll                                                               *
  * ------------------------------------------------------------------ */
@@ -647,24 +740,50 @@ void xhci_poll(void) {
             int slot = (ev.d[3] >> 24) & 0xFF;
             if (slot < 1 || slot >= MAX_SLOTS) continue;
             xdev_t *d = &xdev[slot];
-            if (!d->in_use || !d->hid_dci) continue;
+            if (!d->in_use || d->n_iep == 0) continue;
 
             int cc = (ev.d[2] >> 24) & 0xFF;
             int residue = ev.d[2] & 0xFFFFFF;
-            int n = 8 - residue;
-            if ((cc == CC_SUCCESS || cc == 13) && n >= 3) {
-                if (d->hid_proto == 1)
-                    usb_hid_report_keyboard(hid_buf[slot], n, d->hid_prev);
-                else
-                    usb_hid_report_mouse(hid_buf[slot], n);
+
+            /* Find which interrupt endpoint this event belongs to.
+             * The event TRB's d[0] points to the TRB that completed. */
+            uint32_t trb_ptr = ev.d[0];
+            int iep_idx = -1;
+            for (int i = 0; i < d->n_iep; i++) {
+                /* Check if the TRB pointer falls within this endpoint's ring */
+                uint32_t ring_base = (uint32_t)&int_ring[slot][i][0];
+                uint32_t ring_end = ring_base + sizeof(trb_t) * RING_SZ;
+                if (trb_ptr >= ring_base && trb_ptr < ring_end) {
+                    iep_idx = i;
+                    break;
+                }
             }
-            /* Re-arm. */
+            if (iep_idx < 0)
+                iep_idx = 0;  /* fallback */
+
+            int n = d->iep_len[iep_idx] - residue;
+            if ((cc == CC_SUCCESS || cc == 13) && n > 0) {
+                uint8_t *buf = hid_buf[slot][iep_idx];
+                int proto = d->iep_proto[iep_idx];
+
+                if (proto == 1) {
+                    usb_hid_report_keyboard(buf, n, d->hid_prev);
+                } else if (proto == 2) {
+                    usb_hid_report_mouse(buf, n);
+                } else if (proto == 3) {
+                    bcm5974_parse_report(buf, n);
+                }
+            }
+
+            /* Re-arm this specific endpoint. */
             trb_t nt = {{ 0 }};
-            nt.d[0] = (uint32_t)&hid_buf[slot][0];
-            nt.d[2] = 8;
+            nt.d[0] = (uint32_t)&hid_buf[slot][iep_idx][0];
+            nt.d[2] = d->iep_len[iep_idx];
             nt.d[3] = TRB_TYPE(TRB_NORMAL) | TRB_IOC | TRB_ISP;
-            ring_push(int_ring[slot], &d->int_enq, &d->int_cycle, nt);
-            db[slot] = d->hid_dci;
+            ring_push(int_ring[slot][iep_idx], &d->iep_enq[iep_idx], &d->iep_cycle[iep_idx], nt);
+
+            /* Ring doorbell for THIS endpoint so the controller processes the new TRB. */
+            db[slot] = d->iep_dci[iep_idx];
         }
     }
 
