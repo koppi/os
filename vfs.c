@@ -416,8 +416,14 @@ void vfs_mount(char *name) {
 /**
  * @brief Remove a volume's filesystem from the mount table.
  * @param name Device name as registered.
+ *
+ * A name that matches no registered device is a no-op. Every registered
+ * device has an id below 8 (@ref device_register drops the rest), which is
+ * inside @ref MAX_DEVICES, so the index needs no further check.
  */
 void vfs_unmount(char *name) {
     device_t *dev = get_dev_by_name(name);
+    if(!dev)
+        return;
     devs[dev->id] = 0;
 }
