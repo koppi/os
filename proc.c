@@ -361,13 +361,13 @@ int start_kernel_proc(char *name, void (*thread)(void)) {
      * in the free identity-mapped window 0x440000..0x600000, just past the
      * page-table storage window (page_start .. 0x43c000). Bump the base so a
      * second (third, ...) kernel thread does not land on the previous one. */
-    static uint32_t kproc_stack_base = 0x440000;
+    static uint32_t kproc_stack_base = KPROC_STACK_BASE;
 
     uint32_t plf = spin_lock(&proc_lock);
 
-    /* Stay inside the window main.c reserved in the PMM: past it, a stack VA
-     * could be handed to a driver as an identity-mapped DMA frame. */
-    if (kproc_stack_base + 0x4000 > KSTACK_BASE + KSTACK_SIZE) {
+    /* Stop where the console thread's stacks begin, rather than growing into
+     * them: that overlap is the one this window was moved here to escape. */
+    if (kproc_stack_base + 0x4000 > KPROC_STACK_END) {
         klogf(LOG_ERR, "proc: kernel stack window full, '%s' not started\n", name);
         spin_unlock(&proc_lock, plf);
         return PROC_STOPPED;

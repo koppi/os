@@ -35,19 +35,17 @@
 #define KHEAP_SIZE 0x00400000u   /* 4 MiB */
 
 /**
- * The window the kernel maps its own thread stacks into: the console thread at
- * @ref KERNEL_SPACE_END (sched.c) and one 0x4000 slot per kernel process
- * (proc.c). These are virtual addresses backed by whatever frame pmm_malloc()
- * happens to return, but they start exactly where the pmm's reserved ceiling
- * ends -- so they collide numerically with the first frames it hands out.
+ * Where the kernel maps its own threads' stacks: one 0x4000 slot per kernel
+ * process growing up from @ref KPROC_STACK_BASE, and the console thread's own
+ * stacks at @ref KPROC_STACK_END. Both sit below @ref KERNEL_SPACE_END, inside
+ * the identity map, so pmm_init2() already keeps these frames away from
+ * pmm_malloc() and no identity-mapped DMA buffer can land on them.
  *
- * A driver that allocates a frame and identity-maps it (VA == PA, as the xHCI
- * scratchpad array and the EHCI periodic list do) would otherwise repoint one
- * of these VAs at its own DMA buffer, zero it, and let the controller write
- * over a running thread's stack. Reserved in the PMM so that cannot happen.
+ * The two are declared together because they must not meet: the kproc slots
+ * run up to exactly where the console's stacks begin.
  */
-#define KSTACK_BASE KERNEL_SPACE_END
-#define KSTACK_SIZE 0x00080000u   /* 512 KiB */
+#define KPROC_STACK_BASE 0x440000u
+#define KPROC_STACK_END  0x600000u
 
 typedef uint32_t mm_addr_t;   /**< A physical address. */
 typedef uint32_t vmm_addr_t;  /**< A virtual address. */

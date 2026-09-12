@@ -297,8 +297,11 @@ void sched_init() {
      * right over the console's live stack pages. Place them below the elf
      * staging window (0x700000) and the image base, above the page-table
      * storage window, in frames pmm_init2() has already reserved
-     * (0 .. KERNEL_SPACE_END). */
-#define CONSOLE_STACK_BASE 0x600000
+     * (0 .. KERNEL_SPACE_END).
+     *
+     * Sited at KPROC_STACK_END (mm.h) so start_kernel_proc()'s slots, which
+     * grow up towards it, stop before reaching these pages. */
+#define CONSOLE_STACK_BASE KPROC_STACK_END
     vmm_map(proc->pdir, (vmm_addr_t) CONSOLE_STACK_BASE, PAGE_PRESENT | PAGE_RW);
 
     main_thread->esp = (uint32_t) CONSOLE_STACK_BASE;
