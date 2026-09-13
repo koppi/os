@@ -136,6 +136,51 @@ void sound_mute_toggle(void) {
     klogf(LOG_INFO, "sound: %s\n", sound_muted ? "muted" : "unmuted");
 }
 
+/* ------------------------------------------------------------------ *
+ *  Console control                                                    *
+ *                                                                    *
+ *  The volume keys above arrive through the PS/2 controller, which a  *
+ *  MacBook does not have -- its keyboard is a USB HID device on the   *
+ *  xHCI bus. Without these the only way to unmute on such a machine   *
+ *  is the desktop's "sound on" button, which needs the mouse.         *
+ * ------------------------------------------------------------------ */
+
+/** @return Non-zero while MOD playback is muted. */
+int sound_is_muted(void) { return sound_muted; }
+
+/** @return The master level as a 0..100 percentage, 0 while muted. */
+int sound_volume_pct(void) { return sound_muted ? 0 : sound_vol_pct(); }
+
+/**
+ * @brief Set the master level.
+ * @param pct 0..100; 0 mutes, anything above unmutes.
+ */
+void sound_set_volume(int pct) {
+    if (pct < 0)   pct = 0;
+    if (pct > 100) pct = 100;
+    sound_vol   = (pct * SOUND_VOL_MAX + 50) / 100;
+    sound_muted = (pct == 0);
+    sound_vol_dirty = 1;
+    sb16_apply_mixer();
+}
+
+/** @brief Mute or unmute without disturbing the level. */
+void sound_set_muted(int muted) {
+    sound_muted = muted ? 1 : 0;
+    sound_vol_dirty = 1;
+    sb16_apply_mixer();
+}
+
+/** @return The title of the loaded MOD, for the console's status line. */
+const char *sound_module_title(void) { return (const char *) modctx.song.title; }
+
+/** @return Which back end MOD audio is going to: "hda", "sb16" or "none". */
+const char *sound_backend(void) {
+    if (hda_active) return "hda";
+    if (sb16_ok)    return "sb16";
+    return "none";
+}
+
 /** @brief Wait for the DSP write buffer to drain, then send command byte @p b. */
 static void dsp_write(uint8_t b) {
     while (inportb(DSP_WRITE) & 0x80);

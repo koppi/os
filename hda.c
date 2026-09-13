@@ -1,13 +1,28 @@
 /**
  * @file hda.c
- * @brief Intel HD Audio driver: controller reset, CORB/RIRB command rings,
- *        a codec walk to a DAC -> output-pin path, and blocking one-shot PCM
- *        playback on output stream 0.
+ * @brief Intel HD Audio driver: controller reset, CORB/RIRB command rings, a
+ *        codec walk to a DAC -> output-pin path, blocking one-shot PCM, and a
+ *        cyclic buffer for streamed playback on output stream 0.
  *
- * Deliberately minimal: one codec, one output path, 48 kHz / 16-bit / stereo,
- * polled (no interrupts). Enough for the console "beep" and short clips. DMA
- * structures live in identity-mapped .bss / kheap (phys == virt); the register
- * block (BAR0) is mapped 1:1 cache-disabled.
+ * Deliberately minimal: one codec, one DAC, 44.1/48 kHz 16-bit stereo, polled
+ * (no interrupts). DMA structures live in identity-mapped .bss / kheap
+ * (phys == virt); the register block (BAR0) is mapped 1:1 cache-disabled.
+ *
+ * Three things make this work on a real laptop rather than only under QEMU,
+ * and all three are invisible failures — the codec answers every verb, the
+ * stream runs, the DMA position advances, and nothing comes out:
+ *
+ *   - Intel's NoSnoop bit. With it set the controller fetches the sample
+ *     buffer without snooping the caches, so a ring refilled by ordinary
+ *     cached writes plays stale memory. Cleared in @ref hda_probe.
+ *
+ *   - Which pin. Picking the lowest-numbered output-capable pin lands on
+ *     SPDIF or on a pin with nothing behind it as often as not. The walk uses
+ *     each pin's default configuration instead, and follows its connection
+ *     list to the DAC that actually feeds it.
+ *
+ *   - Amplifier GPIOs. A MacBook's speaker amp hangs off a codec GPIO rather
+ *     than the pin's EAPD bit, and powers up off. See @ref apply_codec_quirks.
  */
 #include <hda.h>
 
@@ -59,24 +74,60 @@ static void io_wait(void) { inportb(0x80); }
 
 /* Codec verbs. */
 #define V_GET_PARAM      0xF00
+#define V_GET_CONN_LIST  0xF02
+#define V_GET_CFG_DEF    0xF1C
 #define V_SET_CONN_SEL   0x701
 #define V_SET_STREAM_CHN 0x706
 #define V_SET_PIN_CTL    0x707
 #define V_SET_POWER      0x705
 #define V_SET_EAPD       0x70C
+#define V_SET_GPIO_DATA  0x715
+#define V_SET_GPIO_MASK  0x716
+#define V_SET_GPIO_DIR   0x717
 #define V4_SET_FORMAT    0x2      /* 4-bit verb, 16-bit payload */
 #define V4_SET_AMP       0x3      /* 4-bit verb, 16-bit payload */
 
-#define P_VENDOR_ID   0x00
-#define P_NODE_COUNT  0x04
-#define P_FN_TYPE     0x05
-#define P_WIDGET_CAP  0x09
-#define P_PIN_CAP     0x0C
-#define P_AMP_OUT_CAP 0x12
+#define P_VENDOR_ID    0x00
+#define P_NODE_COUNT   0x04
+#define P_FN_TYPE      0x05
+#define P_WIDGET_CAP   0x09
+#define P_PCM          0x0A
+#define P_CONN_LIST_LEN 0x0E
+#define P_PIN_CAP      0x0C
+#define P_AMP_OUT_CAP  0x12
 
 #define WTYPE(cap)  (((cap) >> 20) & 0xF)
 #define WT_DAC 0x0
+#define WT_MIX 0x2                /* mixer: sums its inputs */
+#define WT_SEL 0x3                /* selector: picks one input */
 #define WT_PIN 0x4
+
+/* AC_WCAP bits used here. */
+#define WCAP_OUT_AMP   (1u << 2)
+#define WCAP_AMP_OVRD  (1u << 3)
+#define WCAP_CONN_LIST (1u << 8)
+#define WCAP_DIGITAL   (1u << 9)
+#define WCAP_POWER     (1u << 10)
+
+/* AC_PINCAP bits used here. */
+#define PINCAP_HP_DRV  (1u << 3)
+#define PINCAP_OUT     (1u << 4)
+#define PINCAP_EAPD    (1u << 16)
+
+/* Pin default configuration (V_GET_CFG_DEF). The BIOS — or, on a Mac, the
+ * codec's own config ROM — describes what each pin is physically wired to.
+ * Choosing an output by these rather than by "lowest NID that can do output"
+ * is what keeps the driver off SPDIF and off pins with nothing behind them. */
+#define CFG_PORT_CONN(c) (((c) >> 30) & 0x3)
+#define CFG_DEVICE(c)    (((c) >> 20) & 0xF)
+#define CONN_NONE     0x1         /* no physical connection: never usable */
+#define DEV_LINE_OUT  0x0
+#define DEV_SPEAKER   0x1
+#define DEV_HP_OUT    0x2
+
+/* Pin widget control (V_SET_PIN_CTL). */
+#define PINCTL_OUT_EN (1u << 6)
+#define PINCTL_HP_EN  (1u << 7)
 
 /* ------------------------------------------------------------------ *
  *  State                                                              *
@@ -90,7 +141,21 @@ static struct { uint64_t addr; uint32_t len; uint32_t flags; }
 static int      have_hda;
 static uint32_t osd_base;
 static uint8_t  codec_addr, afg_nid, dac_nid, pin_nid;
+static uint32_t codec_vid;
 static uint8_t  corb_wp, rirb_rp;
+
+/* Every analog output pin that can reach dac_nid, so a laptop drives its
+ * speaker and its headphone jack from the same stream. Without jack detection
+ * there is no way to know which one the user is listening to, and feeding both
+ * costs nothing: the unused one is simply not connected to anything. */
+#define MAX_OUT_PINS 4
+static struct out_path {
+    uint8_t pin;        /**< The output pin widget. */
+    uint8_t pin_sel;    /**< Connection index on @c pin that reaches the DAC. */
+    uint8_t mid;        /**< Mixer/selector between pin and DAC, 0 if direct. */
+    uint8_t mid_sel;    /**< Connection index on @c mid that reaches the DAC. */
+} out_path[MAX_OUT_PINS];
+static int n_out_paths;
 
 /* Output-amp the volume keys drive: the node with an adjustable gain/mute amp
  * (DAC first, then the output pin) and its step count from AMP_OUT_CAP. */
@@ -140,6 +205,143 @@ static uint32_t param(uint8_t nid, uint8_t p)             { return v12(nid, V_GE
 /* ------------------------------------------------------------------ *
  *  Codec walk                                                         *
  * ------------------------------------------------------------------ */
+
+/** @brief Put a widget into D0, if it has its own power control. */
+static void power_up(uint8_t nid) {
+    if (param(nid, P_WIDGET_CAP) & WCAP_POWER)
+        v12(nid, V_SET_POWER, 0);
+}
+
+/**
+ * @brief Read a widget's connection list.
+ * @param nid Widget to query.
+ * @param out Receives the connected NIDs.
+ * @param max Capacity of @p out.
+ * @return Number of entries written.
+ *
+ * Range entries (short form, bit 7 set) are taken as literal NIDs with the
+ * marker masked off rather than expanded. Laptop output paths list their
+ * inputs individually, so the distinction has not come up; a codec that does
+ * use ranges would simply have fewer candidates to search.
+ */
+static int conn_list(uint8_t nid, uint8_t *out, int max) {
+    if (!(param(nid, P_WIDGET_CAP) & WCAP_CONN_LIST))
+        return 0;
+    uint32_t len = param(nid, P_CONN_LIST_LEN);
+    int longform = (len >> 7) & 1;
+    int n = (int) (len & 0x7F);
+    if (n > max)
+        n = max;
+
+    int got = 0;
+    if (longform) {
+        for (int i = 0; i < n && got < n; i += 2) {
+            uint32_t r = v12(nid, V_GET_CONN_LIST, i);
+            for (int k = 0; k < 2 && got < n; k++)
+                out[got++] = (r >> (k * 16)) & 0xFF;
+        }
+    } else {
+        for (int i = 0; i < n && got < n; i += 4) {
+            uint32_t r = v12(nid, V_GET_CONN_LIST, i);
+            for (int k = 0; k < 4 && got < n; k++)
+                out[got++] = (r >> (k * 8)) & 0x7F;
+        }
+    }
+    return got;
+}
+
+/** @brief Is @p nid an analog digital-to-analog converter? */
+static int is_analog_dac(uint8_t nid) {
+    uint32_t cap = param(nid, P_WIDGET_CAP);
+    return WTYPE(cap) == WT_DAC && !(cap & WCAP_DIGITAL);
+}
+
+/**
+ * @brief Find a route from an output pin back to a DAC.
+ * @param pin The pin to start from.
+ * @param p   Receives the route on success.
+ * @return The DAC's NID, or 0 if the pin reaches none.
+ *
+ * Searches the pin's own connection list first, then one level deeper through
+ * a mixer or selector — which covers every laptop codec seen so far. Pairing
+ * "first DAC" with "first pin" the way this used to is wrong on any codec
+ * where the speaker hangs off a different converter than the headphone jack,
+ * the Cirrus parts in a MacBook among them.
+ */
+static uint8_t route_pin_to_dac(uint8_t pin, struct out_path *p) {
+    uint8_t list[16];
+    int n = conn_list(pin, list, (int) sizeof list);
+
+    for (int i = 0; i < n; i++)
+        if (is_analog_dac(list[i])) {
+            p->pin = pin; p->pin_sel = (uint8_t) i; p->mid = 0; p->mid_sel = 0;
+            return list[i];
+        }
+
+    for (int i = 0; i < n; i++) {
+        uint32_t cap = param(list[i], P_WIDGET_CAP);
+        if (WTYPE(cap) != WT_MIX && WTYPE(cap) != WT_SEL)
+            continue;
+        uint8_t sub[16];
+        int m = conn_list(list[i], sub, (int) sizeof sub);
+        for (int k = 0; k < m; k++)
+            if (is_analog_dac(sub[k])) {
+                p->pin = pin; p->pin_sel = (uint8_t) i;
+                p->mid = list[i]; p->mid_sel = (uint8_t) k;
+                return sub[k];
+            }
+    }
+    return 0;
+}
+
+/**
+ * @brief Rank an output pin by what the codec says it is wired to.
+ * @return A score; higher wins, 0 means unusable.
+ *
+ * The built-in speaker outranks the headphone jack because it is always
+ * there — with no jack detection, picking the jack on a machine with nothing
+ * plugged into it would be silence.
+ */
+static int pin_score(uint8_t pin) {
+    uint32_t cap = param(pin, P_PIN_CAP);
+    if (!(cap & PINCAP_OUT) || (param(pin, P_WIDGET_CAP) & WCAP_DIGITAL))
+        return 0;
+
+    uint32_t cfg = v12(pin, V_GET_CFG_DEF, 0);
+    if (cfg == 0xFFFFFFFFu || CFG_PORT_CONN(cfg) == CONN_NONE)
+        return 0;
+
+    switch (CFG_DEVICE(cfg)) {
+    case DEV_SPEAKER:  return 3;
+    case DEV_HP_OUT:   return 2;
+    case DEV_LINE_OUT: return 1;
+    default:           return 0;   /* SPDIF, modem, anything that is an input */
+    }
+}
+
+/** @brief Log one line per output pin: what it claims to be and where it goes. */
+static void dump_out_pins(uint8_t w0, uint8_t wc) {
+    for (uint8_t w = w0; w < w0 + wc; w++) {
+        uint32_t cap = param(w, P_WIDGET_CAP);
+        if (WTYPE(cap) != WT_PIN)
+            continue;
+        uint32_t pc = param(w, P_PIN_CAP);
+        if (!(pc & PINCAP_OUT))
+            continue;
+        uint32_t cfg = v12(w, V_GET_CFG_DEF, 0);
+        klogf(LOG_INFO, "hda: pin %u cfg %08x conn %u dev %u score %d%s\n",
+              w, cfg, CFG_PORT_CONN(cfg), CFG_DEVICE(cfg), pin_score(w),
+              (cap & WCAP_DIGITAL) ? " digital" : "");
+    }
+}
+
+/**
+ * @brief Find a codec and the best analog output path on it.
+ * @return Non-zero once @ref dac_nid and @ref out_path describe a usable path.
+ *
+ * Picks the highest-scoring pin that routes to a DAC, then adds every other
+ * usable pin that reaches the same DAC so speaker and headphones both play.
+ */
 static int find_output_path(void) {
     for (uint8_t cad = 0; cad < 15; cad++) {
         if (!(r16(REG_STATESTS) & (1u << cad)))
@@ -147,7 +349,8 @@ static int find_output_path(void) {
         codec_addr = cad;
         rirb_rp = r16(REG_RIRBWP) & 0xFF;
 
-        if (param(0, P_VENDOR_ID) + 1 <= 1)        /* 0 or 0xFFFFFFFF */
+        uint32_t vid = param(0, P_VENDOR_ID);
+        if (vid + 1 <= 1)                          /* 0 or 0xFFFFFFFF */
             continue;
 
         uint32_t root = param(0, P_NODE_COUNT);
@@ -161,24 +364,101 @@ static int find_output_path(void) {
             uint32_t wn = param(fg, P_NODE_COUNT);
             uint8_t w0 = (wn >> 16) & 0xFF, wc = wn & 0xFF;
 
-            int dac = -1, pin = -1;
+            klogf(LOG_INFO, "hda: codec %u vendor %08x afg %u widgets %u..%u\n",
+                  cad, vid, fg, w0, w0 + wc - 1);
+            if (cmdline_has("hdadebug"))
+                dump_out_pins(w0, wc);
+
+            /* Best pin first. */
+            int best = 0;
+            uint8_t best_pin = 0;
+            struct out_path best_path = { 0, 0, 0, 0 };
+            uint8_t best_dac = 0;
             for (uint8_t w = w0; w < w0 + wc; w++) {
-                uint32_t cap = param(w, P_WIDGET_CAP);
-                if (WTYPE(cap) == WT_DAC && dac < 0)
-                    dac = w;
-                else if (WTYPE(cap) == WT_PIN && pin < 0 &&
-                         (param(w, P_PIN_CAP) & (1u << 4)))
-                    pin = w;
+                int sc = pin_score(w);
+                if (sc <= best)
+                    continue;
+                struct out_path p;
+                uint8_t dac = route_pin_to_dac(w, &p);
+                if (!dac)
+                    continue;
+                best = sc; best_pin = w; best_path = p; best_dac = dac;
             }
-            if (dac >= 0 && pin >= 0) {
-                afg_nid = fg;
-                dac_nid = dac;
-                pin_nid = pin;
-                return 1;
+            /* Fall back to the old pairing if nothing routed. A pin that is
+             * hardwired to its converter publishes no connection list, so the
+             * search above finds no route and would otherwise reject a codec
+             * that used to work. */
+            if (!best) {
+                int dac = -1, pin = -1, pin_sc = 0;
+                for (uint8_t w = w0; w < w0 + wc; w++) {
+                    if (dac < 0 && is_analog_dac(w))
+                        dac = w;
+                    int sc = pin_score(w);
+                    if (sc > pin_sc) { pin_sc = sc; pin = w; }
+                }
+                if (dac < 0 || pin < 0)
+                    continue;
+                best = pin_sc;
+                best_dac = (uint8_t) dac;
+                best_pin = (uint8_t) pin;
+                best_path.pin = (uint8_t) pin;
+                best_path.pin_sel = 0;
+                best_path.mid = 0;
+                best_path.mid_sel = 0;
+                klogf(LOG_INFO, "hda: no routable pin, assuming DAC %d -> pin %d\n",
+                      dac, pin);
             }
+
+            afg_nid = fg;
+            dac_nid = best_dac;
+            pin_nid = best_pin;
+            out_path[0] = best_path;
+            n_out_paths = 1;
+
+            /* Everything else that lands on the same DAC. */
+            for (uint8_t w = w0; w < w0 + wc && n_out_paths < MAX_OUT_PINS; w++) {
+                if (w == best_pin || !pin_score(w))
+                    continue;
+                struct out_path p;
+                if (route_pin_to_dac(w, &p) == dac_nid)
+                    out_path[n_out_paths++] = p;
+            }
+            return 1;
         }
     }
     return 0;
+}
+
+/**
+ * @brief Turn on the amplifier GPIOs a Mac's Cirrus codec needs.
+ *
+ * On a MacBook the internal speaker amp is not wired to the pin's EAPD bit but
+ * to a codec GPIO, and it comes up off. The codec enumerates and accepts every
+ * verb either way, the stream runs, the DMA position advances — and nothing
+ * comes out of the speaker. Nothing in the HD Audio spec says which GPIO, so
+ * these come from the per-codec tables in Linux's patch_cirrus.c.
+ *
+ * Sent to the function group, which is where the GPIO block lives.
+ */
+static void apply_codec_quirks(void) {
+    uint32_t gpio;
+
+    switch (codec_vid) {
+    case 0x10134208:            /* CS4208: MacBook Air 6,x / MacBook Pro 11,x */
+        gpio = 0x01;            /*   GPIO0 = speaker amp                      */
+        break;
+    case 0x10134206:            /* CS4206/CS4207: earlier MacBooks            */
+    case 0x10134207:
+        gpio = 0x0A;            /*   GPIO1 = headphone amp, GPIO3 = speaker   */
+        break;
+    default:
+        return;
+    }
+
+    v12(afg_nid, V_SET_GPIO_MASK, gpio);
+    v12(afg_nid, V_SET_GPIO_DIR,  gpio);
+    v12(afg_nid, V_SET_GPIO_DATA, gpio);
+    klogf(LOG_INFO, "hda: codec %08x: amp GPIOs 0x%x enabled\n", codec_vid, gpio);
 }
 
 /* ------------------------------------------------------------------ *
@@ -196,27 +476,67 @@ static void osd_reset(uint32_t sd) {
     for (int i = 0; i < 1000 && (r32(sd + SD_CTL) & SDCTL_SRST); i++) io_wait();
 }
 
-/** @brief Point the DAC at stream @p strm / @p fmt and open the output pin. */
-static void codec_bind_output(uint16_t fmt, uint8_t strm) {
-    v4 (dac_nid, V4_SET_FORMAT, fmt);
-    v12(dac_nid, V_SET_STREAM_CHN, strm << 4);
-    v4 (dac_nid, V4_SET_AMP, 0xB000 | 0x7F);       /* out amp, L+R, gain 0x7F */
-    v12(pin_nid, V_SET_CONN_SEL, 0);
-    v12(pin_nid, V_SET_PIN_CTL, 0x40);             /* output enable */
-    v4 (pin_nid, V4_SET_AMP, 0xB000 | 0x7F);
-    v12(pin_nid, V_SET_EAPD, 0x02);                /* external amp / EAPD on */
-}
-
 /** @brief NumSteps of a node's output amp (0 = fixed / no output amp).
  *  Honours the widget's own AMP_OUT_CAP only when it overrides the AFG default
- *  (WIDGET_CAP bit 2 = out amp present, bit 3 = amp caps override). */
+ *  (WCAP_OUT_AMP = out amp present, WCAP_AMP_OVRD = amp caps override). */
 static uint8_t amp_out_steps(uint8_t nid) {
     uint32_t wc = param(nid, P_WIDGET_CAP);
-    if (!(wc & (1u << 2)))
+    if (!(wc & WCAP_OUT_AMP))
         return 0;
-    uint32_t cap = (wc & (1u << 3)) ? param(nid, P_AMP_OUT_CAP)
-                                    : param(afg_nid, P_AMP_OUT_CAP);
+    uint32_t cap = (wc & WCAP_AMP_OVRD) ? param(nid, P_AMP_OUT_CAP)
+                                        : param(afg_nid, P_AMP_OUT_CAP);
     return (cap >> 8) & 0x7F;                       /* NumSteps */
+}
+
+/**
+ * @brief Unmute a node's output amp and open it to full gain.
+ *
+ * The gain index is taken from the node's own step count rather than a fixed
+ * 0x7F: on a codec with fewer steps than that, an out-of-range index is
+ * ignored and the amp stays wherever it powered up — usually muted.
+ */
+static void amp_open_out(uint8_t nid) {
+    uint8_t steps = amp_out_steps(nid);
+    v4(nid, V4_SET_AMP, 0xB000 | (steps ? steps : 0x7F));
+}
+
+/**
+ * @brief Point the DAC at stream @p strm / @p fmt and open every output pin.
+ *
+ * Walks each route found by @ref find_output_path: the intermediate mixer or
+ * selector, if there is one, then the pin — selecting the connection that
+ * actually reaches the DAC, unmuting the amp at every stage, and enabling the
+ * pin's own external amplifier where it has one.
+ */
+static void codec_bind_output(uint16_t fmt, uint8_t strm) {
+    power_up(afg_nid);
+    power_up(dac_nid);
+    v4 (dac_nid, V4_SET_FORMAT, fmt);
+    v12(dac_nid, V_SET_STREAM_CHN, strm << 4);
+    amp_open_out(dac_nid);
+
+    for (int i = 0; i < n_out_paths; i++) {
+        struct out_path *p = &out_path[i];
+
+        if (p->mid) {
+            power_up(p->mid);
+            v12(p->mid, V_SET_CONN_SEL, p->mid_sel);
+            amp_open_out(p->mid);
+        }
+
+        power_up(p->pin);
+        v12(p->pin, V_SET_CONN_SEL, p->pin_sel);
+
+        uint32_t pc = param(p->pin, P_PIN_CAP);
+        uint8_t ctl = PINCTL_OUT_EN;
+        if (pc & PINCAP_HP_DRV)
+            ctl |= PINCTL_HP_EN;                   /* headphone jacks need the
+                                                    * drive amp as well */
+        v12(p->pin, V_SET_PIN_CTL, ctl);
+        amp_open_out(p->pin);
+        if (pc & PINCAP_EAPD)
+            v12(p->pin, V_SET_EAPD, 0x02);         /* external amp / EAPD on */
+    }
 }
 
 /** @brief Choose the node the volume keys will attenuate: the DAC if its output
@@ -393,6 +713,12 @@ void hda_stream_service(void (*fill)(int16_t *dst, uint32_t nframes)) {
 
 int hda_present(void) { return have_hda; }
 
+int hda_is_apple_cirrus(void) {
+    return have_hda && (codec_vid == 0x10134208 ||
+                        codec_vid == 0x10134206 ||
+                        codec_vid == 0x10134207);
+}
+
 /* ------------------------------------------------------------------ *
  *  Bring-up                                                           *
  * ------------------------------------------------------------------ */
@@ -418,23 +744,58 @@ void hda_probe(struct pci_device *dev) {
                       d->device);
                 return;
             }
-    uint32_t bar = 0;
+    uint32_t bar = 0, span = 0;
     for (int i = 0; i < 6; i++)
         if (!d->bar[i].is_io && d->bar[i].addr) {
-            bar = d->bar[i].addr;
+            bar  = d->bar[i].addr;
+            span = d->bar[i].size;
             break;
         }
     if (!bar) {
         klogf(LOG_WARNING, "hda: no MMIO BAR\n");
         return;
     }
+    if (span < 0x4000)
+        span = 0x4000;                             /* spec register space */
 
     pci_enable(d, PCI_CMD_MEM | PCI_CMD_MASTER);
-    if (!vmm_map_phys(get_kern_directory(), bar, bar,
-                         PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT)) {
-        klogf(LOG_WARNING, "hda: cannot map MMIO at 0x%x, skipping\n", bar);
-        return;
+
+    /* Intel PCH controllers come out of reset with two settings that break
+     * DMA playback from a normally-cached buffer:
+     *
+     *   TCSEL (0x44) selects the PCI traffic class for stream DMA. Anything
+     *   but class 0 is not guaranteed to be snooped on the way to memory.
+     *
+     *   DEVC (0x78) bit 11 is NoSnoop. With it set the controller reads the
+     *   sample buffer without probing the CPU caches, so it fetches whatever
+     *   RAM held before the last writeback. The MOD player refills its ring
+     *   through ordinary cached writes, which is exactly the case that
+     *   breaks: the stream runs, LPIB advances, and the codec plays stale
+     *   memory — silence, or a fragment of the first buffer over and over.
+     *
+     * Linux does the same two writes in its Intel init path. */
+    if (d->vendor == 0x8086) {
+        uint32_t tc = pci_cfg_read32(d, 0x44);
+        if (tc & 0x07)
+            pci_cfg_write32(d, 0x44, tc & ~0x07u);
+        uint16_t devc = pci_cfg_read16(d, 0x78);
+        if (devc & (1u << 11)) {
+            pci_cfg_write16(d, 0x78, devc & ~(uint16_t) (1u << 11));
+            klogf(LOG_INFO, "hda: Intel NoSnoop cleared (DEVC was %04x)\n", devc);
+        }
     }
+
+    /* Map the whole register block, not just the first page: the output
+     * stream descriptors sit past 0x80 and a controller with many streams
+     * pushes them further out. Shared into every address space so a console
+     * `beep` reaches the registers from a user process's directory too. */
+    for (uint32_t o = 0; o < span; o += PAGE_SIZE)
+        if (!vmm_map_phys(get_kern_directory(), bar + o, bar + o,
+                          PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT)) {
+            klogf(LOG_WARNING, "hda: cannot map MMIO at 0x%x, skipping\n", bar + o);
+            return;
+        }
+    vmm_share_kernel_range(bar, span);
     mmio = (uint8_t *) bar;
 
     w32(REG_GCTL, r32(REG_GCTL) & ~GCTL_CRST);
@@ -477,9 +838,17 @@ void hda_probe(struct pci_device *dev) {
         return;
     }
 
+    codec_vid = param(0, P_VENDOR_ID);
+    apply_codec_quirks();
     pick_volume_node();
 
     have_hda = 1;
-    klogf(LOG_INFO, "hda: codec %u  DAC %u -> pin %u  osd 0x%x  vol nid %u/%u steps\n",
-          codec_addr, dac_nid, pin_nid, osd_base, vol_nid, vol_steps);
+    klogf(LOG_INFO, "hda: codec %u (%08x)  DAC %u -> pin %u  %d output(s)  "
+          "osd 0x%x  vol nid %u/%u steps\n",
+          codec_addr, codec_vid, dac_nid, pin_nid, n_out_paths,
+          osd_base, vol_nid, vol_steps);
+    for (int i = 0; i < n_out_paths; i++)
+        klogf(LOG_INFO, "hda:   out %d: pin %u sel %u%s\n", i,
+              out_path[i].pin, out_path[i].pin_sel,
+              out_path[i].mid ? " (via mixer)" : "");
 }

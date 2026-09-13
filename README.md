@@ -831,15 +831,43 @@ set, and hands the kernel the framebuffer + the Multiboot2 memory map.
 | Keyboard / trackpad | xHCI HID + BCM5974 ([`xhci.c`](xhci.c), [`bcm5974.c`](bcm5974.c)) | xHCI-only PCH (`8086:9c31`). The built-in topcase works: it is one composite USB device (`05ac:0290`) whose interface 0 is a boot keyboard and whose trackpad is driven natively as a "wellspring 8" multi-touch pad (see below) |
 | Storage | **AHCI** ([`ahci.c`](ahci.c)) | Samsung S4LN053X01 PCIe SSD (`144d:1600`, `8086:9c03` PCH), mounted `/hda` |
 | Ethernet | — | no wired NIC; the BCM4360 WiFi (`14e4:43a0`) is unsupported |
-| Audio | Intel HD Audio ([`hda.c`](hda.c)) | PCH analog controller `8086:9c20` with the Cirrus CS4208 codec is chosen over the digital-only Haswell HDMI controller `8086:0a0c` (see below) |
+| Audio | Intel HD Audio ([`hda.c`](hda.c)) | PCH analog controller `8086:9c20` with the Cirrus CS4208 codec, chosen over the digital-only Haswell HDMI controller `8086:0a0c`. Needs the Intel NoSnoop bit cleared and the codec's speaker-amp GPIO raised (see below); playback starts muted, so `sound on` at the console |
 | Timers / IRQ / RTC / power-off | as on the X250 | Apple EFI exposes the RSDP/MADT the same way; 8 GiB RAM |
 
-**Two HD Audio controllers.** The MBA carries both the Haswell **HDMI** audio
-(`0:3.3`, `8086:0a0c`, digital-only) and the PCH **analog** controller
-(`0:27.0`, `8086:9c20`, CS4208 codec). PCI enumerates them in that order, so a
-driver that binds the first controller by class would claim HDMI and produce no
-audible output. `hda_probe()` now skips the Intel iHD (HDMI-only) controllers
-by device ID, so the analog one binds and the built-in speakers work.
+**Audio: four ways to get silence.** Getting the MOD player audible here meant
+fixing four separate things, and every one of them fails *quietly* — the codec
+answers every verb, the stream runs, the DMA position counter advances, and
+nothing comes out of the speaker.
+
+* **The wrong controller.** The MBA carries both the Haswell **HDMI** audio
+  (`0:3.3`, `8086:0a0c`, digital-only) and the PCH **analog** controller
+  (`0:27.0`, `8086:9c20`, CS4208 codec). PCI enumerates them in that order, so
+  binding the first controller of class 04:03 claims HDMI. `hda_probe()` skips
+  the Intel iHD device IDs so the analog controller binds.
+* **Intel's NoSnoop bit.** `DEVC` (PCI config `0x78`) bit 11 tells the
+  controller not to snoop the caches when it fetches samples. The MOD player
+  refills its ring with ordinary cached writes, so with NoSnoop set the codec
+  plays whatever RAM held before the last writeback. Cleared at probe, along
+  with `TCSEL` (`0x44`), which selects the DMA traffic class.
+* **The wrong pin.** Pairing "first DAC" with "first output-capable pin" lands
+  on SPDIF, or on a pin with nothing wired behind it, as easily as on the
+  speaker. The codec walk now ranks pins by their default configuration
+  (speaker, then headphone, then line out; anything digital or unconnected is
+  rejected) and follows the winner's connection list — through a mixer or
+  selector if there is one — back to the DAC that actually feeds it. Every
+  other pin reaching the same DAC is enabled too, so the speaker and the
+  headphone jack both play without jack detection.
+* **The amplifier GPIO.** This is the Apple-specific one. On a MacBook the
+  internal speaker amp is not wired to the pin's EAPD bit but to a codec GPIO,
+  and it powers up off. For the CS4208 that is GPIO0; the earlier CS4206/4207
+  parts use GPIO1 for the headphone amp and GPIO3 for the speaker. Nothing in
+  the HD Audio specification says which — the numbers come from the per-codec
+  tables in Linux's `patch_cirrus.c`.
+
+Boot with `hdadebug` on the kernel command line to log every output pin's
+default configuration and the path that was chosen. MOD playback starts muted
+(the volume keys are decoded from the PS/2 controller, which this machine does
+not have), so unmute it from the console with `sound on`.
 
 **The internal keyboard and trackpad.** There is no PS/2 controller and no EHCI
 companion on this machine, so the topcase is reachable only through xHCI. It

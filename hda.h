@@ -1,8 +1,9 @@
 /**
  * @file hda.h
  * @brief Intel High Definition Audio (Azalia) — controller bring-up, codec
- *        enumeration and one-shot PCM playback. The audio path on every recent
- *        laptop (the ThinkPad X250's analog codec is 8086:9ca0).
+ *        enumeration and PCM playback. The audio path on every recent laptop:
+ *        the ThinkPad X250's analog controller is 8086:9ca0, the MacBook Air
+ *        6,2's is 8086:9c20 with a Cirrus CS4208 codec behind it.
  */
 #pragma once
 
@@ -10,8 +11,16 @@
 
 struct pci_device;
 
-/** @brief PCI bind hook (class 04:03): reset the controller, set up CORB/RIRB,
- *         find a DAC -> output-pin path on the first codec and unmute it. */
+/**
+ * @brief PCI bind hook (class 04:03).
+ *
+ * Resets the controller, sets up CORB/RIRB, picks the best analog output on
+ * the first codec by the pins' default configuration, routes it back to a DAC
+ * and unmutes every stage. Digital-only HDMI controllers are skipped so the
+ * analog one gets the binding, and on Intel the NoSnoop bit is cleared so
+ * stream DMA sees cached writes. Boot with `hdadebug` to log every output
+ * pin's configuration, or `nosound` / `nohda` to skip the controller.
+ */
 void hda_probe(struct pci_device *d);
 
 /** @return non-zero once a codec output path is ready. */
@@ -29,6 +38,10 @@ void hda_beep(uint32_t freq, uint32_t ms);
 /** @brief Set the codec's output volume, 0..100 % (0 mutes), by writing the
  *         DAC (or output-pin) gain/mute amp. No-op if no codec came up. */
 void hda_set_volume(int pct);
+
+/** @return Non-zero if the codec is a Cirrus part in a Mac, whose speaker amp
+ *          is driven from a GPIO rather than the pin's EAPD bit. */
+int hda_is_apple_cirrus(void);
 
 /* ------------------------------------------------------------------ *
  *  Continuous (streamed) playback                                     *

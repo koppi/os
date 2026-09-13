@@ -19,6 +19,7 @@
 #include <pci_acpi.h>
 #include <pci_ac97.h>
 #include <hda.h>
+#include <sb16.h>
 #include <e1000.h>
 #include <net.h>
 #include <dhcp.h>
@@ -461,6 +462,46 @@ static void console_write(char *command) {
 }
 
 /**
+ * @brief `sound` — report or change MOD playback state.
+ *
+ * With no argument it prints the back end, the module title and the level.
+ * `sound on` / `sound off` mute and unmute, `sound <0-100>` sets the level.
+ *
+ * This exists because the volume keys are decoded from the PS/2 controller
+ * (keyboard.c), which a MacBook does not have: its keyboard is a USB HID
+ * device behind xHCI, so on that machine the keys never arrive and playback
+ * starts muted with no way to change it from the keyboard.
+ */
+static void console_sound(char *buf) {
+    char *arg = buf + 5;                    /* past "sound" */
+    while (*arg == ' ') arg++;
+
+    if (!*arg) {
+        printf("backend %s%s, module '%s', %s, volume %d%%\n",
+               sound_backend(),
+               hda_is_apple_cirrus() ? " (Cirrus, amp GPIOs on)" : "",
+               sound_module_title(),
+               sound_is_muted() ? "muted" : "playing", sound_volume_pct());
+        return;
+    }
+    if (strcmp(arg, "on") == 0) {
+        sound_set_muted(0);
+    } else if (strcmp(arg, "off") == 0) {
+        sound_set_muted(1);
+    } else if (arg[0] >= '0' && arg[0] <= '9') {
+        int pct = 0;
+        for (char *p = arg; *p >= '0' && *p <= '9'; p++)
+            pct = pct * 10 + (*p - '0');
+        sound_set_volume(pct);
+    } else {
+        printf("usage: sound [on|off|0-100]\n");
+        return;
+    }
+    printf("sound: %s, volume %d%%\n",
+           sound_is_muted() ? "muted" : "playing", sound_volume_pct());
+}
+
+/**
  * @brief Play a short square-wave tone through the AC97 codec ("beep").
  */
 static void console_beep(void) {
@@ -753,6 +794,7 @@ void console_exec(char *buf) {
                "write    - write <file> <text>\n"
                "sum      - sum <file> (checksum + byte length)\n"
                "beep     - plays a tone\n"
+               "sound    - sound [on|off|0-100] (MOD playback)\n"
                "pci      - lists PCI devices\n"
                "net      - network interface status\n"
                "nfs      - NFSv4.1 client mount status\n"
@@ -811,6 +853,8 @@ void console_exec(char *buf) {
         console_write(buf);
     } else if(strncmp(buf, "sum", 3) == 0) {
         console_sum(buf);
+    } else if(strncmp(buf, "sound", 5) == 0) {
+        console_sound(buf);
     } else if(strncmp(buf, "beep", 4) == 0) {
         console_beep();
     } else if(coreutils_try(buf)) {

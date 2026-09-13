@@ -62,3 +62,21 @@ void sound_mute_toggle(void);
 /** @brief Kernel thread: stream MOD playback through the HD Audio codec.
  *         Start it (from @ref main_proc) only when @ref hda_present. */
 void sound_hda_thread(void);
+
+/** @name Console control (the `sound` command).
+ *  The volume keys above come from the PS/2 controller, which a MacBook has
+ *  none of — its keyboard is USB HID behind xHCI — so playback has to be
+ *  reachable from the shell as well. @{ */
+/** @return Non-zero while MOD playback is muted. */
+int  sound_is_muted(void);
+/** @return The master level as a 0..100 percentage, 0 while muted. */
+int  sound_volume_pct(void);
+/** @brief Set the master level, 0..100. 0 mutes; anything above unmutes. */
+void sound_set_volume(int pct);
+/** @brief Mute or unmute without disturbing the level. */
+void sound_set_muted(int muted);
+/** @return The title of the loaded MOD. */
+const char *sound_module_title(void);
+/** @return Which back end MOD audio is going to: "hda", "sb16" or "none". */
+const char *sound_backend(void);
+/** @} */
