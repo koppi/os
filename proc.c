@@ -33,7 +33,23 @@
  */
 
 /**
- * Starts a new process
+ * @brief Build a process from an ELF image and put it on the run queue.
+ * @param name      Path to the executable.
+ * @param arguments Command line, split on spaces into argv.
+ * @return The new main thread's id, or @c PROC_STOPPED on any failure.
+ *
+ * The steps are ordered by dependency: address space, thread, ELF load,
+ * stacks, heap, argv into the heap, then the initial frames onto the stacks.
+ * Each needs the previous one's addresses.
+ *
+ * Failure is reported but not unwound — the page directory, the thread control
+ * block and any frames already mapped are leaked. A process that fails to
+ * start is rare and fatal to what asked for it, so nothing here tries to be
+ * recoverable. The @c sched_state(1) calls on those paths are likewise
+ * unbalanced: nothing in this function closed the preemption gate, so they
+ * open it whether or not the caller wanted it open.
+ *
+ * Caller holds @ref proc_lock; see @ref start_proc.
  */
 static int start_proc_locked(char *name, char *arguments) {
     process_t *proc = (process_t *) kmalloc(sizeof(process_t));
@@ -110,13 +126,25 @@ int start_proc(char *name, char *arguments) {
 }
 
 /**
- *Builds the stack for a thread
- */
-/**
- * Map @p pages consecutive pages from @p base into both the kernel directory
- * (so start_proc, running on the kernel directory, can seed them) and the
- * target process directory, zeroing each. Frames are then unmapped from the
- * kernel directory once seeding is done (stack_fill / heap_fill).
+ * @brief Map a run of pages into both the kernel and the target address space.
+ * @param pdir  The process's page directory.
+ * @param base  First virtual address; the same address is used in both spaces.
+ * @param pages How many consecutive pages.
+ * @param user  Non-zero to make the pages reachable from ring 3.
+ * @return 1 on success, 0 if a mapping failed.
+ *
+ * The double mapping exists because this runs on the kernel directory: the
+ * frames have to be addressable here to be zeroed and seeded with argv and the
+ * initial stack frames. The kernel-side aliases are temporary and the caller
+ * must drop them once seeding is done — @ref stack_fill and @ref heap_fill do
+ * that for the ranges they fill.
+ *
+ * The @p user flag is what keeps a thread's kernel stack out of ring 3's
+ * reach: it holds the saved user context and every frame a syscall builds, so
+ * mapped @c PAGE_USER it was writable by the process it belongs to.
+ *
+ * A failure part-way leaves the pages already mapped in place; the caller
+ * abandons the whole process rather than unwinding.
  */
 static int map_user_range(page_dir_t *pdir, vmm_addr_t base, int pages, int user) {
     uint32_t flags = PAGE_PRESENT | PAGE_RW | (user ? PAGE_USER : 0u);
@@ -132,6 +160,23 @@ static int map_user_range(page_dir_t *pdir, vmm_addr_t base, int pages, int user
     return 1;
 }
 
+/**
+ * @brief Map a thread's user and kernel stacks above its image.
+ * @param thread   The thread; its stack pointers and limits are filled in.
+ * @param pdir     The process's page directory.
+ * @param nthreads Index of this thread within the process, 0 for the main one.
+ * @return 1 on success, 0 if a mapping failed.
+ *
+ * The main thread is laid out immediately above the image; every later thread
+ * is offset by a fixed per-thread span so threads miss the image and each
+ * other.
+ *
+ * An unmapped guard page separates the two stacks. They used to be adjacent,
+ * so a kernel stack that overran its bottom walked into the top of the user
+ * stack with nothing faulting — the damage only surfaced later as a return
+ * through a wrecked frame. The kernel stack is also mapped ring-0 only, since
+ * it holds the saved user context.
+ */
 int build_stack(thread_t *thread, page_dir_t *pdir, int nthreads) {
     /* Per-thread footprint: user stack + kernel stack + heap, plus slack. Only
      * the main thread (nthreads == 0) is laid out exactly; forked threads are
@@ -160,7 +205,16 @@ int build_stack(thread_t *thread, page_dir_t *pdir, int nthreads) {
 }
 
 /**
- * Builds the heap for a userspace thread
+ * @brief Map and initialise a thread's user heap.
+ * @param thread   The thread; its @c heap and @c heap_limit are filled in.
+ * @param pdir     The process's page directory.
+ * @param nthreads Index of this thread within the process, 0 for the main one.
+ * @return 1 on success, 0 if the mapping failed.
+ *
+ * Placed just above the thread's kernel stack, offset by the same per-thread
+ * span @ref build_stack uses so threads of one process do not overlap. The
+ * kernel-side aliases are left in place for @ref heap_fill to seed argv
+ * through, and dropped there.
  */
 int build_heap(thread_t *thread, page_dir_t *pdir, int nthreads) {
     uint32_t span = (uint32_t) nthreads * PAGE_SIZE *
@@ -178,11 +232,26 @@ int build_heap(thread_t *thread, page_dir_t *pdir, int nthreads) {
     return 1;
 }
 
-/**
- * Fills the heap with arguments
- */
+/** Most arguments a process can be given, argv[0] included. */
 #define PROC_MAX_ARGV 15
 
+/**
+ * @brief Build argv in the process's own heap.
+ * @param thread    The thread whose heap to allocate from.
+ * @param name      Becomes argv[0].
+ * @param arguments The rest of the command line.
+ * @param argc      Receives the argument count.
+ * @param argv1     Receives the address of the argv array, in process space.
+ * @return 1 always.
+ *
+ * Splits on single spaces with no quoting and no escape handling, so an
+ * argument cannot contain one; arguments past @ref PROC_MAX_ARGV are dropped
+ * silently. The array is NULL-terminated as C requires.
+ *
+ * This is the last thing the kernel writes into the process heap, so it drops
+ * the kernel-directory aliases @ref build_heap left behind on the way out.
+ * Anything that seeded the heap after this would fault.
+ */
 int heap_fill(thread_t *thread, char *name, char *arguments, uint32_t *argc, uint32_t *argv1) {
     *argc = 1;
     char **argv = (char **) umalloc((PROC_MAX_ARGV + 1) * sizeof(char *),
@@ -217,7 +286,21 @@ int heap_fill(thread_t *thread, char *name, char *arguments, uint32_t *argc, uin
 }
 
 /**
- * Fills the stack with register values
+ * @brief Lay out the initial user stack and the frame that enters the process.
+ * @param thread The thread; its @c esp and @c esp_kernel are set to the frames.
+ * @param argc   Argument count, pushed for main().
+ * @param argv   Address of the argv array in process space.
+ * @return 1 always.
+ *
+ * The user stack gets argv, argc and a return address pointing at the
+ * end-of-process trampoline, so a process that returns from main() lands
+ * somewhere that can call exit for it. The kernel stack gets an `iret` frame
+ * with ring-3 selectors, which is how the process is first entered: the
+ * scheduler switches to this thread like any other and the stub `iret`s
+ * straight into user mode.
+ *
+ * Drops the kernel-directory aliases for both stacks on the way out, so this
+ * must be the last thing the kernel writes into them.
  */
 int stack_fill(thread_t *thread, uint32_t argc, uint32_t argv) {
     // Fill user stack
@@ -260,7 +343,14 @@ int stack_fill(thread_t *thread, uint32_t argc, uint32_t argv) {
 }
 
 /**
- * Terminates a process and frees all the memory 
+ * @brief Mark the calling process stopped and stop running it. Never returns.
+ * @param ret The process's exit code, reported to the console.
+ *
+ * Despite the name it frees nothing: it flags the process and then spins with
+ * interrupts enabled, waiting to be scheduled away for the last time. The
+ * memory is reclaimed later by @ref remove_proc, running on another process's
+ * stack — which is the point, since a process cannot free the stack it is
+ * standing on.
  */
 void end_proc(int ret) {
     sched_state(0);
@@ -287,7 +377,26 @@ void end_proc(int ret) {
 }
 
 /**
- * Removes a terminated process
+ * @brief Reclaim a stopped process: unmap its memory and free its structures.
+ * @param pid The process's main-thread id; unknown ids are ignored.
+ *
+ * Ordering is the whole difficulty, because another CPU may still be running
+ * in this address space:
+ *
+ *   1. Unlink from the run queue, so no CPU can pick it up again.
+ *   2. Spin until no CPU reports it as current.
+ *   3. Flush the TLB across all CPUs — not for the TLB, but as a barrier. A
+ *      CPU only services the IPI between instructions with interrupts on, so
+ *      by the time the flush completes every CPU has finished its
+ *      context-switch stub (which runs with interrupts off) and left this
+ *      address space. Step 2 alone is not enough: the scheduler clears its
+ *      current-process fields a few instructions before the stub reloads CR3.
+ *   4. Only then unmap and free.
+ *
+ * Kernel-stack frames are deliberately leaked. Unmapping them here corrupts a
+ * live kernel-heap allocation once a few sizeable processes have run in
+ * sequence; at four pages per process the leak is bounded and, for an
+ * interactive workload, benign. See apps/lua/PORTING.md.
  */
 void remove_proc(int pid) {
     process_t *cur = get_proc_by_id(pid);
@@ -350,7 +459,22 @@ void remove_proc(int pid) {
 }
 
 /**
- * Creates a kernel process from a function
+ * @brief Start a kernel thread running @p thread in the kernel address space.
+ * @param name   Name for the process table.
+ * @param thread The function to run; it should never return.
+ * @return The new thread's id, or @c PROC_STOPPED if no stack window is free.
+ *
+ * Much simpler than @ref start_proc_locked: no ELF, no user stack, no heap,
+ * and it shares the kernel page directory rather than getting its own. The
+ * initial frame carries ring-0 selectors, so the thread starts in kernel mode.
+ *
+ * Stacks come from a fixed window below the user-image base, handed out by a
+ * bump allocator that never reclaims — a kernel thread is expected to run for
+ * the life of the machine. The window's placement matters: every `link.lds` in
+ * apps/ links at 8 MiB and @ref load_elf_relocate copies the image over that
+ * range, so stacks that used to sit just above it were being overwritten by
+ * the first program to run. Running out of window is refused and logged rather
+ * than allowed to grow into the console thread's stacks.
  */
 int start_kernel_proc(char *name, void (*thread)(void)) {
     /* Each kernel process gets its own stack window below the user-image base.
@@ -431,7 +555,12 @@ int start_kernel_proc(char *name, void (*thread)(void)) {
 }
 
 /**
- * Returns given id process state
+ * @brief Look up a process's state.
+ * @param id The process's main-thread id.
+ * @return Its state, or @c PROC_STOPPED if there is no such process — the two
+ *         are indistinguishable, which suits the one caller that matters:
+ *         @ref main_proc waits for the shell to stop, and the shell having
+ *         been reaped already means the same thing to it.
  */
 int proc_state(int id) {
     process_t *cur = get_proc_by_id(id);
