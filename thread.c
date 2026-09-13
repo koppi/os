@@ -77,8 +77,14 @@ int start_thread() {
     process_t *cur = get_cur_proc();
     
     thread_t *thread = create_thread();
-    if(!thread)
+    if(!thread) {
+        /* Every other exit from here re-opens the gate; this one used to
+         * return with it still closed, leaving preemption off on this CPU for
+         * good — the machine kept running but stopped switching threads. */
+        sched_state(1);
+        enable_int();
         return -1;
+    }
     
     thread_t *parent = cur->thread_list;
     

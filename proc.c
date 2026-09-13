@@ -45,9 +45,13 @@
  * Failure is reported but not unwound — the page directory, the thread control
  * block and any frames already mapped are leaked. A process that fails to
  * start is rare and fatal to what asked for it, so nothing here tries to be
- * recoverable. The @c sched_state(1) calls on those paths are likewise
- * unbalanced: nothing in this function closed the preemption gate, so they
- * open it whether or not the caller wanted it open.
+ * recoverable.
+ *
+ * The error paths do not touch @ref sched_state. Nothing here ever closes the
+ * preemption gate, so re-opening it on the way out would have handed the
+ * caller a different gate state than it arrived with. The gate is irrelevant
+ * inside this function anyway: @ref proc_lock is held with local interrupts
+ * disabled, so no timer tick can preempt this CPU regardless.
  *
  * Caller holds @ref proc_lock; see @ref start_proc.
  */
@@ -72,19 +76,16 @@ static int start_proc_locked(char *name, char *arguments) {
     proc->thread_list->parent = (void *) proc;
 
     if(!load_elf(name, proc->thread_list, proc->pdir)) {
-        sched_state(1);
         return PROC_STOPPED;
     }
     
     if(!build_stack(proc->thread_list, proc->pdir, 0)) {
         printf("Failed allocating memory, error 1\n");
-        sched_state(1);
         return PROC_STOPPED;
     }
     
     if(!build_heap(proc->thread_list, proc->pdir, 0)) {
         printf("Failed allocating memory, error 2\n");
-        sched_state(1);
         return PROC_STOPPED;
     }
     
@@ -92,13 +93,11 @@ static int start_proc_locked(char *name, char *arguments) {
     
     if(!heap_fill(proc->thread_list, name, arguments, &argc, &argv)) {
         printf("Failed allocating memory, error 3\n");
-        sched_state(1);
         return PROC_STOPPED;
     }
     
     if(!stack_fill(proc->thread_list, argc, argv)) {
         printf("Failed allocating memory, error 4\n");
-        sched_state(1);
         return PROC_STOPPED;
     }
     

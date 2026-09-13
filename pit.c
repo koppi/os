@@ -34,9 +34,12 @@ extern void pit_int();
  *
  * On SMP the old global flag became a per-CPU flag: cross-CPU exclusion is now
  * the subsystem spinlocks' job, and @c sched_state only keeps the local LAPIC
- * tick from switching this CPU away mid-critical-section. It is a plain flag
- * (not a nesting counter) so the unbalanced exit paths in proc.c / thread.c
- * still leave preemption enabled.
+ * tick from switching this CPU away mid-critical-section.
+ *
+ * It is a plain flag, not a nesting counter, so it does not compose: an inner
+ * region that re-enables on the way out re-enables it for the outer one too.
+ * Callers that need to leave it as they found it save @ref get_sched_state
+ * first and restore that, the way vfs.c's fs_enter/fs_leave do.
  *
  * @param on 0 disables preemption on this CPU, non-zero re-enables it.
  */
