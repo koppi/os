@@ -33,6 +33,19 @@
  * the devices behind the PCIe root ports are counted, so 32 was not enough. */
 #define PCI_MAX_DEVICES 64
 
+/**
+ * @brief Read a 32-bit configuration register through the CF8/CFC mechanism.
+ * @param bus      Bus number, 0..255.
+ * @param device   Device (slot) number, 0..31.
+ * @param function Function number, 0..7.
+ * @param offset   Register offset; forced down to a dword boundary.
+ * @return The dword, or all-ones for a function that is not present.
+ *
+ * The offset is masked to a multiple of 4 because configuration space is only
+ * addressable a dword at a time, so a sub-dword offset silently reads the
+ * dword containing it. That is not a limitation to work around — it is exactly
+ * what @ref pci_cfg_read8 and @ref pci_cfg_read16 build on.
+ */
 uint32_t
 pci_read(uint32_t bus, uint32_t device, uint32_t function, uint32_t offset) {
     uint32_t reg = 0x80000000;
@@ -47,6 +60,17 @@ pci_read(uint32_t bus, uint32_t device, uint32_t function, uint32_t offset) {
     return inportl(PCI_DATA);
 }
 
+/**
+ * @brief Write a 32-bit configuration register through CF8/CFC.
+ * @param bus      Bus number.
+ * @param device   Device (slot) number.
+ * @param function Function number.
+ * @param offset   Register offset; forced down to a dword boundary.
+ * @param data     The dword to write.
+ *
+ * Always writes all four bytes, so changing part of a register means reading
+ * it first — which is what @ref pci_cfg_write16 does.
+ */
 void
 pci_write(uint32_t bus, uint32_t device, uint32_t function, uint32_t offset, uint32_t data) {
     uint32_t reg = 0x80000000;
@@ -62,18 +86,46 @@ pci_write(uint32_t bus, uint32_t device, uint32_t function, uint32_t offset, uin
 
 /* ---- sub-dword config access for an enumerated device ---- */
 
+/**
+ * @brief Read one byte of an enumerated device's configuration space.
+ * @param d   The device.
+ * @param off Byte offset; any alignment.
+ * @return The byte at @p off.
+ */
 uint8_t pci_cfg_read8(const pci_device_t *d, uint8_t off) {
     return (pci_read(d->bus, d->slot, d->func, off) >> ((off & 3) * 8)) & 0xFF;
 }
+/**
+ * @brief Read one 16-bit word of an enumerated device's configuration space.
+ * @param d   The device.
+ * @param off Byte offset; assumed even, since a word straddling a dword
+ *            boundary would need two reads and no register is laid out that
+ *            way.
+ * @return The word at @p off.
+ */
 uint16_t pci_cfg_read16(const pci_device_t *d, uint8_t off) {
     return (pci_read(d->bus, d->slot, d->func, off) >> ((off & 2) * 8)) & 0xFFFF;
 }
+/** @brief Read a 32-bit configuration register of an enumerated device.
+ *         A convenience wrapper that saves unpacking bus/slot/func. */
 uint32_t pci_cfg_read32(const pci_device_t *d, uint8_t off) {
     return pci_read(d->bus, d->slot, d->func, off);
 }
+/** @brief Write a 32-bit configuration register of an enumerated device. */
 void pci_cfg_write32(const pci_device_t *d, uint8_t off, uint32_t v) {
     pci_write(d->bus, d->slot, d->func, off, v);
 }
+/**
+ * @brief Write one 16-bit word of an enumerated device's configuration space.
+ * @param d   The device.
+ * @param off Byte offset; assumed even.
+ * @param v   The word to write.
+ *
+ * A read-modify-write of the containing dword, since configuration space
+ * cannot be written more narrowly. The other half of the dword is rewritten
+ * with what was just read, so a register whose neighbour has read-to-clear or
+ * write-one-to-clear bits can be disturbed by writing this one.
+ */
 void pci_cfg_write16(const pci_device_t *d, uint8_t off, uint16_t v) {
     uint32_t dw = pci_read(d->bus, d->slot, d->func, off & ~3u);
     uint32_t sh = (off & 2) * 8;
@@ -81,6 +133,21 @@ void pci_cfg_write16(const pci_device_t *d, uint8_t off, uint16_t v) {
     pci_write(d->bus, d->slot, d->func, off & ~3u, dw);
 }
 
+/**
+ * @brief Brute-force search the whole bus for a vendor:device pair.
+ * @param vendor   Vendor id to match.
+ * @param device   Device id to match.
+ * @param bus      Receives the bus number on a hit.
+ * @param dev      Receives the device (slot) number.
+ * @param function Receives the function number.
+ * @return 1 if found, 0 otherwise.
+ *
+ * Probes all 65536 bus/slot/function combinations and does not honour the
+ * multifunction bit, so it reads functions 1..7 of single-function devices as
+ * well — harmless, since those read back all-ones, but it makes a miss cost
+ * 65536 config cycles. Prefer @ref pci_get_by_id, which searches the table
+ * @ref pci_init already built.
+ */
 uint8_t
 pci_find(uint32_t vendor, uint32_t device, uint8_t* bus,  uint8_t* dev, uint8_t* function) {
   uint32_t vend_dev, b, d, f, my_vend_dev;
@@ -108,6 +175,15 @@ pci_find(uint32_t vendor, uint32_t device, uint8_t* bus,  uint8_t* dev, uint8_t*
 static pci_device_t table[PCI_MAX_DEVICES];
 static int ndev;
 
+/**
+ * @brief Turn on decoding or bus mastering for a device.
+ * @param d    The device.
+ * @param bits Any of @ref PCI_CMD_IO, @ref PCI_CMD_MEM, @ref PCI_CMD_MASTER.
+ *
+ * Only ever sets bits — nothing here can turn decoding off — and skips the
+ * write entirely when they are already set, so a driver can call it without
+ * checking first.
+ */
 void pci_enable(const pci_device_t *d, uint16_t bits) {
     uint32_t cmd = pci_read(d->bus, d->slot, d->func, PCI_COMMAND) & 0xFFFF;
     if ((cmd & bits) == bits)
@@ -185,6 +261,20 @@ static int read_function(uint8_t bus, uint8_t slot, uint8_t func, pci_device_t *
     return 1;
 }
 
+/**
+ * @brief Enumerate every function on every bus into the static device table.
+ *
+ * A flat sweep of all 256 bus numbers rather than a walk down the bridges:
+ * the buses behind a bridge carry their own numbers and are found by the same
+ * sweep, so nothing needs to know the topology. Functions 1..7 are probed only
+ * when the header type says the device is multifunction, which keeps the scan
+ * to one config read for most slots.
+ *
+ * Filling the table stops the scan with a warning rather than overrunning it,
+ * so a machine with more functions than @ref PCI_MAX_DEVICES loses the tail of
+ * its device list — which is why that limit grew when a Kaby Lake ThinkPad
+ * turned up with about 30 functions.
+ */
 static void pci_scan(void) {
     ndev = 0;
     for (uint32_t bus = 0; bus < 256; bus++) {
@@ -223,6 +313,13 @@ static void log_bar(int n, const pci_bar_t *b) {
           n, b->is_io ? "io " : "mem", b->addr, sz, unit);
 }
 
+/**
+ * @brief Log the enumerated device table: ids, class, driver, IRQ and BARs.
+ *
+ * Runs once at the end of @ref pci_init and again on the console's `pci`
+ * command. A device with no bound driver is listed too, which is the quickest
+ * way to see what a new machine has that this kernel does not handle.
+ */
 void pci_dump(void) {
     klogf(LOG_INFO, "PCI devices: %d\n", ndev);
     for (int i = 0; i < ndev; i++) {
@@ -242,8 +339,26 @@ void pci_dump(void) {
     }
 }
 
+/** @brief How many PCI functions the boot-time scan recorded.
+ *  @return The device count, capped at @ref PCI_MAX_DEVICES. */
 int pci_count(void) { return ndev; }
 
+/**
+ * @brief Find unused 32-bit MMIO space to re-home a BAR into.
+ * @param size Bytes needed; the result is aligned to it. 0 means one page.
+ * @return A physical address, or 0 if there is no room.
+ *
+ * Returns the lowest address above every assigned memory BAR, never below
+ * 0xC0000000 and never running into the LAPIC/IOAPIC/HPET block at
+ * 0xFEC00000. This exists for one case: a UEFI firmware that parks a BAR
+ * above 4 GiB, where a 32-bit kernel cannot reach it at all — xhci.c uses it
+ * to move the controller somewhere addressable.
+ *
+ * Only PCI BARs are considered. Anything else the firmware placed in this
+ * range and did not describe through a BAR — reserved ACPI regions, say — is
+ * invisible here, so the address is "no PCI device claims it", not "provably
+ * free".
+ */
 uint32_t pci_mmio_hole(uint32_t size) {
     /* Lowest 32-bit MMIO address above every assigned memory BAR, aligned to
      * `size`, kept below the LAPIC/IOAPIC/HPET block at 0xFEC00000. Used to
@@ -266,10 +381,22 @@ uint32_t pci_mmio_hole(uint32_t size) {
     return top;
 }
 
+/**
+ * @brief Fetch an enumerated device by index.
+ * @param i Index, 0-based.
+ * @return The device, or NULL if @p i is out of range.
+ *
+ * The pointer is into a static table that is built once at boot and never
+ * moves, so it stays valid for the life of the kernel.
+ */
 const pci_device_t *pci_dev(int i) {
     return (i >= 0 && i < ndev) ? &table[i] : NULL;
 }
 
+/**
+ * @brief Find the first enumerated device with a given vendor:device id.
+ * @return The device, or NULL.
+ */
 const pci_device_t *pci_get_by_id(uint16_t vendor, uint16_t device) {
     for (int i = 0; i < ndev; i++)
         if (table[i].vendor == vendor && table[i].device == device)
@@ -277,6 +404,15 @@ const pci_device_t *pci_get_by_id(uint16_t vendor, uint16_t device) {
     return NULL;
 }
 
+/**
+ * @brief Find the first enumerated device of a given class:subclass.
+ * @return The device, or NULL.
+ *
+ * First in enumeration order, which is not necessarily the one wanted: a
+ * laptop has two class 04:03 audio controllers, and the digital-only HDMI one
+ * usually enumerates first. A driver that cares has to filter for itself, as
+ * @ref hda_probe does.
+ */
 const pci_device_t *pci_get_by_class(uint8_t class, uint8_t subclass) {
     for (int i = 0; i < ndev; i++)
         if (table[i].class == class && table[i].subclass == subclass)
@@ -335,6 +471,15 @@ static void bind_driver(pci_device_t *d) {
           d->bus, d->slot, d->func, d->vendor, d->device);
 }
 
+/**
+ * @brief Enumerate the bus, bind drivers and log the result.
+ *
+ * Called once at boot. Every device is offered to the driver table in order
+ * and taken by the first entry that matches, so a specific vendor:device rule
+ * must be listed ahead of the class-wide one it would otherwise lose to.
+ * Probing happens inline here, so a driver that blocks during probe delays
+ * the rest of boot.
+ */
 void pci_init(void) {
     pci_scan();
     klogf(LOG_INFO, "PCI: %d devices, binding drivers\n", ndev);
