@@ -57,6 +57,16 @@ static int bpb_looks_like_fat(const bootsector_t *bs) {
     return 1;
 }
 
+/**
+ * @brief Parse a volume's BPB into @c device_t::minfo.
+ * @param dev The block device to probe.
+ *
+ * Reads sector 0 through the driver's shared buffer and fills in the geometry,
+ * deriving the FAT width from the cluster count. A device that is not FAT, or
+ * whose geometry is self-inconsistent (data starting past the end of the
+ * volume), leaves @c minfo zeroed — so @c minfo.mounted staying 0 is the only
+ * failure signal; nothing is returned and nothing is printed.
+ */
 void fat_mount(device_t *dev) {
     // Trying with bootsector
     bootsector_t *bs = (bootsector_t *) dev->read(0);
@@ -97,6 +107,16 @@ void fat_mount(device_t *dev) {
     dev->minfo.mounted = 1;
 }
 
+/**
+ * @brief Convert a path component to a padded, upper-case 8.3 directory name.
+ * @param name Source name, "file.ext" style.
+ * @param str  Destination, at least @ref NAME_LEN + 1 bytes.
+ *
+ * The result is space-padded to exactly @ref NAME_LEN characters with no dot,
+ * which is how the name sits in a directory entry, and is NUL-terminated one
+ * past that. A name longer than 8 characters or an extension longer than 3 is
+ * truncated rather than rejected, so two long names can collide.
+ */
 void to_dos_file_name(char *name, char *str) {
     if((!name) || (!str))
         return;
@@ -121,6 +141,11 @@ void to_dos_file_name(char *name, char *str) {
     str[NAME_LEN] = 0;
 }
 
+/**
+ * @brief Convert a padded 8.3 directory name back to "file.ext", lower case.
+ * @param name The @ref NAME_LEN raw bytes from a directory entry.
+ * @param str  Destination, at least @ref NAME_LEN + 1 bytes.
+ */
 void to_normal_file_name(char *name, char *str) {
     int j = 0, flag = 1;
     
@@ -152,12 +177,32 @@ void print_dir(directory_t *dir) {
            dir->file_size);
 }
 
+/**
+ * @brief LBA of the first sector of the file's current cluster.
+ * @param f An open handle.
+ * @return The sector number to hand the block driver.
+ */
 uint32_t get_phys_sector(file *f) {
     device_t *dev = get_dev_by_id(f->dev);
     return dev->minfo.first_data_sector +
            (f->current_cluster - 2) * dev->minfo.cluster_sectors;
 }
 
+/**
+ * @brief Find a file's root-directory entry by name.
+ * @param f Handle whose @c name and @c dev identify the file.
+ * @return A pointer into the block driver's shared sector buffer, or NULL.
+ *
+ * Two things about the return value matter. It points into the buffer the
+ * driver reuses for every read, so it is invalidated by the next read from
+ * anything — which is why @ref fat_write_all re-fetches the entry after
+ * scanning the FAT. And the sector it was found in is left in the file-scope
+ * @c offset, which callers need in order to write the entry back with
+ * @c dev->write(root_offset + offset); calling anything else that searches
+ * the directory in between overwrites it.
+ *
+ * Root directory only: there is no path walk here.
+ */
 directory_t *fat_get_dir(file *f) {
     char *dos_file_name = kmalloc(NAME_LEN + 1);
     to_dos_file_name(f->name, dos_file_name);
@@ -177,6 +222,15 @@ directory_t *fat_get_dir(file *f) {
     return NULL;
 }
 
+/**
+ * @brief Create an empty file in the root directory.
+ * @param name Device-qualified path.
+ * @return 1 on success, 0 if the file already exists or the directory is full.
+ *
+ * Note that an existing file reports failure, unlike touch(1), and that the
+ * first entry with a zero first byte is reused — including one zeroed by
+ * @ref fat_delete.
+ */
 int fat_touch(char *name) {
     file f = fat_search(name);
     if(f.type != FS_NULL) {
@@ -206,6 +260,18 @@ int fat_touch(char *name) {
     return 0;
 }
 
+/**
+ * @brief Read the next 512-byte sector of a file and advance to its next cluster.
+ * @param f   Open handle; its @c current_cluster and @c eof are updated.
+ * @param buf Destination, which must have room for a whole sector.
+ *
+ * Exactly one sector per call, which is where this driver's one-sector-per-
+ * cluster assumption bites: a volume formatted with larger clusters reads only
+ * the first sector of each. Two consecutive FAT sectors are pulled into the
+ * shared @ref FAT buffer so a FAT12 entry straddling a sector boundary can be
+ * assembled. Reaching the end-of-chain marker, or a zero entry, sets @c eof
+ * instead of advancing.
+ */
 void fat_read(file *f, char *buf) {
     if(!f)
         return;
@@ -265,6 +331,15 @@ void fat_read(file *f, char *buf) {
     }
 }
 
+/**
+ * @brief Replace a file's contents with a NUL-terminated string.
+ * @param f   Open handle.
+ * @param str Text to write.
+ *
+ * The legacy single-record write behind the console's `write <file> <text>`.
+ * Binary data with embedded NULs is truncated; @ref fat_write_all takes an
+ * explicit length.
+ */
 void fat_write(file *f, char *str) {
     if(!f)
         return;
@@ -279,17 +354,26 @@ void fat_write(file *f, char *str) {
  *  (e.g. the self-hosting C compiler). FAT12 is handled for completeness.
  * ------------------------------------------------------------------------- */
 
-/** End-of-chain marker for the volume's FAT width. */
+/** @brief Lowest end-of-chain marker for the volume's FAT width; chain walks
+ *         compare against it rather than testing for equality. */
 static uint32_t fat_eoc(device_t *dev) {
     return (dev->minfo.type == FAT12) ? 0x0FF8 : 0xFFF8;
 }
 
-/** Highest usable cluster number + 1. */
+/** @brief One past the highest usable cluster number. */
 static uint32_t fat_cluster_count(device_t *dev) {
     return 2 + dev->minfo.data_sectors / dev->minfo.cluster_sectors;
 }
 
-/** Read FAT entry @p cl (cluster number) from the first FAT copy. */
+/**
+ * @brief Read FAT entry @p cl from the first FAT copy.
+ * @param dev A mounted volume.
+ * @param cl  Cluster number.
+ * @return The entry: the next cluster, 0 for free, or an end-of-chain marker.
+ *
+ * Only the first copy is read; @ref fat_set_entry keeps the others in step.
+ * A FAT12 entry straddling a sector boundary is assembled from both sectors.
+ */
 static uint32_t fat_get_entry(device_t *dev, uint32_t cl) {
     if(dev->minfo.type == FAT12) {
         uint32_t fo = cl + (cl / 2);
@@ -310,7 +394,16 @@ static uint32_t fat_get_entry(device_t *dev, uint32_t cl) {
     return (uint32_t) (b[off] | (b[off + 1] << 8));
 }
 
-/** Write FAT entry @p cl = @p val, mirrored to every FAT copy. */
+/**
+ * @brief Write FAT entry @p cl, mirrored to every FAT copy.
+ * @param dev A mounted volume.
+ * @param cl  Cluster number.
+ * @param val Value to store.
+ *
+ * Each copy costs its own read-modify-write, and a FAT12 entry crossing a
+ * sector boundary costs two, so allocating a long chain is the expensive part
+ * of a write rather than moving the data.
+ */
 static void fat_set_entry(device_t *dev, uint32_t cl, uint32_t val) {
     for(uint32_t fat = 0; fat < dev->minfo.n_fats; fat++) {
         uint32_t base = dev->minfo.fat_offset + fat * dev->minfo.fat_size;
@@ -348,12 +441,19 @@ static void fat_set_entry(device_t *dev, uint32_t cl, uint32_t val) {
     }
 }
 
-/** LBA of the first sector of data cluster @p cl. */
+/** @brief LBA of the first sector of data cluster @p cl. */
 static uint32_t fat_cluster_lba(device_t *dev, uint32_t cl) {
     return dev->minfo.first_data_sector + (cl - 2) * dev->minfo.cluster_sectors;
 }
 
-/** Free every cluster of the chain starting at @p first. */
+/**
+ * @brief Free every cluster of the chain starting at @p first.
+ * @param dev   A mounted volume.
+ * @param first First cluster of the chain, or anything below 2 for a no-op.
+ *
+ * Terminates even on a chain that loops back on itself: each cluster is zeroed
+ * as it is visited, so coming round again reads a free entry and stops.
+ */
 static void fat_free_chain(device_t *dev, uint32_t first) {
     uint32_t cl = first;
     uint32_t eoc = fat_eoc(dev);
@@ -365,8 +465,15 @@ static void fat_free_chain(device_t *dev, uint32_t first) {
 }
 
 /**
- * Scan the first FAT for @p want free clusters, recording them in @p out.
- * One forward pass over the FAT sectors. @return the number found.
+ * @brief Scan the first FAT for free clusters.
+ * @param dev  A mounted volume.
+ * @param want How many are needed.
+ * @param out  Receives up to @p want cluster numbers, in ascending order.
+ * @return The number found, which is short of @p want only if the volume has
+ *         no more space.
+ *
+ * One forward pass over the FAT sectors. Nothing is reserved: the caller must
+ * link the clusters before anything else can scan.
  */
 static uint32_t fat_scan_free(device_t *dev, uint32_t want, uint32_t *out) {
     uint32_t total = fat_cluster_count(dev);
@@ -391,8 +498,20 @@ static uint32_t fat_scan_free(device_t *dev, uint32_t want, uint32_t *out) {
 }
 
 /**
- * Replace the contents of @p f with @p len bytes of @p buf: reallocate the
- * cluster chain, write the data and update the directory entry.
+ * @brief Replace a file's contents with @p len bytes of @p buf.
+ * @param f   Open handle; its length and current cluster are updated.
+ * @param buf Data to write.
+ * @param len Length in bytes.
+ *
+ * Frees the old chain before scanning for free clusters, so a rewrite can
+ * reuse the space it just released. The directory entry is deliberately
+ * re-fetched after the data is written: @ref fat_get_dir returns a pointer
+ * into the block driver's shared sector buffer, and every FAT scan and data
+ * write in between has overwritten it.
+ *
+ * Not atomic and not recoverable — a failure after the chain is freed leaves
+ * the file empty. Running out of space prints and returns with the old
+ * contents already gone.
  */
 void fat_write_all(file *f, char *buf, uint32_t len) {
     if(!f)
@@ -461,6 +580,20 @@ void fat_write_all(file *f, char *buf, uint32_t len) {
     f->eof = 0;
 }
 
+/**
+ * @brief Delete a file from the root directory.
+ * @param name Device-qualified path.
+ * @return 1 on success, 0 if the file does not exist.
+ *
+ * Zeroes the whole directory entry rather than writing the standard 0xE5
+ * deleted marker. Every scan in this driver skips a zero entry and keeps
+ * going, so it is self-consistent, but another FAT implementation is entitled
+ * to read a zero first byte as end-of-directory and stop there, hiding
+ * whatever follows.
+ *
+ * The cluster chain is not freed, so the file's data clusters stay marked in
+ * use until the volume is reformatted or the next @ref fat_defrag pass.
+ */
 int fat_delete(char *name) {
     file f = fat_search(name);
     if(f.type == FS_NULL) {
@@ -477,11 +610,24 @@ int fat_delete(char *name) {
     return 0;
 }
 
+/**
+ * @brief Close a handle.
+ * @param f Handle, may be NULL.
+ *
+ * Only marks it @c FS_NULL: every write in this driver reaches the device
+ * before it returns, so there is nothing to flush.
+ */
 void fat_close(file *f) {
     if(f)
         f->type = FS_NULL;
 }
 
+/**
+ * @brief Open a name in the root directory.
+ * @param dir_name The 8.3 name, unqualified.
+ * @param devid    Device id to open it on.
+ * @return A handle of type @c FS_DIR, @c FS_FILE, or @c FS_NULL if not found.
+ */
 file fat_directory(char *dir_name, int devid) {
     file f;
     strncpy(f.name, dir_name, sizeof(f.name) - 1);
@@ -502,6 +648,17 @@ file fat_directory(char *dir_name, int devid) {
     return f;
 }
 
+/**
+ * @brief Find a name inside an already-open directory.
+ * @param directory The directory to search; it is consumed, being read to EOF
+ *                  on a miss.
+ * @param name      The name to look for.
+ * @return A handle, or one of type @c FS_NULL if the name is not there.
+ *
+ * On the miss path only @c type is set, so the other fields of the returned
+ * handle hold whatever was on the stack — callers must check @c type before
+ * reading anything else.
+ */
 file fat_open_subdir(file directory, char *name) {
     file f;
     strncpy(f.name, name, sizeof(f.name) - 1);
@@ -535,14 +692,28 @@ file fat_open_subdir(file directory, char *name) {
     return f;
 }
 
+/** @brief Open a file by device-qualified path. @see fat_search. */
 file fat_open(char *name) {
     return fat_search(name);
 }
 
+/** @brief Resolve a directory by device-qualified path; the caller checks
+ *         that the result is of type @c FS_DIR. @see fat_search. */
 file fat_cd(char *dir) {
     return fat_search(dir);
 }
 
+/**
+ * @brief Walk a device-qualified path to a handle.
+ * @param name Path such as "/hda/sub/file", leading slash optional.
+ * @return A handle, of type @c FS_NULL if any component is missing.
+ *
+ * The device component is skipped by finding the first '/' rather than by a
+ * fixed length, so names of any length ("rd", "hda") work. A bare mount point
+ * with no path after it returns @c FS_NULL: there is nothing to open. The
+ * first component is looked up in the root directory and the rest through
+ * @ref fat_open_subdir, and each is truncated to 15 characters.
+ */
 file fat_search(char *name) {
     file cur_dir;
     int root = 1;
@@ -578,6 +749,15 @@ file fat_search(char *name) {
     return cur_dir;
 }
 
+/**
+ * @brief Print the root directory to the console.
+ * @param dir Device-qualified path; only its device component is used.
+ *
+ * Root directory only — a subdirectory argument is ignored, not walked. It
+ * also prints raw entries that @ref fat_listdir filters out: long-filename
+ * fragments and the volume label show up as garbage names, so its output can
+ * differ from the shell's completion list for the same directory.
+ */
 void fat_ls(char *dir) {
     char *normal_name = kmalloc(NAME_LEN + 1);
     // TODO nested folder
@@ -595,6 +775,18 @@ void fat_ls(char *dir) {
     kfree(normal_name);
 }
 
+/**
+ * @brief List the root directory as newline-separated names.
+ * @param dir   Device-qualified path; only its device component is used.
+ * @param out   Destination buffer, NUL-terminated on return.
+ * @param outsz Capacity of @p out.
+ * @return The number of names written.
+ *
+ * The machine-readable counterpart of @ref fat_ls, used by the shell's
+ * completion. Free, deleted, long-filename and volume-label entries are all
+ * skipped. Filling the buffer stops the listing and returns the count so far,
+ * which is indistinguishable from having reached the end.
+ */
 int fat_listdir(char *dir, char *out, uint32_t outsz) {
     if(outsz)
         out[0] = 0;
@@ -649,11 +841,15 @@ int fat_listdir(char *dir, char *out, uint32_t outsz) {
 
 #define DFG_BAR_W 32
 
+/** @brief Test bit @p i of the in-use cluster bitmap. */
 static int  dfg_bit(const uint8_t *bm, uint32_t i) { return (bm[i >> 3] >> (i & 7)) & 1; }
+/** @brief Mark cluster @p i in use. */
 static void dfg_set(uint8_t *bm, uint32_t i) { bm[i >> 3] |=  (uint8_t) (1u << (i & 7)); }
+/** @brief Mark cluster @p i free. */
 static void dfg_clr(uint8_t *bm, uint32_t i) { bm[i >> 3] &= (uint8_t) ~(1u << (i & 7)); }
 
-/** Render an 8.3 entry as a lowercase "name.ext" into @p out (<= 13 bytes). */
+/** @brief Render an 8.3 entry as a lowercase "name.ext" into @p out, which
+ *         needs 13 bytes. Used only for the progress bar. */
 static void dfg_name(const directory_t *e, char *out) {
     int n = 0;
     for(int i = 0; i < 8 && e->filename[i] != ' '; i++)
@@ -666,7 +862,16 @@ static void dfg_name(const directory_t *e, char *out) {
     out[n] = 0;
 }
 
-/** Redraw the progress bar in place (single write, carriage-return prefixed). */
+/**
+ * @brief Redraw the defrag progress bar in place.
+ * @param dev   The volume being defragmented, for its mount name.
+ * @param done  Clusters processed.
+ * @param total Clusters to process; 0 renders as complete.
+ * @param name  File currently being moved.
+ *
+ * One printf, prefixed with a carriage return, so the line is rewritten rather
+ * than scrolled — the style fsck uses.
+ */
 static void dfg_bar(device_t *dev, uint32_t done, uint32_t total, const char *name) {
     static const char eq[DFG_BAR_W + 1] = "================================";
     uint32_t pct = total ? (uint32_t) ((uint64_t) done * 100 / total) : 100;
@@ -675,7 +880,13 @@ static void dfg_bar(device_t *dev, uint32_t done, uint32_t total, const char *na
            dev->mount, (int) k, eq, (int) (DFG_BAR_W - k), "", pct, name);
 }
 
-/** Highest free cluster — scratch space for evictions. 0 if the volume is full. */
+/**
+ * @brief Find the highest free cluster, used as scratch space for evictions.
+ * @param occ    In-use bitmap.
+ * @param ccount One past the highest cluster number.
+ * @return The cluster, or 0 if the volume is full — which is why
+ *         @ref fat_defrag refuses a volume more than half full.
+ */
 static uint32_t dfg_free_high(const uint8_t *occ, uint32_t ccount) {
     for(uint32_t c = ccount; c-- > 2;)
         if(!dfg_bit(occ, c))
@@ -683,7 +894,20 @@ static uint32_t dfg_free_high(const uint8_t *occ, uint32_t ccount) {
     return 0;
 }
 
-/** Locate the file (@p gf) and chain position (@p pf) that hold cluster @p cl. */
+/**
+ * @brief Find which file, and where in its chain, currently holds a cluster.
+ * @param chain Per-file cluster lists.
+ * @param clen  Length of each list.
+ * @param m     Number of files.
+ * @param cl    Cluster to locate.
+ * @param gf    Receives the file index.
+ * @param pf    Receives the position within that file's chain.
+ * @return Non-zero if the cluster was found.
+ *
+ * A linear search across every chain. That is quadratic in the worst case, and
+ * fine here: @ref fat_defrag only runs on small volumes it has already agreed
+ * to touch.
+ */
 static int dfg_owner(uint32_t **chain, const uint32_t *clen, uint32_t m,
                      uint32_t cl, uint32_t *gf, uint32_t *pf) {
     for(uint32_t g = 0; g < m; g++)
@@ -692,7 +916,16 @@ static int dfg_owner(uint32_t **chain, const uint32_t *clen, uint32_t m,
     return 0;
 }
 
-/** Copy one whole cluster, @p from -> @p to, via the driver's shared buffer. */
+/**
+ * @brief Copy one whole cluster.
+ * @param dev  A mounted volume.
+ * @param from Source cluster.
+ * @param to   Destination cluster.
+ *
+ * Sector by sector through the block driver's shared buffer — a read fills it
+ * and the following write flushes it straight back out — so no heap is needed
+ * however large a cluster is.
+ */
 static void dfg_copy(device_t *dev, uint32_t from, uint32_t to) {
     uint32_t a = fat_cluster_lba(dev, from), b = fat_cluster_lba(dev, to);
     for(uint32_t s = 0; s < dev->minfo.cluster_sectors; s++) {
@@ -701,7 +934,12 @@ static void dfg_copy(device_t *dev, uint32_t from, uint32_t to) {
     }
 }
 
-/** Point root-directory entry @p idx at first cluster @p first. */
+/**
+ * @brief Point a root-directory entry at a new first cluster.
+ * @param dev   A mounted volume.
+ * @param idx   Index of the entry in the root directory.
+ * @param first The new first cluster.
+ */
 static void dfg_set_first(device_t *dev, uint32_t idx, uint32_t first) {
     uint32_t per = SECTOR_SIZE / 32;
     uint32_t sec = dev->minfo.root_offset + idx / per;
@@ -711,6 +949,24 @@ static void dfg_set_first(device_t *dev, uint32_t idx, uint32_t first) {
     dev->write(sec);
 }
 
+/**
+ * @brief Repack every root-directory file into one contiguous cluster run.
+ * @param dev A mounted volume.
+ *
+ * Called from @ref vfs_mount before the volume is announced, so nothing else
+ * can be touching it. Files are packed from cluster 2 in directory order,
+ * leaving all free space in a single run at the tail; a cluster already
+ * holding another file's data is evicted to the highest free cluster first.
+ *
+ * Bails out, untouched, on anything it does not fully understand: a FAT width
+ * other than 12 or 16, an unexpected geometry, subdirectories, cross-linked or
+ * lost clusters, or a volume more than half full — there has to be somewhere
+ * to evict to. Every exit path frees its allocations.
+ *
+ * Memory is the constraint: with a ~140 KiB kernel heap it holds one bit per
+ * cluster plus one cluster list per file, and moves file data one cluster at a
+ * time through the driver's shared sector buffer rather than buffering a file.
+ */
 void fat_defrag(device_t *dev) {
     fat_mount_info_t *mi = &dev->minfo;
 
@@ -966,6 +1222,13 @@ cleanup:
     kfree(occ);
 }
 
+/**
+ * @brief Fill in the VFS operation vector with this driver's entry points.
+ * @param fs_fat The vector to populate, normally @c device_t::fs.
+ *
+ * @ref vfs_mount publishes it only after @ref fat_mount confirms the volume
+ * really is FAT.
+ */
 void fat_init(filesystem *fs_fat) {
     fs_fat->mount = &fat_mount;
     fs_fat->read = &fat_read;
