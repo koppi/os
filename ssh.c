@@ -92,6 +92,10 @@ static ssh_pending_t *ssh_pending_head = 0;
 static ssh_pending_t *ssh_pending_tail = 0;
 static spinlock_t ssh_pending_lock = SPINLOCK_INIT;
 
+/**
+ * @brief One line of server status for the console's `ssh` command.
+ * @return A pointer to a static buffer, overwritten by the next call.
+ */
 const char *ssh_status_str(void) {
     static char buf[64];
     snprintf(buf, sizeof buf, "listening on :%d (%d session%s served)",
@@ -102,6 +106,17 @@ const char *ssh_status_str(void) {
 /* ------------------------------------------------------------------ *
  *  Small helpers                                                      *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Compare @p n bytes for equality.
+ * @return Non-zero if they match.
+ *
+ * Not constant time — it returns on the first differing byte. Two callers
+ * compare secrets with it: the MAC check in @ref recv_packet and the password
+ * check in @ref do_userauth. Both are therefore timing-observable in
+ * principle. Left as it is deliberately: this server has one hard-coded
+ * credential compiled into the kernel, so an attacker who can measure the
+ * comparison can simply read the password out of the image instead.
+ */
 static int bytes_eq(const uint8_t *a, const uint8_t *b, int n) {
     for (int i = 0; i < n; i++)
         if (a[i] != b[i])
@@ -109,6 +124,16 @@ static int bytes_eq(const uint8_t *a, const uint8_t *b, int n) {
     return 1;
 }
 
+/**
+ * @brief Read exactly @p n bytes, blocking until they arrive.
+ * @return @p n, or -1 if the connection died.
+ *
+ * @ref tcp_recv returns an ambiguous 0 for both "nothing arrived within its
+ * timeout" and end of stream, so this disambiguates with @ref tcp_is_open:
+ * a 0 on a connection that is still open is an idle timeout and the read is
+ * retried, and only a 0 on a closed one is treated as the end. An idle SSH
+ * session would otherwise be torn down every ten seconds.
+ */
 static int recv_exact(int h, uint8_t *buf, int n) {
     int got = 0;
     while (got < n) {
@@ -124,6 +149,13 @@ static int recv_exact(int h, uint8_t *buf, int n) {
     return got;
 }
 
+/**
+ * @brief Write all @p n bytes.
+ * @return @p n, or -1 if the connection died.
+ *
+ * @ref tcp_send is stop-and-wait and returns short rather than failing, so
+ * every write has to be looped.
+ */
 static int send_all(int h, const uint8_t *buf, int n) {
     int off = 0;
     while (off < n) {
@@ -138,8 +170,12 @@ static int send_all(int h, const uint8_t *buf, int n) {
 /* ---- wire-format cursors -------------------------------------------- */
 typedef struct { const uint8_t *p; int len; int off; } reader_t;
 
+/** @brief Read one byte, or 0 once the cursor is past the end — a truncated
+ *         packet decodes as zeros rather than being reported. Only
+ *         @ref rd_string signals an overrun. */
 static uint8_t rd_byte(reader_t *r) { return (r->off < r->len) ? r->p[r->off++] : 0; }
 
+/** @brief Read a big-endian uint32_t; reads past the end come back as 0. */
 static uint32_t rd_u32(reader_t *r) {
     uint32_t v = 0;
     for (int i = 0; i < 4; i++)
@@ -147,6 +183,17 @@ static uint32_t rd_u32(reader_t *r) {
     return v;
 }
 
+/**
+ * @brief Read an SSH string: a 4-byte length followed by that many bytes.
+ * @param r      Cursor.
+ * @param outlen Receives the length, 0 on failure.
+ * @return A pointer into the packet buffer, or NULL if the declared length
+ *         runs past the end of the packet.
+ *
+ * This is the only bounds check on the read path, so every caller must test
+ * the return value: a NULL here is how a malformed or truncated packet from
+ * the network is rejected rather than read out of bounds.
+ */
 static const uint8_t *rd_string(reader_t *r, uint32_t *outlen) {
     uint32_t n = rd_u32(r);
     if (r->off > r->len || n > (uint32_t)(r->len - r->off)) {
@@ -159,12 +206,21 @@ static const uint8_t *rd_string(reader_t *r, uint32_t *outlen) {
     return p;
 }
 
+/** @brief Write a big-endian uint32_t. @return 4, the bytes written, so
+ *         callers can chain writes into a running offset. */
 static int wr_u32(uint8_t *p, uint32_t v) {
     p[0] = (uint8_t)(v >> 24); p[1] = (uint8_t)(v >> 16);
     p[2] = (uint8_t)(v >> 8);  p[3] = (uint8_t)v;
     return 4;
 }
 
+/**
+ * @brief Write an SSH string: a 4-byte length then the bytes.
+ * @return The number of bytes written, 4 + @p len.
+ *
+ * No bounds checking: every writer in this file sizes its buffer for the
+ * fixed set of fields it is about to emit.
+ */
 static int wr_string(uint8_t *p, const void *data, int len) {
     wr_u32(p, (uint32_t)len);
     if (len)
@@ -172,6 +228,7 @@ static int wr_string(uint8_t *p, const void *data, int len) {
     return 4 + len;
 }
 
+/** @brief Write a NUL-terminated string as an SSH string, without the NUL. */
 static int wr_str_c(uint8_t *p, const char *s) {
     return wr_string(p, s, (int)strlen(s));
 }
@@ -182,6 +239,7 @@ static int wr_str_c(uint8_t *p, const char *s) {
 static uint8_t hk_seed[32], hk_pub[32], hk_scalar[32], hk_prefix[32];
 static int hk_ready;
 
+/** @brief Value of one hex digit, or -1 if @p c is not one. */
 static int hex_val(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c >= 'a' && c <= 'f') return c - 'a' + 10;
@@ -189,6 +247,11 @@ static int hex_val(char c) {
     return -1;
 }
 
+/**
+ * @brief Decode @p n bytes from 2 * @p n hex digits.
+ * @return 1 on success, 0 if any digit is invalid — which is how a truncated
+ *         or corrupt host-key file is rejected and a fresh key generated.
+ */
 static int hex_decode(const char *in, uint8_t *out, int n) {
     for (int i = 0; i < n; i++) {
         int hi = hex_val(in[i * 2]);
@@ -200,6 +263,8 @@ static int hex_decode(const char *in, uint8_t *out, int n) {
     return 1;
 }
 
+/** @brief Encode @p n bytes as 2 * @p n lowercase hex digits. Does not
+ *         NUL-terminate; the caller adds it. */
 static void hex_encode(const uint8_t *in, int n, char *out) {
     static const char *d = "0123456789abcdef";
     for (int i = 0; i < n; i++) {
@@ -208,6 +273,15 @@ static void hex_encode(const uint8_t *in, int n, char *out) {
     }
 }
 
+/**
+ * @brief Load the Ed25519 host key, generating and persisting one if needed.
+ *
+ * Runs once per boot and is a no-op afterwards. The key lives at
+ * @ref HOSTKEY_PATH as hex. On the RAM disk that file does not survive a
+ * reboot, so a new key is generated each time and clients report the host
+ * key as changed — expected, not a fault. A write failure is logged and the
+ * session continues with a key that exists only in memory.
+ */
 static void ensure_hostkey(void) {
     if (hk_ready)
         return;
@@ -246,6 +320,20 @@ static void ensure_hostkey(void) {
 /* ------------------------------------------------------------------ *
  *  Binary packet protocol (RFC 4253 section 6)                        *
  * ------------------------------------------------------------------ */
+/**
+ * @brief HMAC-SHA-256 over an SSH packet, as RFC 4253 section 6.4 defines it.
+ * @param key         The 32-byte integrity key.
+ * @param seq         Packet sequence number, hashed first.
+ * @param len_field   The packet's 4-byte length field.
+ * @param content     Padding length, payload and padding.
+ * @param content_len Length of @p content.
+ * @param out         Receives the 32-byte MAC.
+ *
+ * The key is exactly the 32 bytes HMAC's block padding expects to zero-extend,
+ * so there is no need for the shorten-by-hashing case of the HMAC definition.
+ * Computed over the plaintext, before encryption — this is encrypt-and-MAC,
+ * which is what SSH specifies.
+ */
 static void hmac_seq_packet(const uint8_t key[32], uint32_t seq,
                             const uint8_t len_field[4], const uint8_t *content,
                             int content_len, uint8_t out[32]) {
@@ -365,6 +453,8 @@ static int recv_packet(ssh_conn_t *sc, uint8_t *payload_out, int *payload_len, i
 /* ------------------------------------------------------------------ *
  *  Key exchange (curve25519-sha256, RFC 8731) + derivation (RFC 4253) *
  * ------------------------------------------------------------------ */
+/** @brief Feed @p len bytes into a running hash framed as an SSH string,
+ *         4-byte length first. */
 static void hash_str(sha256_ctx *c, const void *data, int len) {
     uint8_t lb[4];
     wr_u32(lb, (uint32_t)len);
@@ -394,6 +484,16 @@ static void hash_mpint(sha256_ctx *c, const uint8_t *be, int len) {
     sha256_update(c, be + start, len - start);
 }
 
+/**
+ * @brief Build this server's KEXINIT payload.
+ * @param buf Destination; the caller sizes it (about 200 bytes suffice).
+ * @return The payload length.
+ *
+ * Each algorithm list holds exactly one name, so there is nothing to
+ * negotiate: a client that cannot do curve25519-sha256, ssh-ed25519,
+ * aes128-ctr and hmac-sha2-256 is rejected by @ref verify_kexinit_algos
+ * rather than met halfway.
+ */
 static int build_kexinit(uint8_t *buf) {
     int n = 0;
     buf[n++] = SSH_MSG_KEXINIT;
@@ -414,6 +514,11 @@ static int build_kexinit(uint8_t *buf) {
     return n;
 }
 
+/**
+ * @brief Is @p name one of the comma-separated entries in @p data?
+ * @return Non-zero if it is. Matching is exact, so no prefix of a longer
+ *         algorithm name can satisfy it.
+ */
 static int list_has(const uint8_t *data, uint32_t len, const char *name) {
     int nlen = (int)strlen(name);
     uint32_t i = 0;
@@ -428,6 +533,16 @@ static int list_has(const uint8_t *data, uint32_t len, const char *name) {
     return 0;
 }
 
+/**
+ * @brief Check the client offers every algorithm this server implements.
+ * @param payload The client's KEXINIT payload.
+ * @param len     Its length.
+ * @return Non-zero if all six lists contain our one choice.
+ *
+ * Skips the message type and the 16-byte cookie, then reads the six lists in
+ * the order RFC 4253 fixes them. Since this end offers exactly one name per
+ * list, "the client's list contains ours" is the whole of the negotiation.
+ */
 static int verify_kexinit_algos(const uint8_t *payload, int len) {
     if (len < 17)
         return 0;
@@ -443,6 +558,13 @@ static int verify_kexinit_algos(const uint8_t *payload, int len) {
     return 1;
 }
 
+/**
+ * @brief Build KEX_ECDH_REPLY: host key blob, server ephemeral, signature.
+ * @param buf Destination, at least ~200 bytes.
+ * @param q_s The server's ephemeral X25519 public value.
+ * @param sig The Ed25519 signature over the exchange hash.
+ * @return The payload length.
+ */
 static int build_ecdh_reply(uint8_t *buf, const uint8_t q_s[32], const uint8_t sig[64]) {
     int n = 0;
     buf[n++] = SSH_MSG_KEX_ECDH_REPLY;
@@ -464,6 +586,26 @@ static int build_ecdh_reply(uint8_t *buf, const uint8_t q_s[32], const uint8_t s
     return n;
 }
 
+/**
+ * @brief Compute the exchange hash H (RFC 4253 section 8, RFC 8731).
+ * @param vc        The client's identification string, CRLF stripped.
+ * @param vs        This server's identification string.
+ * @param i_c       The client's KEXINIT payload.
+ * @param i_c_len   Its length.
+ * @param i_s       This server's KEXINIT payload.
+ * @param i_s_len   Its length.
+ * @param q_c       The client's ephemeral public value.
+ * @param q_s       The server's ephemeral public value.
+ * @param shared_be The X25519 shared secret, hashed as an mpint.
+ * @param H         Receives the 32-byte hash.
+ *
+ * The field order is fixed by the RFC and is the whole content of this
+ * function: H is what both ends sign and derive keys from, so a field out of
+ * order, or a length framing missed, produces a hash the client computes
+ * differently and the session dies at the signature check with nothing to say
+ * why. Both identification strings must be the exact bytes that went over the
+ * wire, without their CRLF.
+ */
 static void compute_exchange_hash(const char *vc, const char *vs,
                                   const uint8_t *i_c, int i_c_len,
                                   const uint8_t *i_s, int i_s_len,
@@ -489,6 +631,21 @@ static void compute_exchange_hash(const char *vc, const char *vs,
     sha256_final(&c, H);
 }
 
+/**
+ * @brief Derive one key from the shared secret (RFC 4253 section 7.2).
+ * @param K_be       The shared secret, hashed as an mpint.
+ * @param K_be_len   Its length.
+ * @param H          The exchange hash.
+ * @param letter     'A'..'F', selecting which key is being derived.
+ * @param session_id The session identifier, H itself on a first key exchange.
+ * @param out        Receives @p outlen bytes.
+ * @param outlen     Bytes wanted, at most 32.
+ *
+ * Only the first SHA-256 block is produced: the extension round that the RFC
+ * uses for longer keys is not implemented, because nothing here needs more
+ * than 32 bytes — aes128-ctr wants 16 and hmac-sha2-256 wants exactly 32.
+ * Asking for more would silently read past the digest.
+ */
 static void kdf(const uint8_t *K_be, int K_be_len, const uint8_t H[32], char letter,
                 const uint8_t session_id[32], uint8_t *out, int outlen) {
     sha256_ctx c;
@@ -503,6 +660,15 @@ static void kdf(const uint8_t *K_be, int K_be_len, const uint8_t H[32], char let
     memcpy(out, full, outlen);
 }
 
+/**
+ * @brief Derive all six session keys and install them in @p sc.
+ *
+ * Letters A..F are, in order, the two IVs, the two encryption keys and the
+ * two integrity keys. The client-to-server set becomes this end's receive
+ * state and the server-to-client set its transmit state — crossing them over
+ * is the easy mistake, and produces a session that fails at the first
+ * encrypted packet.
+ */
 static void derive_keys(ssh_conn_t *sc, const uint8_t *K_be, const uint8_t H[32],
                         const uint8_t session_id[32]) {
     uint8_t iv_c2s[16], iv_s2c[16], enc_c2s[16], enc_s2c[16], mac_c2s[32], mac_s2c[32];
@@ -525,6 +691,21 @@ static void derive_keys(ssh_conn_t *sc, const uint8_t *K_be, const uint8_t H[32]
 /* ------------------------------------------------------------------ *
  *  User authentication (RFC 4252) -- fixed username/password          *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Run the RFC 4252 authentication exchange against the fixed credential.
+ * @param sc The connection, already encrypted in both directions.
+ * @return 0 once the client authenticated, -1 on failure or a protocol error.
+ *
+ * Accepts the service request, then allows up to @ref SSH_MAX_AUTH_TRIES
+ * password attempts before hanging up. Only the "password" method is
+ * accepted; "none" and "publickey" fall through to the failure reply, which
+ * is what makes a client offer a password rather than trying its keys.
+ *
+ * There is no user database in this OS — @ref SSH_USERNAME and
+ * @ref SSH_PASSWORD are compiled in, so anyone with the kernel image has the
+ * credential. Treat the server as an unauthenticated console on a trusted
+ * network, not as an access control.
+ */
 static int do_userauth(ssh_conn_t *sc) {
     static uint8_t p[SSH_MAX_PACKET];
     int plen;
@@ -590,6 +771,15 @@ static int do_userauth(ssh_conn_t *sc) {
 static uint8_t out_buf[8192];
 static int out_len;
 
+/**
+ * @brief Console output hook: buffer one character for the SSH channel.
+ *
+ * Installed as @c ssh_output_hook while a command runs, so everything the
+ * console prints is diverted here instead of the screen. A newline gets a
+ * carriage return in front of it for the client's terminal. Output past the
+ * buffer is dropped silently rather than flushed mid-command, since flushing
+ * would mean sending a packet from inside whatever the console is doing.
+ */
 static void capture_char(char c) {
     if (c == '\n' && out_len < (int)sizeof out_buf)
         out_buf[out_len++] = '\r';
@@ -597,6 +787,13 @@ static void capture_char(char c) {
         out_buf[out_len++] = (uint8_t)c;
 }
 
+/**
+ * @brief Send channel data, split into packets the client agreed to accept.
+ * @return 0 on success, -1 if the connection died.
+ *
+ * The loop is do-while, so a zero-length call still sends one empty data
+ * message rather than nothing.
+ */
 static int channel_send_data(ssh_conn_t *sc, uint32_t peer_channel, const uint8_t *data, int len) {
     static uint8_t payload[9 + SSH_MAX_DATA_CHUNK];
     int off = 0;
@@ -615,6 +812,8 @@ static int channel_send_data(ssh_conn_t *sc, uint32_t peer_channel, const uint8_
     return 0;
 }
 
+/** @brief Send whatever @ref capture_char has buffered and reset it.
+ *         Does nothing if there is no output pending. */
 static void flush_output(ssh_conn_t *sc, uint32_t peer_channel) {
     if (out_len > 0) {
         channel_send_data(sc, peer_channel, out_buf, out_len);
@@ -622,6 +821,7 @@ static void flush_output(ssh_conn_t *sc, uint32_t peer_channel) {
     }
 }
 
+/** @brief Answer a channel request with CHANNEL_SUCCESS. */
 static void reply_channel_success(ssh_conn_t *sc, uint32_t peer_channel) {
     uint8_t p[5];
     p[0] = SSH_MSG_CHANNEL_SUCCESS;
@@ -629,6 +829,7 @@ static void reply_channel_success(ssh_conn_t *sc, uint32_t peer_channel) {
     send_packet(sc, p, 5);
 }
 
+/** @brief Answer a channel request with CHANNEL_FAILURE. */
 static void reply_channel_failure(ssh_conn_t *sc, uint32_t peer_channel) {
     uint8_t p[5];
     p[0] = SSH_MSG_CHANNEL_FAILURE;
@@ -636,6 +837,8 @@ static void reply_channel_failure(ssh_conn_t *sc, uint32_t peer_channel) {
     send_packet(sc, p, 5);
 }
 
+/** @brief Close a channel from this end: CHANNEL_EOF then CHANNEL_CLOSE.
+ *         The client's own close is not waited for. */
 static void channel_send_eof_close(ssh_conn_t *sc, uint32_t peer_channel) {
     uint8_t p[5];
     p[0] = SSH_MSG_CHANNEL_EOF;
@@ -745,6 +948,13 @@ static int wait_for_session_channel(ssh_conn_t *sc, uint32_t *peer_channel_out,
     }
 }
 
+/**
+ * @brief Send the channel's exit-status request.
+ * @param status The status to report.
+ *
+ * Always called with 0: @ref console_exec has no exit status to report, so a
+ * command that failed still looks successful to the client's shell.
+ */
 static void send_exit_status(ssh_conn_t *sc, uint32_t peer_channel, uint32_t status) {
     uint8_t p[32];
     int n = 0;
@@ -756,6 +966,13 @@ static void send_exit_status(ssh_conn_t *sc, uint32_t peer_channel, uint32_t sta
     send_packet(sc, p, n);
 }
 
+/**
+ * @brief Serve a non-interactive `ssh host command` session.
+ *
+ * Runs the one command with console output diverted to the channel, flushes
+ * it, reports success and closes. The hook is cleared before the flush so the
+ * send itself cannot recurse back into @ref capture_char.
+ */
 static void run_exec(ssh_conn_t *sc, uint32_t peer_channel, char *cmd) {
     out_len = 0;
     ssh_output_hook = capture_char;
@@ -768,6 +985,16 @@ static void run_exec(ssh_conn_t *sc, uint32_t peer_channel, char *cmd) {
     channel_send_eof_close(sc, peer_channel);
 }
 
+/**
+ * @brief Serve an interactive shell session until the client disconnects.
+ *
+ * Line editing is done here, not by the client: there is no PTY request
+ * handled and no terminal mode set, so the client sends raw keystrokes and
+ * this loop echoes them, handles backspace and delete, and runs a line on
+ * carriage return. `exit` and `logout` close the channel. Characters outside
+ * printable ASCII are dropped, so arrow keys and other escape sequences do
+ * nothing rather than corrupting the line.
+ */
 static void run_shell(ssh_conn_t *sc, uint32_t peer_channel) {
     static char cmdbuf[256];
     int i = 0;
@@ -842,6 +1069,15 @@ static void run_shell(ssh_conn_t *sc, uint32_t peer_channel) {
 /* ------------------------------------------------------------------ *
  *  Session entry point                                                *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Read the client's identification line (RFC 4253 section 4.2).
+ * @param out    Receives the line without its CRLF, NUL-terminated.
+ * @param maxlen Capacity of @p out.
+ * @return The length, or -1 if the connection died.
+ *
+ * Reads a byte at a time to the first newline. A client that sends no
+ * newline fills the buffer and the line is taken as complete.
+ */
 static int recv_version(int h, char *out, int maxlen) {
     int n = 0;
     while (n < maxlen - 1) {
@@ -857,6 +1093,21 @@ static int recv_version(int h, char *out, int maxlen) {
     return n;
 }
 
+/**
+ * @brief Run one complete SSH session on an accepted connection.
+ * @param h The TCP handle; closed before returning.
+ *
+ * Version exchange, KEXINIT, curve25519 key exchange signed with the host
+ * key, NEWKEYS in both directions, password authentication, then one session
+ * channel served as either a shell or a single command.
+ *
+ * Every failure takes the same exit: the connection is closed with no
+ * DISCONNECT message and nothing explaining why, so from the client's side a
+ * rejected algorithm, a bad host key and a malformed packet all look like the
+ * server hanging up. The kernel log is the only account of what happened.
+ *
+ * Must run on the `net` thread — see the note at the top of this file.
+ */
 static void ssh_serve_connection(int h) {
     ssh_conn_t sc;
     memset(&sc, 0, sizeof sc);
@@ -960,6 +1211,15 @@ done:
 /* ------------------------------------------------------------------ *
  *  net-thread entry point                                             *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Accept one pending connection; called every `net`-thread iteration.
+ *
+ * Starts listening the first time the link comes up. Never blocks and never
+ * serves a session: an accepted handle is queued for @ref ssh_worker_func, so
+ * a long-running session cannot stall the rest of the net thread's work.
+ * At most one connection is accepted per call, and a failed allocation drops
+ * the connection rather than queueing it.
+ */
 void ssh_tick(void) {
     if (!net_is_up())
         return;
@@ -996,11 +1256,27 @@ void ssh_tick(void) {
  *  argument, and only one worker iteration is ever in flight at a time. */
 static int pending_serve_h;
 
+/** @brief @ref net_exec trampoline: serve the connection stashed in
+ *         @ref pending_serve_h. Always returns 0; the session's outcome is
+ *         not reported back. */
 static int net_exec_serve(void) {
     ssh_serve_connection(pending_serve_h);
     return 0;
 }
 
+/**
+ * @brief Kernel thread: take queued connections and serve them one at a time.
+ *
+ * The session itself is marshalled onto the `net` thread with @ref net_exec,
+ * because the whole IPv4/TCP stack assumes single-threaded access — running
+ * it here would race @c net_thread's own polling on the same connection table
+ * and RX ring. What this thread buys is that accepting a connection never
+ * waits for a previous session to finish.
+ *
+ * Never returns, and never sleeps: an empty queue spins on @c pause rather
+ * than yielding, so this thread is always runnable and costs a scheduler slot
+ * even when nobody is connected.
+ */
 void ssh_worker_func(void) {
     for (;;) {
         ssh_pending_t *node = 0;
