@@ -19,6 +19,7 @@
 
 #include "../types.h"
 
+/* Unimplemented in the kernel: always returns -1. */
 pid_t fork();
 void exit(int code);
 pid_t wait(int *x);

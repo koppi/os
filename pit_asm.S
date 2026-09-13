@@ -19,9 +19,12 @@
  * @brief Timer interrupt stub (IRQ 0) and the fork return trampoline.
  *
  * @c pit_int saves the register frame and calls into pit.c, which advances the
- * tick count and may run the scheduler. @c fork_eip pops the return address and
- * jumps to it, so a freshly built thread stack returns into ordinary C code the
- * first time it is scheduled.
+ * tick count and may run the scheduler.
+ *
+ * @c fork_eip is a leftover: it pops its own return address and jumps to it,
+ * which is a plain `ret`. It never captured an EIP, so it could not make a
+ * forked thread resume anywhere. Nothing calls it — see start_thread() in
+ * thread.c, which fork would have to be rebuilt around.
  */
 
 /* The PIT keeps running for the free-running ms clock (pit_uptime) and the
@@ -76,6 +79,8 @@ pit_int:
     iret
     .size pit_int, .-pit_int
 
+/* Equivalent to `ret`. Kept only so the symbol a future fork implementation
+ * will want does not have to be reinvented; see the note above. */
     .globl fork_eip
     .type fork_eip, @function
 fork_eip:

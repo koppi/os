@@ -4,7 +4,7 @@
 
 
 
-/* Creates a child thread */
+/* Creates a child thread. Unimplemented in the kernel: always returns -1. */
 pid_t fork() {
     return (pid_t) syscall_call(3);
 }

@@ -33,11 +33,15 @@ typedef struct thread {
     struct thread *prec;            /**< Previous thread in the ring. */
 } thread_t;
 
-/** @brief Allocate a zeroed thread control block with a fresh pid. */
+/** @brief Allocate a zeroed thread control block with a fresh pid.
+ *  @return The thread, or 0 if the heap is exhausted. Every field not listed
+ *          in @ref thread_t as set here reads 0; the caller fills in the entry
+ *          point, stacks and heap. */
 thread_t *create_thread();
 /** @brief Attach a clean, aligned FXSAVE area to @p thread. @return non-zero on success. */
 int thread_alloc_fpu_state(thread_t *thread);
-/** @brief `fork` syscall — add a thread to the current process. */
+/** @brief `fork` syscall — unimplemented. @return -1, always. See thread.c
+ *         for what a working version would need. */
 int start_thread();
 /** @brief `exit` syscall — stop the current thread with status @p code. */
 void stop_thread(int code);

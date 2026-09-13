@@ -14,9 +14,6 @@
 
 #include <spinlock.h>
 
-/** asm helper (thread_asm) that returns twice, once in each thread. */
-extern void fork_eip();
-
 /** Next thread id to hand out (1 is the console's main thread). */
 static int pid = 2;
 
@@ -44,6 +41,12 @@ thread_t *create_thread() {
     thread_t *thread = (thread_t *) kmalloc(sizeof(thread_t));
     if(thread == 0)
         return 0;
+    /* The kernel heap does not zero what it hands out, and this block is only
+     * partly filled in below — the caller sets the rest. Zero it first so a
+     * field nobody assigns reads as 0 rather than as whatever the previous
+     * owner of this block left there. That is exactly how fork's child ended
+     * up with a garbage entry point. */
+    memset(thread, 0, sizeof(thread_t));
     if(!thread_alloc_fpu_state(thread)) {
         kfree(thread);
         return 0;
@@ -62,87 +65,41 @@ thread_t *create_thread() {
 }
 
 /**
- * @brief `fork` syscall — clone the current thread within its process.
+ * @brief `fork` syscall — unimplemented; always fails.
+ * @return -1, always.
  *
- * Builds a fresh stack and heap for the child, copies the parent's stack and
- * first heap page, links the child into the thread ring, then forks the EIP:
- * the parent returns the child's pid, the child returns 0.
+ * There was a partial implementation here that allocated the child's stack and
+ * heap, copied the parent's, and spliced the child into the thread ring. It
+ * could not work, and the way it failed was silent and destructive:
+ * @ref create_thread never set the new thread's @c eip and did not zero the
+ * control block, so @ref stack_fill wrote whatever the kernel heap happened to
+ * hold into the child's `iret` frame next to a ring-3 selector. The first time
+ * the scheduler picked the child it `iret`ed into user mode at an
+ * uninitialised address. The child therefore never reached the code that was
+ * supposed to make it return 0, and that branch was unreachable.
  *
- * @return Child pid in the parent, 0 in the child, -1 on failure.
+ * What a working version needs, for whoever picks this up (the removed code is
+ * in the history, and most of it — the stack, heap and ring splice — was
+ * sound):
+ *
+ *   - The child's kernel stack must be a copy of the parent's *current* one,
+ *     syscall interrupt frame included, with @c esp_kernel pointing at the
+ *     matching offset and the saved @c eax forced to 0. That is what makes the
+ *     child return 0 through the ordinary syscall exit path, rather than
+ *     needing an entry point of its own. @c fork_eip (pit_asm.S) was meant to
+ *     be part of this and never was: it is a plain `ret`.
+ *   - The two threads share one address space, so copying the parent's user
+ *     stack to a different virtual address leaves every saved frame pointer in
+ *     the copy aimed at the parent's stack. Either relocate them or accept
+ *     that the child cannot return through its caller's frames.
+ *
+ * Until then this fails cleanly. Nothing in the tree calls fork(), so nothing
+ * regresses; a caller gets -1 instead of a process that jumps to a garbage
+ * address.
  */
 int start_thread() {
-    /* Local preemption off for the duration; cross-CPU exclusion for the
-     * shared thread ring is sched_lock (taken around the splice below). */
-    sched_state(0);
-    process_t *cur = get_cur_proc();
-    
-    thread_t *thread = create_thread();
-    if(!thread) {
-        /* Every other exit from here re-opens the gate; this one used to
-         * return with it still closed, leaving preemption off on this CPU for
-         * good — the machine kept running but stopped switching threads. */
-        sched_state(1);
-        enable_int();
-        return -1;
-    }
-    
-    thread_t *parent = cur->thread_list;
-    
-    thread->image_base = cur->thread_list->image_base;
-    thread->image_size = cur->thread_list->image_size;
-    thread->parent = (void *) cur;
-    
-    if(!build_stack(thread, cur->pdir, cur->threads + 1)) {
-        kfree(thread);
-        sched_state(1);
-        enable_int();
-        return -1;
-    }
-    
-    if(!stack_fill(thread, 0, 0)) {
-        kfree(thread);
-        sched_state(1);
-        enable_int();
-        return -1;
-    }
-    
-    vmm_addr_t child_ustack = thread->stack_limit - PROC_USER_STACK_PAGES * PAGE_SIZE;
-    vmm_addr_t parent_ustack = cur->thread_list->stack_limit - PROC_USER_STACK_PAGES * PAGE_SIZE;
-    for (int p = 0; p < PROC_USER_STACK_PAGES; p++)
-        memcpy((void *)(child_ustack + p * PAGE_SIZE),
-               (void *)(parent_ustack + p * PAGE_SIZE),
-               PAGE_SIZE);
-
-    if(!build_heap(thread, cur->pdir, cur->threads + 1)) {
-        kfree(thread);
-        sched_state(1);
-        enable_int();
-        return -1;
-    }
-    for (int p = 0; p < PROC_HEAP_PAGES; p++)
-        memcpy((void *)(thread->heap + p * PAGE_SIZE),
-               (void *)(cur->thread_list->heap + p * PAGE_SIZE),
-               PAGE_SIZE);
-    
-    uint32_t sf = spin_lock(&sched_lock);
-    cur->threads++;
-    thread->prec = cur->thread_list;
-    thread->next = cur->thread_list->next;
-    cur->thread_list->next->prec = thread;
-    cur->thread_list->next = thread;
-    spin_unlock(&sched_lock, sf);
-
-    // TODO: parent heap pages beyond PROC_HEAP_PAGES are not copied;
-    // copy-on-write would be needed for programs that sbrk().
-    fork_eip();
-    if(cur->thread_list == parent) {
-        thread->state = PROC_ACTIVE;
-        sched_state(1);
-        enable_int();
-        return thread->pid;
-    } else {
-        return 0;
-    }
+    printf("fork: not implemented\n");
+    return -1;
 }
 
 /**
