@@ -59,10 +59,28 @@ static int n_proc = 1;
 /** Shared dummy process the per-CPU idle threads hang off. */
 static process_t idle_proc;
 
+/**
+ * @brief The process this CPU is running.
+ * @return The current process; never NULL once @ref sched_init has run.
+ *
+ * Reads per-CPU state without taking @ref sched_lock, so the answer is only
+ * meaningful on the calling CPU and only until it is preempted. A caller that
+ * needs it to stay true across a few statements must close the preemption gate
+ * first.
+ */
 process_t *get_cur_proc() {
     return this_cpu()->current_proc;
 }
 
+/**
+ * @brief Find the process owning the thread with id @p id.
+ * @param id A thread id, not a process index — every thread of a process has
+ *           its own, and the process's own id is its main thread's.
+ * @return The owning process, or NULL.
+ *
+ * The lock is dropped before returning, so the pointer is only as good as the
+ * caller's certainty that nothing is tearing that process down.
+ */
 process_t *get_proc_by_id(int id) {
     uint32_t f = spin_lock(&sched_lock);
     process_t *found = 0;
@@ -77,6 +95,16 @@ process_t *get_proc_by_id(int id) {
     return found;
 }
 
+/**
+ * @brief Find the process whose address space is @p cr3.
+ * @param cr3 A page-directory physical address, as read from CR3.
+ * @return The process, or NULL.
+ *
+ * The kernel directory deliberately returns NULL rather than a process: the
+ * fault handler uses that to tell "this trap happened in kernel context" from
+ * "this trap belongs to a user process", and so must anything else that calls
+ * this from an exception path.
+ */
 process_t *proc_by_cr3(uint32_t cr3) {
     page_dir_t *kd = get_kern_directory();
     if ((page_dir_t *) cr3 == kd)
@@ -91,6 +119,12 @@ process_t *proc_by_cr3(uint32_t cr3) {
     return found;
 }
 
+/**
+ * @brief Debug thread: echo bytes from the serial console as decimal.
+ *
+ * Not started — the call in @ref main_proc is commented out. Kept because it
+ * is the quickest way to prove the UART receive path works on a new machine.
+ */
 void uart_read_proc() {
     char ch[2];
 
@@ -101,6 +135,11 @@ void uart_read_proc() {
     }
 }
 
+/**
+ * @brief Demo thread: one short beep through the PC speaker, then halt forever.
+ *
+ * Not started; the call in @ref main_proc is commented out.
+ */
 void demo_thread() {
     beep_note(0, 0);
     sleep(100);
@@ -108,6 +147,20 @@ void demo_thread() {
     while(1) halt();
 }
 
+/**
+ * @brief The body of process 1, entered by @ref sched_init's final `iret`.
+ *
+ * Everything that needs a running scheduler and enabled interrupts happens
+ * here rather than in main.c: the block drivers probe and mount, the kernel
+ * threads start, and control passes to the user-space shell.
+ *
+ * The threads are started conditionally on the hardware actually being there,
+ * so a machine with no NIC or no codec does not carry a thread that has
+ * nothing to do. The shell (apps/zsh, staged on the RAM disk) owns line
+ * editing and history and reaches the console's commands through the `run`
+ * syscall; if its image is missing or it exits, the in-kernel debug console
+ * takes over and never returns.
+ */
 void main_proc() {
     //enable_int();
     ramdisk_init(); // mounts the boot RAM disk from os.iso as "rd"
@@ -156,6 +209,14 @@ static void kick_others(void) {
         lapic_ipi_allbutself(0xFC /* IPI_RESCHED */);
 }
 
+/**
+ * @brief Link a process into the global run queue.
+ * @param proc The process; its thread list must already be built.
+ *
+ * Inserted just after the ring head, left unclaimed by any CPU, and the other
+ * CPUs are kicked so a higher-priority arrival is picked up before their next
+ * timer tick rather than after it.
+ */
 void sched_add_proc(process_t *proc) {
     uint32_t f = spin_lock(&sched_lock);
     proc->cpu = -1;
@@ -169,6 +230,14 @@ void sched_add_proc(process_t *proc) {
     kick_others();
 }
 
+/**
+ * @brief Unlink a process from the run queue.
+ * @param id The process's main-thread id.
+ *
+ * Only unlinks: the process, its threads and its address space are freed by
+ * the caller. The ring head is moved if it pointed at the process being
+ * removed, which is what keeps the ring walkable afterwards.
+ */
 void sched_remove_proc(int id) {
     uint32_t f = spin_lock(&sched_lock);
     process_t *app = list;
@@ -266,6 +335,19 @@ void __attribute__((noreturn)) sched_run_thread(thread_t *t) {
     __builtin_unreachable();
 }
 
+/**
+ * @brief Build the first process, start the other CPUs and enter @ref main_proc.
+ *
+ * Constructs process 1 by hand — there is no parent to fork from — including a
+ * kernel stack with an `iret` frame already laid out on it, then builds one
+ * idle thread per CPU, claims the console for the BSP, sets @c sched_on,
+ * releases the parked APs and jumps into the frame.
+ *
+ * Does not return: the last thing it does is `iret` into @ref main_proc.
+ * Interrupts are disabled from the point the idle threads are built until the
+ * frame's EFLAGS re-enables them, so no CPU can take a timer tick while the
+ * run queue is half-built.
+ */
 void sched_init() {
     memcpy((void *) RETURN_ADDR, (void *) (uintptr_t) end_process_return, PAGE_SIZE);
 
@@ -379,6 +461,36 @@ static inline int proc_runnable(process_t *proc) {
  *  not a deep call chain, it is the wrong stack entirely. */
 #define SCHED_KSTACK_SPAN 0x10000u
 
+/**
+ * @brief Pick the next thread for this CPU and hand back where to resume it.
+ * @param esp The outgoing thread's kernel ESP, as saved by the caller stub.
+ * @return A packed (CR3 << 32) | ESP: the stack to switch to, and the address
+ *         space to load, or 0 in the high half to keep the current one.
+ *
+ * Called only from the LAPIC timer and reschedule-IPI stubs in smp_asm.S, with
+ * the interrupt frame already pushed on the outgoing thread's kernel stack.
+ * Highest priority wins, ties broken by least-recently-run; a process already
+ * claimed by another CPU is never picked, and a CPU with nothing to run falls
+ * back to its idle thread.
+ *
+ * Two things are deliberately left for the stub to do after it has switched
+ * ESP, and both matter:
+ *
+ *   - CR3 is returned rather than loaded. This code is still running on the
+ *     outgoing thread's kernel stack, which need not be mapped in the incoming
+ *     address space; loading CR3 here can pull the stack out from under the
+ *     rest of the function.
+ *   - The outgoing process stays claimed by this CPU. Releasing it here would
+ *     let another CPU resume one of its threads and run down the same kernel
+ *     stack whose frames are still being unwound. @ref sched_switch_done
+ *     performs the release once ESP has moved.
+ *
+ * The incoming thread's resume ESP is checked against its own kernel stack
+ * before the switch. A thread carrying someone else's stack would otherwise
+ * return through whatever happened to be there and surface much later as a
+ * jump to a garbage address, so this panics instead, while the thread
+ * responsible can still be named.
+ */
 uint64_t schedule(uint32_t esp) {
     if (list == 0)
         return esp;
@@ -533,6 +645,15 @@ void sched_switch_done(void) {
     spin_unlock(&sched_lock, f);
 }
 
+/**
+ * @brief Give up the rest of this thread's quantum.
+ *
+ * Does not switch directly: it flags the thread and halts until the next timer
+ * tick runs @ref schedule, so the switch always happens through the one path
+ * that knows how to save a context. A no-op when the scheduler is not yet live
+ * or this CPU's preemption gate is closed, which is what makes it safe to call
+ * from inside a driver's wait loop.
+ */
 void sched_yield(void) {
     if (!sched_on || this_cpu()->preempt_disable)
         return;
@@ -543,7 +664,14 @@ void sched_yield(void) {
     asm volatile("sti; hlt");
 }
 
-/** @return The thread with id @p pid anywhere in the ring, or NULL. Caller-locked. */
+/**
+ * @brief Find a thread by id anywhere in the run queue.
+ * @param pid Thread id.
+ * @return The thread, or NULL.
+ *
+ * The caller must already hold @ref sched_lock; this walks both the process
+ * ring and each process's thread ring without taking it.
+ */
 static thread_t *thread_by_id_locked(int pid) {
     process_t *p = list;
     for (int i = 0; i < n_proc; i++, p = p->next) {
@@ -556,6 +684,16 @@ static thread_t *thread_by_id_locked(int pid) {
     return 0;
 }
 
+/**
+ * @brief Set a thread's scheduling priority.
+ * @param pid      Thread id.
+ * @param priority Clamped to @ref SCHED_PRIO_MIN .. @ref SCHED_PRIO_MAX rather
+ *                 than rejected.
+ * @return 0 if the thread was found, -1 otherwise.
+ *
+ * The other CPUs are kicked on success, so a thread raised above what they are
+ * running is picked up at once instead of at their next tick.
+ */
 int sched_set_priority(int pid, int priority) {
     if (priority < SCHED_PRIO_MIN)
         priority = SCHED_PRIO_MIN;
@@ -572,6 +710,16 @@ int sched_set_priority(int pid, int priority) {
     return t != 0 ? 0 : -1;
 }
 
+/**
+ * @brief Set a thread's scheduling policy.
+ * @param pid    Thread id.
+ * @param policy @ref SCHED_OTHER, @ref SCHED_RR or @ref SCHED_FIFO.
+ * @return 0 if the thread was found, -1 for an unknown policy or no such thread.
+ *
+ * FIFO is the one with teeth: @ref schedule never treats a FIFO thread's
+ * quantum as expired, so it runs until it yields, blocks, or something of
+ * higher priority appears.
+ */
 int sched_set_policy(int pid, int policy) {
     if (policy != SCHED_OTHER && policy != SCHED_RR && policy != SCHED_FIFO)
         return -1;
@@ -584,6 +732,15 @@ int sched_set_policy(int pid, int policy) {
     return t != 0 ? 0 : -1;
 }
 
+/**
+ * @brief Set a thread's quantum as a multiple of the base tick count.
+ * @param pid    Thread id.
+ * @param weight At least 1; larger means a longer turn before preemption.
+ * @return 0 if the thread was found, -1 otherwise.
+ *
+ * Takes effect from the thread's next quantum; the one in progress is not
+ * re-timed.
+ */
 int sched_set_weight(int pid, int weight) {
     if (weight < 1)
         return -1;
@@ -598,11 +755,14 @@ int sched_set_weight(int pid, int weight) {
     return t != 0 ? 0 : -1;
 }
 
+/** @brief How many processes are in the run queue.
+ *  @return The count, read without the lock — a snapshot, not a reservation. */
 int get_nproc() {
     return n_proc;
 }
 
-/** @return A short name for scheduling policy @p policy. */
+/** @brief A short display name for a scheduling policy.
+ *  @return "FIFO", "RR", or "OTHER" for anything else. */
 static const char *policy_name(int policy) {
     switch (policy) {
     case SCHED_FIFO: return "FIFO";
@@ -611,6 +771,14 @@ static const char *policy_name(int policy) {
     }
 }
 
+/**
+ * @brief Print every process in the run queue: the console's `ps`.
+ *
+ * One line per process showing its main thread's id, address space, state,
+ * owning CPU, priority and policy, then its register and image layout. Holds
+ * @ref sched_lock throughout, so the snapshot is consistent — at the cost of
+ * stalling every other CPU's scheduler for as long as the printing takes.
+ */
 void print_procs() {
     uint32_t f = spin_lock(&sched_lock);
     process_t *app = list;
