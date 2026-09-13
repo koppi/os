@@ -36,6 +36,8 @@
 #include <lib/string.h>
 #include <log.h>
 
+/** @brief A short delay: one read of the unused POST port, which costs an ISA
+ *         bus cycle. Used as the tick of every poll loop in this file. */
 static void io_wait(void) { inportb(0x80); }
 
 /* ------------------------------------------------------------------ *
@@ -170,15 +172,39 @@ static int      stream_playing_half;
 static int16_t  stream_ring[HDA_STREAM_HALF_FRAMES * 2 /* ch */ * 2 /* halves */]
                 __attribute__((aligned(4096)));
 
+/** @brief Read a 16-bit controller register at BAR0 offset @p o. */
 static uint16_t r16(uint32_t o)             { return *(volatile uint16_t *)(mmio + o); }
+/** @brief Read a 32-bit controller register at BAR0 offset @p o. */
 static uint32_t r32(uint32_t o)             { return *(volatile uint32_t *)(mmio + o); }
+/** @brief Write an 8-bit controller register. Register width matters here:
+ *         several stream-descriptor fields ignore a wider access. */
 static void     w8 (uint32_t o, uint8_t v)  { *(volatile uint8_t  *)(mmio + o) = v; }
+/** @brief Write a 16-bit controller register at BAR0 offset @p o. */
 static void     w16(uint32_t o, uint16_t v) { *(volatile uint16_t *)(mmio + o) = v; }
+/** @brief Write a 32-bit controller register at BAR0 offset @p o. */
 static void     w32(uint32_t o, uint32_t v) { *(volatile uint32_t *)(mmio + o) = v; }
 
 /* ------------------------------------------------------------------ *
  *  CORB / RIRB verb transport                                         *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Send one codec verb through the CORB and wait for its RIRB response.
+ * @param nid     Widget to address.
+ * @param v       Verb: 12-bit with an 8-bit payload, or 4-bit with 16.
+ * @param payload Verb payload.
+ * @param is4     Non-zero for the 4-bit verb encoding.
+ * @return The codec's 32-bit response, or 0xFFFFFFFF if none arrived.
+ *
+ * Polled, not interrupt-driven: the command is pushed at the CORB write
+ * pointer and the RIRB write pointer is watched until it moves. That makes
+ * every verb a synchronous round trip, which is why the codec walk is slow
+ * but also why nothing here needs a completion queue.
+ *
+ * The timeout answer is indistinguishable from a real all-ones response.
+ * Callers treat 0xFFFFFFFF as "not present" — @ref find_output_path rejects
+ * a codec whose vendor ID reads back that way — which is right for every
+ * parameter read in this file, since no meaningful one is all-ones.
+ */
 static uint32_t verb(uint8_t nid, uint32_t v, uint32_t payload, int is4) {
     uint32_t cmd = ((uint32_t) codec_addr << 28) | ((uint32_t) nid << 20);
     cmd |= is4 ? ((v << 16) | (payload & 0xFFFF))
@@ -198,8 +224,12 @@ static uint32_t verb(uint8_t nid, uint32_t v, uint32_t payload, int is4) {
     return 0xFFFFFFFF;
 }
 
+/** @brief Send a 12-bit verb with an 8-bit payload. */
 static uint32_t v12(uint8_t nid, uint32_t v, uint32_t p)  { return verb(nid, v, p, 0); }
+/** @brief Send a 4-bit verb with a 16-bit payload — the encoding the format
+ *         and amplifier verbs use, whose payloads do not fit in 8 bits. */
 static uint32_t v4 (uint8_t nid, uint32_t v, uint32_t p)  { return verb(nid, v, p, 1); }
+/** @brief Read widget parameter @p p of node @p nid (GET_PARAMETER). */
 static uint32_t param(uint8_t nid, uint8_t p)             { return v12(nid, V_GET_PARAM, p); }
 
 /* ------------------------------------------------------------------ *
@@ -464,6 +494,15 @@ static void apply_codec_quirks(void) {
 /* ------------------------------------------------------------------ *
  *  Playback                                                           *
  * ------------------------------------------------------------------ */
+/**
+ * @brief Encode a stream format word for @p rate, 16-bit stereo.
+ * @return The SD_FMT / converter-format value.
+ *
+ * Only the two base rates are produced: 44.1 kHz for anything in [44000,
+ * 48000), 48 kHz otherwise. The multiplier and divisor fields stay at 1, so
+ * an unusual rate is played at 48 kHz and comes out at the wrong pitch rather
+ * than failing. The MOD player renders at 44.1 kHz, which maps exactly.
+ */
 static uint16_t fmt_for_rate(uint32_t rate) {
     return (rate >= 44000 && rate < 48000) ? 0x4011 /* 44.1k */ : 0x0011 /* 48k */;
 }
@@ -550,6 +589,15 @@ static void pick_volume_node(void) {
     }
 }
 
+/**
+ * @brief Set the output level, 0..100 %.
+ * @param pct Percentage; 0 mutes, values outside the range are clamped.
+ *
+ * Writes the gain/mute amp of whichever node @ref pick_volume_node chose.
+ * The index is scaled to that node's own step count, because a codec ignores
+ * an out-of-range gain index and would otherwise keep whatever level it
+ * powered up with. A node with a fixed amp can only be unmuted, not attenuated.
+ */
 void hda_set_volume(int pct) {
     if (!have_hda)
         return;
@@ -569,6 +617,21 @@ void hda_set_volume(int pct) {
     v4(vol_nid, V4_SET_AMP, amp);
 }
 
+/**
+ * @brief Play a clip on output stream 0, blocking until it has finished.
+ * @param samples Interleaved stereo 16-bit frames.
+ * @param nframes Frame count.
+ * @param rate    Sample rate; see @ref fmt_for_rate for what is honoured.
+ *
+ * Copies the clip into a kheap buffer because the DMA engine needs a
+ * physical address and the caller's may be anywhere. Silently does nothing
+ * while @ref hda_stream_start owns the stream — there is only one output
+ * stream, and stealing it mid-song would be worse than dropping the clip.
+ *
+ * The wait is open-loop: the clip's duration plus 20 ms, rather than polling
+ * the position counter, which is enough for the console beep and keeps the
+ * one-shot path free of the priming logic the streamed path needs.
+ */
 void hda_play_pcm(const int16_t *samples, uint32_t nframes, uint32_t rate) {
     if (!have_hda || streaming || !samples || !nframes)
         return;   /* streamed playback owns the one output stream */
@@ -608,6 +671,14 @@ void hda_play_pcm(const int16_t *samples, uint32_t nframes, uint32_t rate) {
     kfree(buf);
 }
 
+/**
+ * @brief Play a square-wave tone through the codec.
+ * @param freq Frequency in Hz.
+ * @param ms   Duration in milliseconds, capped at one second.
+ *
+ * Synthesised at 48 kHz into a kheap buffer and handed to
+ * @ref hda_play_pcm, so it is skipped while the MOD stream is running.
+ */
 void hda_beep(uint32_t freq, uint32_t ms) {
     if (!have_hda || streaming || !freq || !ms)
         return;   /* the MOD stream has the output stream; skip the blip */
@@ -634,6 +705,17 @@ void hda_beep(uint32_t freq, uint32_t ms) {
 #define STREAM_FRAMES (STREAM_HALF * 2)
 #define STREAM_BYTES  (STREAM_FRAMES * 4)          /* stereo s16 */
 
+/**
+ * @brief Start output stream 0 looping a silent cyclic buffer.
+ * @param rate Sample rate; see @ref fmt_for_rate.
+ * @return Non-zero once the DMA engine is running, 0 if no codec came up.
+ *
+ * Two buffer-descriptor entries cover one contiguous ring, and the engine
+ * wraps from the second back to the first, so the buffer plays forever while
+ * RUN is set and the caller only has to keep refilling the half the engine
+ * is not reading. Idempotent: a second call while already streaming succeeds
+ * without disturbing playback.
+ */
 int hda_stream_start(uint32_t rate) {
     if (!have_hda)
         return 0;
@@ -677,6 +759,12 @@ int hda_stream_start(uint32_t rate) {
     return 1;
 }
 
+/**
+ * @brief Stop the streamed-playback DMA engine.
+ *
+ * Clears RUN and releases the output stream back to @ref hda_play_pcm. The
+ * ring is left as it is; @ref hda_stream_start zeroes it on the way back in.
+ */
 void hda_stream_stop(void) {
     if (!streaming)
         return;
@@ -684,6 +772,22 @@ void hda_stream_stop(void) {
     streaming = 0;
 }
 
+/**
+ * @brief Refill whichever half of the ring the DMA engine has finished with.
+ * @param fill Called with a pointer to that half and
+ *             @ref HDA_STREAM_HALF_FRAMES, to be filled with interleaved
+ *             stereo 16-bit frames.
+ *
+ * Reads the link position to see which half is playing and refills the other
+ * when the engine crosses between them. Cheap to call often and a no-op until
+ * a crossing happens; the caller is expected to poll well inside one half's
+ * duration (about 90 ms at 44.1 kHz), because only one crossing is handled
+ * per call and a missed one plays stale audio for a whole half.
+ *
+ * The first call fills the half the engine has not reached yet rather than
+ * the one it is in, so only the initial half plays as silence instead of the
+ * whole ring.
+ */
 void hda_stream_service(void (*fill)(int16_t *dst, uint32_t nframes)) {
     if (!streaming || !fill)
         return;
@@ -711,8 +815,22 @@ void hda_stream_service(void (*fill)(int16_t *dst, uint32_t nframes)) {
     }
 }
 
+/**
+ * @brief Did a codec come up with a usable output?
+ * @return Non-zero once a codec output path is ready. Gates the MOD player's
+ *         HD Audio thread in sched.c and the console beep.
+ */
 int hda_present(void) { return have_hda; }
 
+/**
+ * @brief Is this one of the Cirrus codecs whose speaker amp is on a GPIO?
+ * @return Non-zero for CS4206, CS4207 and CS4208 — the parts Apple fits, and
+ *         the ones @ref apply_codec_quirks has GPIO assignments for.
+ *
+ * Reported by the console's `sound` command so it is visible from the machine
+ * whether the amp quirk was applied, which is the first thing to check when a
+ * MacBook enumerates a codec and still plays nothing.
+ */
 int hda_is_apple_cirrus(void) {
     return have_hda && (codec_vid == 0x10134208 ||
                         codec_vid == 0x10134206 ||
@@ -722,6 +840,20 @@ int hda_is_apple_cirrus(void) {
 /* ------------------------------------------------------------------ *
  *  Bring-up                                                           *
  * ------------------------------------------------------------------ */
+/**
+ * @brief PCI bind hook (class 04:03): bring up a controller and its codec.
+ * @param dev The matched device.
+ *
+ * Binds at most one controller — a laptop carries two, and digital-only
+ * Intel HDMI controllers are rejected by device ID so the analog one gets
+ * the binding rather than whichever PCI enumerated first. Then, in order:
+ * clear the Intel DMA-coherency bits, map and share the register block,
+ * reset the controller, set up the CORB/RIRB rings, find an output path,
+ * apply the codec's amplifier quirks and choose the volume node.
+ *
+ * Skipped entirely by `nosound` or `nohda` on the kernel command line;
+ * `hdadebug` adds a line per output pin.
+ */
 void hda_probe(struct pci_device *dev) {
     if (have_hda || cmdline_has("nosound") || cmdline_has("nohda"))
         return;   /* a laptop has two HDA controllers (analog + HDMI); one is enough */
