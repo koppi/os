@@ -1,0 +1,51 @@
+# Doxygen configuration for koppi's hobby OS.
+# Generate with:  make docs   (output in docs/html/index.html)
+
+PROJECT_NAME           = "koppi's hobby OS"
+PROJECT_BRIEF          = "A small hobby OS for the i386 architecture"
+OUTPUT_DIRECTORY       = docs
+CREATE_SUBDIRS         = NO
+
+# Sources: the kernel tree and the example apps. Skip vendored code, the
+# Apache-licensed userspace libc under lib/, and generated / build artefacts.
+INPUT                  = . include apps
+FILE_PATTERNS          = *.c *.h *.S
+RECURSIVE              = YES
+EXCLUDE                = iso docs lib include/lib \
+                         printf.c printf.h \
+                         microui.c microui.h \
+                         hxcmod.c hxcmod.h \
+                         ssfn.h \
+                         rbtree.c rbtree.h \
+                         list.c list.h \
+                         hashtable.c hashtable.h \
+                         queue.c queue.h \
+                         stack.c stack.h \
+                         arith64.c \
+                         qsort.c qsort_r.c \
+                         ctype.c ctype.h \
+                         hash_string.c hash_string.h \
+                         fat_mount.h
+EXCLUDE_PATTERNS       = */iso/* */docs/* */lib/*
+
+# Preprocessing: the kernel builds with -DDEBUG and these include roots.
+INCLUDE_PATH           = . include
+PREDEFINED             = DEBUG __ASSEMBLER__=0 "__attribute__(x)=" "volatile="
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+
+# Extraction.
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+OPTIMIZE_OUTPUT_FOR_C  = YES
+TYPEDEF_HIDES_STRUCT   = YES
+
+# Output.
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+SOURCE_BROWSER         = YES
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_NO_PARAMDOC       = YES

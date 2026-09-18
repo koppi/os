@@ -1,0 +1,298 @@
+/**
+ * @file apic.c
+ * @brief Local APIC driver: MMIO access, enable, EOI, IPIs and the LAPIC timer.
+ *
+ * The LAPIC register block (default 0xFEE00000) is identity-mapped on demand
+ * into the kernel directory. KVM's in-kernel irqchip emulates the LAPIC and
+ * handles INIT-SIPI-SIPI, so only the MMIO registers above need touching.
+ *
+ * Timer: the LAPIC timer is calibrated once against the free-running PIT
+ * (which stays on the BSP for pit_ms); after that every CPU drives its own
+ * preemption tick off its LAPIC timer instead of the PIT.
+ */
+#include <apic.h>
+#include <acpi.h>
+#include <paging.h>
+
+
+#include <pit.h>
+#include <percpu.h>
+
+#include <log.h>
+
+/* --- LAPIC MMIO register offsets (Intel SDM Vol 3A §10.4). --- */
+#define LAPIC_ID        0x20
+#define LAPIC_SVR       0xF0
+#define LAPIC_TPR       0x80
+#define LAPIC_EOI       0xB0
+#define LAPIC_LVT_TIMER 0x320
+#define LAPIC_LVT_LINT0 0x350
+#define LAPIC_LVT_LINT1 0x360
+#define LAPIC_LVT_ERROR 0x370
+
+/* LVT delivery modes (bits 10:8) and the mask bit (16). */
+#define LVT_DM_EXTINT  (7 << 8)
+#define LVT_DM_NMI     (4 << 8)
+#define LVT_MASKED     (1 << 16)
+#define LAPIC_TIMER_INITCNT 0x380
+#define LAPIC_TIMER_CURCNT  0x390
+#define LAPIC_TIMER_DIV     0x3E0
+#define LAPIC_ICR_LOW   0x300
+#define LAPIC_ICR_HIGH  0x310
+#define LAPIC_ESR       0x280
+
+#define LAPIC_SVR_ENABLE 0x100
+
+/* Timer delivery modes: period = 1 for periodic; vector low 8 bits. */
+#define TIMER_PERIODIC   0x20000
+#define TIMER_ONESHOOT   0x00000
+
+/* ICR shorthand for "all but self". */
+#define ICR_SHORTHAND_ALL      (3 << 18)
+#define ICR_DELIVERY_FIXED     (0 << 8)
+#define ICR_DELIVERY_INIT      (5 << 8)
+#define ICR_DELIVERY_STARTUP   (6 << 8)
+#define ICR_LEVEL_ASSERT       (1 << 14)
+#define ICR_LEVEL_DEASSERT     (0 << 14)
+#define ICR_TRIGGER_EDGE       (0 << 15)
+#define ICR_DEST_LOGICAL       (1 << 11)
+
+#define ICR_IDLE_MASK  (1 << 12)
+
+/* Vectors (see idt.c stage-1 install). */
+#define VEC_SPURIOUS 0xFF
+#define VEC_LAPIC_ERR 0xFE
+#define VEC_TLB_IPI   0xFD
+#define VEC_RESCHED_IPI 0xFC
+#define VEC_LAPIC_TIMER 0xEF
+
+/** Local APIC base (global so the asm EOI stub can use it). */
+uint32_t lapic_base = 0xFEE00000;
+
+/** Non-zero once apic_init has mapped the LAPIC MMIO (before then it faults). */
+static volatile int lapic_ready = 0;
+
+/** CPU frequency divisor setting for the LAPIC timer. */
+#define TIMER_DIVISOR 16
+
+/** Calibration result (ticks per millisecond), shared with lapic_timer_start. */
+static uint32_t ticks_per_ms = 0;
+
+uint32_t lapic_read(uint32_t off) {
+    return *(volatile uint32_t *) (lapic_base + off);
+}
+
+void lapic_write(uint32_t off, uint32_t val) {
+    *(volatile uint32_t *) (lapic_base + off) = val;
+}
+
+uint32_t lapic_id(void) {
+    /* this_cpu() calls in here before apic_init would fault on the unmapped
+     * MMIO; report APIC id 0 (the BSP) until the page is mapped. */
+    if (!lapic_ready)
+        return 0;
+    return (lapic_read(LAPIC_ID) >> 24) & 0xFF;
+}
+
+/** @brief Spin until the last IPI has been delivered (ICR "send pending" clear). */
+static void icr_wait(void) {
+    while (lapic_read(LAPIC_ICR_LOW) & ICR_IDLE_MASK)
+        __builtin_ia32_pause();
+}
+
+/* --- CPU discovery: fill in cpus[] from the ACPI MADT before APs start. --- */
+extern int ncpu;
+
+void acpi_init(void);
+
+/* Forward decl from smp.c (implemented there) to register each CPU struct. */
+void smp_register_bsp(uint32_t apicid);
+
+void lapic_eoi(void) {
+    lapic_write(LAPIC_EOI, 0);
+}
+
+void lapic_ipi_to(uint32_t dest, uint8_t vector) {
+    icr_wait();
+    lapic_write(LAPIC_ICR_HIGH, dest << 24);
+    lapic_write(LAPIC_ICR_LOW, ICR_DELIVERY_FIXED | vector);
+    icr_wait();
+}
+
+void lapic_ipi_allbutself(uint8_t vector) {
+    icr_wait();
+    lapic_write(LAPIC_ICR_HIGH, 0);
+    lapic_write(LAPIC_ICR_LOW, ICR_SHORTHAND_ALL | ICR_TRIGGER_EDGE |
+                               ICR_DELIVERY_FIXED | vector);
+    icr_wait();
+}
+
+void lapic_send_init(uint32_t dest) {
+    lapic_write(LAPIC_ICR_HIGH, dest << 24);
+    lapic_write(LAPIC_ICR_LOW, ICR_DELIVERY_INIT | ICR_LEVEL_ASSERT);
+    /* INIT must be followed by a 10ms wait (done by the caller). */
+}
+
+void lapic_send_sipi(uint32_t dest) {
+    lapic_write(LAPIC_ICR_HIGH, dest << 24);
+    /* SIPI vector = trampoline >> 12 (0x8000 -> 0x08). */
+    lapic_write(LAPIC_ICR_LOW, ICR_DELIVERY_STARTUP |
+                               ((TRAMPOLINE_ADDR >> 12) & 0xFF));
+}
+
+void lapic_timer_mask(int mask) {
+    uint32_t v = lapic_read(LAPIC_LVT_TIMER);
+    if (mask)
+        v |= 0x10000;               /* Mask bit. */
+    else
+        v &= ~0x10000;
+    lapic_write(LAPIC_LVT_TIMER, v);
+}
+
+void lapic_timer_start(void) {
+    if (!lapic_ready)
+        return;
+    if (!ticks_per_ms)
+        ticks_per_ms = 1;
+    lapic_write(LAPIC_TIMER_DIV, 0x3);     /* Divide by 16. */
+    lapic_write(LAPIC_LVT_TIMER, TIMER_PERIODIC | VEC_LAPIC_TIMER);
+    lapic_write(LAPIC_TIMER_INITCNT, ticks_per_ms);
+    lapic_timer_mask(0);
+}
+
+void lapic_timer_calibrate(void) {
+    /* Divide by 16 for a finer granularity. */
+    lapic_write(LAPIC_TIMER_DIV, 0x3);
+    lapic_write(LAPIC_LVT_TIMER, TIMER_ONESHOOT | VEC_LAPIC_TIMER | 0x10000);
+
+    /* Count LAPIC ticks across a known 50 ms PIT window. No interrupts: the
+     * old code spun on pit_ms() (IRQ 0), which a UEFI firmware can leave dead. */
+    lapic_write(LAPIC_TIMER_INITCNT, 0xFFFFFFFF);
+    pit_busywait_ms(50);
+    uint32_t count = lapic_read(LAPIC_TIMER_CURCNT);
+
+    uint32_t elapsed = 0xFFFFFFFF - count;
+    ticks_per_ms = elapsed / 50;
+    if (ticks_per_ms == 0)
+        ticks_per_ms = 100000;   /* PIT unusable: a safe-ish default (~1.6 GHz/16) */
+
+    klogf(LOG_INFO, "apic: LAPIC timer ~%u ticks/ms\n", (unsigned) ticks_per_ms);
+
+    /* Mask the calibration timer until lapic_timer_start() re-arms it. */
+    lapic_timer_mask(1);
+}
+
+void lapic_enable(void) {
+    /* Enable the local APIC via SVR, set the spurious vector. */
+    uint32_t svr = lapic_read(LAPIC_SVR);
+    svr = (svr & ~0xFF) | VEC_SPURIOUS | LAPIC_SVR_ENABLE;
+    lapic_write(LAPIC_SVR, svr);
+    lapic_write(LAPIC_TPR, 0);        /* accept interrupts of every priority */
+
+    /* Route the two local interrupt pins. The kernel keeps the 8259 PICs in
+     * PC/AT (virtual-wire) mode: the master 8259's INTR reaches the BSP over
+     * LINT0 as ExtINT, and the NMI line over LINT1. Firmware normally sets
+     * this up, but a UEFI boot can leave the LVT masked -- program it here so
+     * legacy IRQs (PIT, i8042 keyboard/mouse, ATA) are actually delivered.
+     * Only CPU 0 fields ExtINT; the APs mask LINT0 so a stray 8259 assertion
+     * is not taken twice. */
+    if (this_cpu()->index == 0)
+        lapic_write(LAPIC_LVT_LINT0, LVT_DM_EXTINT);
+    else
+        lapic_write(LAPIC_LVT_LINT0, LVT_DM_EXTINT | LVT_MASKED);
+    lapic_write(LAPIC_LVT_LINT1, LVT_DM_NMI);
+
+    /* Clear any pending errors. */
+    lapic_write(LAPIC_ESR, 0);
+    lapic_read(LAPIC_ESR);
+    lapic_write(LAPIC_ESR, 0);
+    lapic_write(LAPIC_EOI, 0);
+}
+
+/* ------------------------------------------------------------------ *
+ *  TLB shootdown (IPI_TLB / vector 0xFD)                              *
+ *                                                                    *
+ *  One shootdown at a time, serialised by tlb_lock. The initiator     *
+ *  flushes locally, broadcasts an all-but-self IPI and spins until    *
+ *  every other CPU has acknowledged. spin_lock() re-enables IF while  *
+ *  waiting, so a CPU blocked on any lock still services this IPI.     *
+ * ------------------------------------------------------------------ */
+#include <spinlock.h>
+
+static volatile uint32_t tlb_va;       /* 0 => reload CR3 (flush everything) */
+static volatile int      tlb_pending;
+
+/** @brief Flush @p va locally, or the whole TLB when @p va == 0. */
+static inline void tlb_flush_local(uint32_t va) {
+    if (va) {
+        asm volatile("invlpg (%0)" : : "r"(va) : "memory");
+    } else {
+        uint32_t cr3;
+        asm volatile("mov %%cr3, %0" : "=r"(cr3));
+        asm volatile("mov %0, %%cr3" : : "r"(cr3) : "memory");
+    }
+}
+
+/** @brief IPI_TLB handler body (the asm stub does the LAPIC EOI afterwards). */
+void ipi_tlb_handler(void) {
+    tlb_flush_local(tlb_va);
+    asm volatile("lock decl %0" : "+m"(tlb_pending));
+}
+
+void tlb_shootdown(uint32_t va) {
+    tlb_flush_local(va);
+    if (ncpu <= 1)
+        return;
+
+    /* Before smp_release() the APs spin with interrupts disabled, so they
+     * cannot answer this IPI: ncpu already counts them, and the wait below
+     * would burn its whole timeout and then give up with their TLBs stale.
+     * Worse, the abandoned round's acks arrive once they enable interrupts and
+     * decrement whichever round is in flight by then, letting that one finish
+     * while a CPU has not flushed. Skip the round entirely - each AP drops its
+     * whole TLB when it is released (see ap_main). */
+    if (!smp_aps_running())
+        return;
+
+    uint32_t f = spin_lock(&tlb_lock);
+    tlb_va = va;
+    tlb_pending = ncpu - 1;
+    __sync_synchronize();
+    lapic_ipi_allbutself(VEC_TLB_IPI);
+
+    for (uint32_t spins = 0; tlb_pending > 0; spins++) {
+        __builtin_ia32_pause();
+        if (spins == 200000000u) {
+            klogf(LOG_WARNING, "tlb: shootdown timeout, %d CPU(s) did not ack\n",
+                  tlb_pending);
+            break;
+        }
+    }
+    spin_unlock(&tlb_lock, f);
+}
+
+void apic_init(void) {
+    lapic_base = acpi_lapic_base();
+
+    /* Map the LAPIC MMIO block 1:1 into the kernel directory. It MUST be
+     * uncacheable (PCD): the LAPIC ID register is CPU-local, and a cacheable
+     * mapping let one CPU read another's id (0 = BSP) from a shared cache line,
+     * which sent this_cpu() -- and the whole per-CPU scheduler -- off the rails. */
+    for (uint32_t off = 0; off < 0x1000; off += PAGE_SIZE) {
+        if (!vmm_map_phys(get_kern_directory(), lapic_base + off, lapic_base + off,
+                           PAGE_PRESENT | PAGE_RW | PAGE_PCD | PAGE_PWT)) {
+            klogf(LOG_WARNING, "apic: cannot map LAPIC at 0x%x, skipping\n", lapic_base);
+            return;
+        }
+    }
+    lapic_ready = 1;
+
+    /* Enable this (BSP) CPU's LAPIC. */
+    lapic_enable();
+
+    /* Calibrate the LAPIC timer against the free-running PIT. */
+    lapic_timer_calibrate();
+
+    klogf(LOG_INFO, "apic: BSP LAPIC id 0x%x, base 0x%x\n",
+          (unsigned) lapic_id(), (unsigned) lapic_base);
+}
