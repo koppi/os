@@ -50,8 +50,17 @@ int hda_is_apple_cirrus(void);
  *  the path the MOD player uses on a real laptop (no SB16 there).     *
  * ------------------------------------------------------------------ */
 
-/** @brief Interleaved stereo 16-bit frames the codec wants filled. */
-#define HDA_STREAM_HALF_FRAMES 4096
+/**
+ * Interleaved stereo 16-bit frames the codec wants filled, per half.
+ *
+ * 1024 frames is ~23 ms at 44.1 kHz, so the DMA ring holds ~46 ms and that
+ * is the floor on output latency. It used to be 4096 (~186 ms), which is
+ * fine for music and far too much for a game: apps/doom would fire a shot
+ * and hear it a fifth of a second later. The thread that refills this polls
+ * every 2 ms, an order of magnitude inside one half, so the smaller window
+ * keeps a wide margin against a missed crossing.
+ */
+#define HDA_STREAM_HALF_FRAMES 1024
 
 /**
  * @brief Start output stream 0 looping a silent cyclic buffer at @p rate Hz

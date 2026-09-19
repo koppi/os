@@ -21,10 +21,11 @@
 #include <pit.h>
 #include <commands.h>
 #include <video.h>
+#include <snd.h>
 #include <io.h>
 
 /** One past the highest valid call number. */
-#define MAX_SYSCALL 28
+#define MAX_SYSCALL 32
 
 /** Set to 1 to log every syscall on the console (default 0: off). */
 #define SYSCALL_TRACE 0
@@ -201,6 +202,48 @@ static uint32_t sys_msleep(uint32_t ms) {
     return 0;
 }
 
+/**
+ * @name PCM output (#28..#31)
+ *
+ * The audio counterpart of the graphics grab: a program claims the sound
+ * card, writes interleaved stereo frames at the rate `snd_open` reports, and
+ * asks how much room is left so it knows how much to render. See snd.h for
+ * why the buffer sits here rather than in the driver.
+ */
+///@{
+
+/** @brief `snd_open` (#28): claim the output. @return its sample rate, or 0. */
+static uint32_t sys_snd_open(void) {
+    return snd_user_open();
+}
+
+/** @brief `snd_close` (#29): release the output. */
+static uint32_t sys_snd_close(void) {
+    snd_user_close();
+    return 0;
+}
+
+/**
+ * @brief `snd_write` (#30): queue @p nframes stereo frames.
+ * @return How many were taken, which is fewer than asked when the ring is
+ *         full — the caller paces itself off that (or off `snd_avail`).
+ */
+static uint32_t sys_snd_write(const int16_t *frames, uint32_t nframes) {
+    if(!frames)
+        return 0;
+    /* A frame is 4 bytes; refuse anything that could not be a real buffer
+     * rather than walking megabytes of user memory on a bad argument. */
+    if(nframes > (1u << 20))
+        return 0;
+    return snd_user_write(frames, nframes);
+}
+
+/** @brief `snd_avail` (#31): room left in the queue, in frames. */
+static uint32_t sys_snd_avail(void) {
+    return snd_user_avail();
+}
+///@}
+
 /** Call number → implementation. NULL entries are unimplemented. */
 static uintptr_t syscalls[] = {
     (uintptr_t) printf,              // printf   0
@@ -230,7 +273,11 @@ static uintptr_t syscalls[] = {
     (uintptr_t) sys_gfx_palette,     // gfx_palette 24
     (uintptr_t) sys_gfx_blit,        // gfx_blit    25
     (uintptr_t) sys_getscan,         // getscan     26  (raw scancode, non-blocking)
-    (uintptr_t) sys_msleep           // msleep      27
+    (uintptr_t) sys_msleep,          // msleep      27
+    (uintptr_t) sys_snd_open,        // snd_open    28  (PCM output, snd.c)
+    (uintptr_t) sys_snd_close,       // snd_close   29
+    (uintptr_t) sys_snd_write,       // snd_write   30
+    (uintptr_t) sys_snd_avail        // snd_avail   31
 };
 
 /**

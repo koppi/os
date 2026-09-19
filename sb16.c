@@ -9,6 +9,7 @@
 #include <idt.h>
 #include <log.h>
 #include <hda.h>
+#include <snd.h>
 
 #include <hxcmod.h>
 #include <modfile.h>
@@ -88,14 +89,36 @@ static volatile int sound_vol_dirty = 1;
 /** @return the master level as a 0..100 percentage. */
 static int sound_vol_pct(void) { return sound_vol * 100 / SOUND_VOL_MAX; }
 
+/*
+ * "Muted" means the *module* is not wanted, which is the state the machine
+ * boots in. It must not also silence a ring-3 program that has opened the
+ * PCM stream (snd.c) -- that program's audio is not the module. So the
+ * output amp is only pulled to zero when nothing else is using it.
+ */
+static int output_silent(void) {
+    return (sound_muted || sound_vol == 0) && !snd_user_active();
+}
+
 /** @brief Write the current level to the SB16 master mixer (reg 0x22: 4-bit
  *         left | 4-bit right). Muted or level 0 -> silent. IRQ-safe. */
 static void sb16_apply_mixer(void) {
     if (!sb16_ok)
         return;
-    int v = (sound_muted || sound_vol == 0) ? 0 : (sound_vol * 15 / SOUND_VOL_MAX);
+    int v = output_silent() ? 0 : (sound_vol * 15 / SOUND_VOL_MAX);
     outportb(DSP_MIXER, DSP_VOLUME);
     outportb(DSP_MIXER_DATA, (uint8_t) ((v << 4) | v));
+}
+
+/**
+ * @brief Re-apply the master level on the next pass of the HD Audio thread.
+ *
+ * snd.c calls this when a ring-3 program takes or releases the output: the
+ * codec amp has to follow, and a CORB/RIRB verb cannot be issued from
+ * whatever context that syscall is running in.
+ */
+void sound_vol_refresh(void) {
+    sound_vol_dirty = 1;
+    sb16_apply_mixer();
 }
 
 /** @brief Render @p len samples of MOD audio into @p buf. */
@@ -289,11 +312,16 @@ static void transfer(void *buf, uint32_t len) {
  */
 void sb16_irq_handler() {
     buffer_flip = !buffer_flip;
+    short int *half = &buffer[buffer_flip ? 0 : (BUFFER_SIZE / 2)];
 
-    if (!sound_muted && !hda_active) {
-        fill(
-            &buffer[buffer_flip ? 0 : (BUFFER_SIZE / 2)],
-            (BUFFER_SIZE / 2));
+    /* A ring-3 program that has opened the PCM stream owns the output: its
+     * frames go out instead of the module's, downmixed because the card is
+     * running mono. hda_active still wins -- on a box with both, the codec
+     * is the one being listened to and this card is fed silence. */
+    if (!hda_active && snd_user_pull_mono(half, BUFFER_SIZE / 2)) {
+        /* filled from the ring */
+    } else if (!sound_muted && !hda_active) {
+        fill(half, (BUFFER_SIZE / 2));
     } else {
         memset(buffer, 0, BUFFER_SIZE*sizeof(short int));
     }
@@ -355,6 +383,12 @@ void sound_init() {
 /** @brief Refill one half of the HD Audio ring: render mono MOD audio, then
  *         duplicate it across the interleaved stereo frames the codec wants. */
 static void hda_fill(int16_t *dst, uint32_t nframes) {
+    /* A ring-3 program streaming PCM (snd.c) owns the output while it is
+     * open; the module is not rendered at all then, so a game is never
+     * heard over the music. */
+    if (snd_user_pull(dst, nframes))
+        return;
+
     if (sound_muted) {
         memset(dst, 0, nframes * 2 * sizeof(int16_t));
         return;
@@ -386,9 +420,9 @@ void sound_hda_thread(void) {
     for (;;) {
         if (sound_vol_dirty) {
             sound_vol_dirty = 0;       /* apply the codec amp off the IRQ path */
-            hda_set_volume(sound_muted ? 0 : sound_vol_pct());
+            hda_set_volume(output_silent() ? 0 : sound_vol_pct());
         }
         hda_stream_service(hda_fill);
-        sleep(5);                      /* one half is ~90 ms; poll well inside */
+        sleep(2);                      /* one half is ~23 ms; poll well inside */
     }
 }

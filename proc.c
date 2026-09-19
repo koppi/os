@@ -18,6 +18,7 @@
 #include <log.h>
 #include <video.h>
 #include <keyboard.h>
+#include <snd.h>
 
 /*
  * Process in memory
@@ -417,6 +418,10 @@ void remove_proc(int pid) {
         keyboard_raw_mode(0);
         video_ungrab();
     }
+    /* Same for the PCM output (snd.c): left open, it would keep the module
+     * silenced and the card draining an empty ring forever. */
+    if(snd_user_active())
+        snd_user_close();
 
     uint32_t plf = spin_lock(&proc_lock);
 

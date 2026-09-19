@@ -75,6 +75,10 @@ int  sound_volume_pct(void);
 void sound_set_volume(int pct);
 /** @brief Mute or unmute without disturbing the level. */
 void sound_set_muted(int muted);
+/** @brief Re-apply the master level to the card and the codec. Called by
+ *         snd.c when a ring-3 program takes or releases the PCM output,
+ *         which changes whether "module muted" should silence the amp. */
+void sound_vol_refresh(void);
 /** @return The title of the loaded MOD. */
 const char *sound_module_title(void);
 /** @return Which back end MOD audio is going to: "hda", "sb16" or "none". */
