@@ -20,5 +20,11 @@ apps/cc/cc-dbg
 apps/cc/cc-asan
 apps/cc/cc.selfhost
 apps/zsh/zsh
+apps/doom/doom
 os.sublime-workspace
 docs/
+
+# Doom IWADs are not ours to redistribute; drop one here and the build stages
+# it on the RAM disk (apps/doom/PORTING.md).
+*.wad
+*.WAD

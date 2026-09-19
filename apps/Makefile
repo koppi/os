@@ -7,6 +7,7 @@ all:
 	$(MAKE) -C fault
 	$(MAKE) -C cc
 	$(MAKE) -C zsh
+	$(MAKE) -C doom
 
 clean:
 	$(MAKE) -C 01 clean
@@ -17,5 +18,6 @@ clean:
 	$(MAKE) -C fault clean
 	$(MAKE) -C cc clean
 	$(MAKE) -C zsh clean
+	$(MAKE) -C doom clean
 
 .phony: all clean

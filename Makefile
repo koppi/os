@@ -115,11 +115,12 @@ apps:
 	$(MAKE) -C apps
 
 # The boot RAM disk: the whole userland, packed into a FAT16 image that GRUB
-# hands to the kernel as a Multiboot module. 8 MiB is plenty for the payload
-# plus a few generations of cc output (it is RAM-backed and ephemeral).
-initrd.img: hda.sh apps
+# hands to the kernel as a Multiboot module. hda.sh picks the size -- 8 MiB is
+# plenty for the payload plus a few generations of cc output (it is RAM-backed
+# and ephemeral), 16 MiB when a Doom IWAD is being staged with it.
+initrd.img: hda.sh apps $(wildcard doom1.wad)
 	@echo "  IMG initrd.img"
-	@IMG=initrd.img SIZE=8M ./hda.sh >/dev/null
+	@IMG=initrd.img ./hda.sh >/dev/null
 
 iso: $(KERNEL) initrd.img
 	@mkdir -p iso/boot/grub
@@ -160,6 +161,12 @@ qemu-x220: $(KERNEL) initrd.img
 # GOP-like video, UEFI/OVMF only); logs + screenshots in /tmp/mba-boot.
 qemu-mba: iso
 	@bash test/mba-boot.sh all
+
+# Drive apps/doom headless in QEMU: start the game over the serial console,
+# send keystrokes through the monitor, screenshot each step into /tmp/doom-boot.
+# Needs a WAD staged on the RAM disk (apps/doom/PORTING.md).
+qemu-doom: iso
+	@bash test/doom-boot.sh all
 
 # Build a GPT+FAT32 UEFI USB image (os-usb.img) that the UEFI-only laptops
 # (no CSM, e.g. a MacBook) boot from: grub2 x86_64-efi + kernel + initrd.
@@ -205,6 +212,6 @@ clean::
 	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin ap_boot.tmp.* *.d lib/*.d *~ os.iso iso initrd.img docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 cloc docs clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-doom cloc docs clean
 
 -include $(OBJS:.o=.d)

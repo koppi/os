@@ -323,6 +323,17 @@ for anything more (there is no TLS or resolver cache).
 * [`ssfn.h`](ssfn.h) Scalable Screen Font renderer; the GNU Unifont
   ([`unifont.sfn`](unifont.sfn)) is linked into the kernel as `font.o`.
 * BMP loader — [`bmp.c`](bmp.c) (e.g. [`mouse.bmp`](mouse.bmp) cursor)
+* **Full-screen grab** — a ring-3 program can take the whole display away from
+  the compositor ([`video.c`](video.c): `video_grab` / `video_blit8` /
+  `video_ungrab`, syscalls 22-25). It pushes **8-bpp indexed** frames plus a
+  256-entry palette; the kernel does the palette lookup and scales the image
+  by the largest whole number that fits, centred on black. Indexed rather than
+  true-colour because the frame crosses a syscall boundary every tick — a
+  320x200 game screen is 64 KiB paletted against 256 KiB at 32 bpp. The
+  compositor parks itself while a grab is held, and `remove_proc`
+  ([`proc.c`](proc.c)) drops the grab when it reaps the process, so a program
+  that faults mid-frame cannot freeze the display. This is what
+  [`apps/doom`](apps/doom) renders through.
 
 ### Audio
 * [`hxcmod.c`](hxcmod.c) Amiga MOD player; sample module in
@@ -360,8 +371,12 @@ for anything more (there is no TLS or resolver cache).
   `spit(path, buf, len)` creates/truncates the file and writes `len` bytes),
   `getkey`(17, one unechoed keystroke), `run`(18, run a console command line),
   `getcwd`(19), `listdir`(20, newline-separated directory listing),
-  `spawn`(21, load+run a program, blocking) — see [`syscall.c`](syscall.c).
-  `write_file()` in [`lib/`](lib) wraps #16; 17-21 back [`apps/zsh`](apps/zsh).
+  `spawn`(21, load+run a program, blocking),
+  `gfx_open`(22)/`gfx_close`(23)/`gfx_palette`(24)/`gfx_blit`(25) (take the
+  whole screen and push indexed frames to it — see **Graphics / UI**),
+  `getscan`(26, one raw key event, non-blocking) and `msleep`(27) — see
+  [`syscall.c`](syscall.c). `write_file()` in [`lib/`](lib) wraps #16; 17-21
+  back [`apps/zsh`](apps/zsh) and 22-27 back [`apps/doom`](apps/doom).
 * The ELF loader ([`elf.c`](elf.c)) maps every page of a `PT_LOAD` segment to
   its own frame and covers the `.bss` tail, so multi-page ring-3 binaries load.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
@@ -376,6 +391,7 @@ for anything more (there is no TLS or resolver cache).
     recursion (staged as `mem`)
   * [`apps/lua`](apps/lua) — **Lua 5.4.8**, ported to run as a ring-3 program
     (staged as `lua`); see below
+  * [`apps/doom`](apps/doom) — **Doom** (staged as `doom`); see below
   * [`apps/cc`](apps/cc) — **a self-hosting C compiler** (staged as `cc`);
     see below
   * [`apps/zsh`](apps/zsh) — the interactive **zsh-flavoured shell** (staged as
@@ -449,6 +465,56 @@ lua t.lua                    -- run a script; t.lua is the port's self-test
 
 There is no Ctrl-C, so a non-terminating script needs a `reboot`. See
 [`apps/lua/PORTING.md`](apps/lua/PORTING.md) for the full build and shim notes.
+
+### Doom
+
+[`apps/doom`](apps/doom) runs id Software's **Doom** — the [doomgeneric]
+tree, vendored in `src/` with five marked edits — as an ordinary ring-3
+program, at 320x200 scaled up to fit the display.
+
+```
+cp doom1.wad .              # the IWAD is not in this repo; see below
+make iso
+```
+```
+doom                        # from the shell
+doom -warp 1 1 -skill 4     # straight into E1M1
+doom -iwad /hda/doom2.wad   # a WAD on a real disk
+doom -timedemo demo1        # render the built-in demo as fast as the box can
+```
+
+Arrows move and turn, Ctrl fires, space uses, Alt strafes, Shift runs, 1-7
+pick a weapon, Esc is the menu. Quit from the menu and the desktop comes back.
+
+* **Display.** The engine already renders into an 8-bpp indexed buffer
+  (`-DCMAP256`), which is exactly what the full-screen grab takes, so a frame
+  is one 64 KiB copy and the kernel does the palette lookup and the integer
+  upscale (**Graphics / UI** above). The grab is deferred to the first frame,
+  so the WAD-loading chatter — and, more usefully, a startup that fails —
+  still lands on a console the player can read.
+* **Input.** [`keyboard.c`](keyboard.c) grew a second ring carrying **raw
+  scancodes with make/break and the 0xE0 prefix**, because the ASCII ring has
+  no releases and no entry for the arrows, Ctrl or Alt. It is separate rather
+  than a mode switch: the ASCII ring has exactly one consumer and a second
+  reader would split the keystrokes. [`usb_hid.c`](usb_hid.c) feeds it too,
+  mapping HID usages back to set-1 codes, so a machine with no PS/2
+  controller can play.
+* **The WAD lives in RAM.** The VFS reads a FAT chain forward with no seek, so
+  `fopen` slurps a file whole and `w_file_koppi.c` hands the buffer to
+  `w_wad.c` as `mapped` — the engine's own mmap path. Lumps are pointers into
+  it and are never copied, so the 4 MiB the shareware IWAD costs replaces what
+  the zone would have held rather than adding to it.
+* **Writing** goes the other way round: a write stream buffers in memory and
+  `fclose` hands the whole thing to `spit`. Save games work; config
+  persistence does not (it is `#if ORIGCODE` upstream).
+
+No sound and no mouse yet — `i_sound.c` is compiled with its backends off, as
+doomgeneric ships it. [`test/doom-boot.sh`](test/doom-boot.sh) (`make
+qemu-doom`) drives the game headless in QEMU and screenshots each step. See
+[`apps/doom/PORTING.md`](apps/doom/PORTING.md) for the shim, the five engine
+edits and the rest of the limitations.
+
+[doomgeneric]: https://github.com/ozkl/doomgeneric
 
 ### Shell
 
@@ -603,17 +669,23 @@ only from EFI (no CSM) — see the MacBook Air section below. `hda.img` /
 persistent storage across reboots.
 
 ```bash
-IMG=initrd.img SIZE=8M ./hda.sh   # what `make iso` runs
+IMG=initrd.img ./hda.sh           # what `make iso` runs (8M, or 16M with a WAD)
 ./hda.sh                          # 16M FAT16 hd image (hda.img)
 ./floppy.sh                       # 1.44M FAT12 floppy image
 ```
 
 All use mtools (no root / loop device) and stage the `zsh` shell (with its
 `zshrc`), `hello`, `tst`, `example`, `mem`, `fault`, the `lua` interpreter (with
-`t.lua` / `mod.lua`), `mouse.bmp`, and the `cc` compiler with its source
+`t.lua` / `mod.lua`), `mouse.bmp`, `doom`, and the `cc` compiler with its source
 (`cc.c`), runtime (`prelude.c`) and tests. The in-kernel FAT driver only
 handles one sector per cluster, so the images are made with `mkfs.fat -F 16
 -s 1` (or `-C … 1440` for the FAT12 floppy).
+
+A **Doom IWAD** is staged as well if one is sitting in the repository root as
+`doom1.wad`, and the RAM disk grows from 8 MiB to 16 MiB to hold it. None is
+included here — the engine is free software, the game data is not — and
+`.gitignore` keeps one from being committed by accident. See
+[`apps/doom/PORTING.md`](apps/doom/PORTING.md).
 
 ### Run in QEMU
 
