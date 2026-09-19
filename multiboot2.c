@@ -177,11 +177,41 @@ uint32_t multiboot2_mem_size = 0;
  *  only way to find it. */
 uint32_t multiboot2_acpi_rsdp = 0;
 
+/*
+ * The RSDP is copied out of the boot information, not pointed at, because
+ * the boot information does not survive boot.
+ *
+ * GRUB puts that structure wherever it likes in low memory, and the
+ * page-table storage window starts at the end of the kernel image and runs
+ * for 256 KiB (paging.c) -- so as the kernel grows, sooner or later the
+ * window lands on top of it. It did: with the window at 0x402000 and the
+ * structure at 0x40e050, boot allocated past it, the RSDP was erased, ACPI
+ * found no MADT, and the machine came up on one core instead of four. There
+ * is no error: everything works, four times slower, with one warning line.
+ *
+ * Everything else the parser reads is already copied into kernel storage
+ * (the command line, the memory map, the framebuffer geometry) and the boot
+ * module is relocated before paging starts. This was the one pointer that
+ * outlived what it pointed into -- do not add another.
+ *
+ * 36 bytes covers an ACPI 2.0 RSDP; a 1.0 one is 20.
+ */
+static uint8_t rsdp_copy[36];
+
 static void multiboot2_acpi(const multiboot2_tag_t *tag) {
-    /* The RSDP copy follows the 8-byte tag header. Prefer the first (v1) or
-     * v2 copy we see; acpi.c re-validates the checksum. */
-    if (!multiboot2_acpi_rsdp)
-        multiboot2_acpi_rsdp = (uint32_t) (uintptr_t) ((const uint8_t *) tag + 8);
+    if (multiboot2_acpi_rsdp)
+        return;                      /* keep the first copy we are given */
+
+    /* The RSDP follows the 8-byte tag header. acpi.c re-validates it. */
+    uint32_t len = tag->size > 8 ? tag->size - 8 : 0;
+    if (len == 0)
+        return;
+    if (len > sizeof(rsdp_copy))
+        len = sizeof(rsdp_copy);
+
+    /* the kernel memcpy takes a non-const source */
+    memcpy(rsdp_copy, (void *) ((const uint8_t *) tag + 8), (int) len);
+    multiboot2_acpi_rsdp = (uint32_t) (uintptr_t) rsdp_copy;
 }
 
 void multiboot2_info_parse(const multiboot2_info_t *info) {
