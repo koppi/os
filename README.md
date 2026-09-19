@@ -58,7 +58,10 @@ each is on.
   kernel image and, once the image had grown enough, landed exactly on where
   GRUB had put that structure. The first page table erased the RSDP, no MADT
   was found, and the machine came up on one core — a silent four-fold
-  slowdown whose only trace was one warning line.
+  slowdown whose only trace was one warning line. Both parsers now also hand
+  the loader's structures to `paging_reserve_range`
+  ([`paging.c`](paging.c)), which holds the overlapping blocks back and says
+  so, rather than leaving the collision to chance.
 * **SMP scheduler** ([`sched.c`](sched.c)): one global run queue (the process
   ring) under `sched_lock`; each core tracks its own current thread and a
   `process_t::cpu` field keeps a process from running on two cores at once.

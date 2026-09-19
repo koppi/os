@@ -8,6 +8,7 @@
 #include <initrd.h>
 #include <cmdline.h>
 #include <lib/string.h>
+#include <paging.h>
 
 
 /** Extract command name from the multiboot module command line.
@@ -66,6 +67,23 @@ static void multiboot_memmap(uint32_t length, multiboot_memmap_t *memmap)
  * @param info Multiboot information structure passed by the loader.
  */
 void multiboot_info_parse(const multiboot_info_t *info) {
+	/*
+	 * Keep the page tables off everything the loader handed us (paging.c).
+	 * Unlike multiboot 2 this structure declares no total size, so each
+	 * piece GRUB placed alongside it is named separately.
+	 */
+	paging_reserve_range((uint32_t) (uintptr_t) info,
+	                     (uint32_t) (uintptr_t) info + sizeof(*info));
+	if ((info->flags & MULTIBOOT_INFO_FLAGS_CMDLINE) != 0 && info->cmd_line)
+		paging_reserve_range(info->cmd_line,
+		    info->cmd_line + strlen((char *) MULTIBOOT_PTR(info->cmd_line)) + 1);
+	if ((info->flags & MULTIBOOT_INFO_FLAGS_MODS) != 0 && info->mods_count)
+		paging_reserve_range(info->mods_addr,
+		    info->mods_addr + info->mods_count * sizeof(multiboot_module_t));
+	if ((info->flags & MULTIBOOT_INFO_FLAGS_MMAP) != 0)
+		paging_reserve_range(info->mmap_addr,
+		                     info->mmap_addr + info->mmap_length);
+
 	/* Command line. */
 	if ((info->flags & MULTIBOOT_INFO_FLAGS_CMDLINE) != 0 && info->cmd_line) {
 		strncpy(kernel_cmdline, (char *) MULTIBOOT_PTR(info->cmd_line),

@@ -16,6 +16,7 @@
 #include <initrd.h>
 #include <cmdline.h>
 #include <lib/string.h>
+#include <paging.h>
 
 /** Multiboot 2 tags are padded to an 8-byte boundary. */
 #define MULTIBOOT2_TAG_ALIGN  8
@@ -192,7 +193,11 @@ uint32_t multiboot2_acpi_rsdp = 0;
  * Everything else the parser reads is already copied into kernel storage
  * (the command line, the memory map, the framebuffer geometry) and the boot
  * module is relocated before paging starts. This was the one pointer that
- * outlived what it pointed into -- do not add another.
+ * outlived what it pointed into.
+ *
+ * paging_reserve_range below now keeps the window off the structure as well,
+ * so a pointer into it would survive -- but only by the loader's leave, and
+ * only as long as the reservation keeps fitting. Copy what you need.
  *
  * 36 bytes covers an ACPI 2.0 RSDP; a 1.0 one is 20.
  */
@@ -216,7 +221,12 @@ static void multiboot2_acpi(const multiboot2_tag_t *tag) {
 
 void multiboot2_info_parse(const multiboot2_info_t *info) {
     (void)tag_names;
-    
+
+    /* The structure declares its own total size; keep the page tables off it
+     * (paging.c) so nothing read from it later finds a page table instead. */
+    paging_reserve_range((uint32_t) (uintptr_t) info,
+                         (uint32_t) (uintptr_t) info + info->size);
+
 	const multiboot2_tag_t *tag = (const multiboot2_tag_t *)
 	    ALIGN_UP((uintptr_t) info + sizeof(*info), MULTIBOOT2_TAG_ALIGN);
 

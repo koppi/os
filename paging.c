@@ -37,6 +37,63 @@ static int used_blocks = 0;
 
 /* pgtbl_lock (spinlock.h) serialises the storage-window bitmap across CPUs. */
 
+/*
+ * Ranges the window must not hand out, recorded before it has a position.
+ *
+ * The window sits immediately after the kernel image, and GRUB puts its
+ * information structure wherever it likes in low memory -- so as the image
+ * grows the two eventually meet. They did, and the first page table erased
+ * the ACPI RSDP that multiboot2.c was pointing at: no MADT, and the machine
+ * came up on one core instead of four, with nothing to show for it but a
+ * warning line. The RSDP is copied out now, but the collision itself is
+ * still there and the next field someone reads late would go the same way.
+ *
+ * Four is room for the multiboot 1 parser's four separate pieces (the
+ * structure, the command line, the module list and the memory map); the
+ * multiboot 2 structure declares its own total size and needs one.
+ */
+#define RESERVE_MAX 4
+static struct { uint32_t start, end; } reserved[RESERVE_MAX];
+static int reserved_n;
+
+void paging_reserve_range(uint32_t start, uint32_t end) {
+    if (end <= start)
+        return;
+    if (reserved_n >= RESERVE_MAX) {
+        klogf(LOG_WARNING, "paging: no room to reserve 0x%x..0x%x\n", start, end);
+        return;
+    }
+    reserved[reserved_n].start = start;
+    reserved[reserved_n].end   = end;
+    reserved_n++;
+}
+
+/** @brief Mark the window blocks covering [@p start, @p end) used.
+ *         @return How many blocks that took. */
+static int reserve_blocks(uint32_t start, uint32_t end) {
+    if (usable_blocks <= 0)
+        return 0;                       /* no window to protect */
+
+    uint32_t limit = page_start + (uint32_t) usable_blocks * BLOCKS_LEN;
+    if (end <= page_start || start >= limit)
+        return 0;                       /* nowhere near the window */
+
+    uint32_t first = start > page_start ? (start - page_start) / BLOCKS_LEN : 0;
+    uint32_t last  = (end - 1 - page_start) / BLOCKS_LEN;
+    if (last >= (uint32_t) usable_blocks)
+        last = (uint32_t) usable_blocks - 1;
+
+    int taken = 0;
+    for (uint32_t b = first; b <= last; b++) {
+        if (bitmap[b / 32] & (1u << (b % 32)))
+            continue;                   /* already spoken for */
+        paging_set_bit((int) b);
+        used_blocks++;
+        taken++;
+    }
+    return taken;
+}
+
 /**
  * @brief Place the page-table storage window at @p start (page-aligned up).
  * @return The first byte past the window (where the kernel heap begins).
@@ -62,7 +119,24 @@ uint32_t paging_init(uint32_t start) {
         paging_set_bit((int) ret_blk);
         used_blocks++;
     }
-    klogf(LOG_INFO, "paging: page_start=0x%x usable=%d\n", page_start, usable_blocks);
+    for (int i = 0; i < reserved_n; i++) {
+        int taken = reserve_blocks(reserved[i].start, reserved[i].end);
+        if (taken)
+            klogf(LOG_INFO, "paging: 0x%x..0x%x is inside the window, "
+                            "holding %d block(s) back\n",
+                  reserved[i].start, reserved[i].end, taken);
+    }
+
+    klogf(LOG_INFO, "paging: page_start=0x%x usable=%d used=%d\n",
+          page_start, usable_blocks, used_blocks);
+
+    /* Boot needs somewhere north of a dozen blocks (the kernel map, the heap
+     * window, the initrd's two tables at 128 MiB, the framebuffer). Running
+     * out is not survivable and not obvious from the far side, so say so
+     * here rather than at the page fault. */
+    if (usable_blocks - used_blocks < 16)
+        klogf(LOG_WARNING, "paging: only %d storage block(s) left\n",
+              usable_blocks - used_blocks);
 
     return page_start + (uint32_t) MAX_BLOCKS * BLOCKS_LEN;
 }

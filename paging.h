@@ -62,6 +62,17 @@ void vmm_unmap(page_dir_t *pdir, vmm_addr_t virt);
 void vmm_unmap_phys(page_dir_t *pdir, vmm_addr_t virt);
 
 /**
+ * @brief Keep [@p start, @p end) out of the page-table storage window.
+ *
+ * For memory that has to survive boot but is not part of the kernel image,
+ * so the window can land on it: the loader's information structure, which
+ * GRUB places wherever it likes in low memory. Call before @ref paging_init
+ * — the ranges are held until then and applied once the window's position is
+ * known. A range outside the window costs nothing.
+ */
+void paging_reserve_range(uint32_t start, uint32_t end);
+
+/**
  * @brief Position the page-table storage window at @p start (rounded up to a
  *        page). Call once from @ref vmm_init with the end of the kernel image.
  * @return The first byte past the window — where the kernel heap starts.
