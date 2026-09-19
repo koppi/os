@@ -13,6 +13,7 @@
 #include <pit.h>
 #include <printf.h>
 #include <sb16.h>
+#include <keyboard.h>
 
 enum KBD_PORTS {
 	KBD_CHECK = 0x64,   /* status (read) / command (write) */
@@ -120,6 +121,53 @@ static volatile uint8_t shift_state = 0;
 /* Set for one scancode after the 0xE0 prefix byte (extended-key marker). */
 static volatile uint8_t kbd_e0 = 0;
 
+/*
+ * The raw scancode ring. A full-screen program needs key releases and the keys
+ * that have no ASCII (arrows, Ctrl, Alt), neither of which survives the decode
+ * above. Recording is opt-in (@ref keyboard_raw_mode) because the ring is only
+ * drained while such a program runs -- left always-on it would fill, and every
+ * push would then be a wasted store in IRQ context.
+ */
+#define KBD_RAW_SIZE 64
+#define KBD_RAW_MASK (KBD_RAW_SIZE - 1)
+
+static volatile uint16_t raw_buf[KBD_RAW_SIZE];
+static volatile uint32_t raw_head = 0;  // next write slot  (IRQ only)
+static volatile uint32_t raw_tail = 0;  // next read slot   (consumer only)
+static volatile uint8_t  raw_on = 0;
+
+/** @brief Push one raw event (drops it if the ring is full). */
+static void raw_push(uint16_t ev) {
+    uint32_t next = (raw_head + 1) & KBD_RAW_MASK;
+    if(next == raw_tail)
+        return;
+    raw_buf[raw_head] = ev;
+    raw_head = next;
+}
+
+void keyboard_raw_mode(int on) {
+    /* Empty both rings across the switch: the scancodes typed while the raw
+     * consumer owned the keyboard must not surface as text in the shell
+     * afterwards, and vice versa. */
+    raw_head = raw_tail = 0;
+    kbd_head = kbd_tail = 0;
+    raw_on = on ? 1 : 0;
+}
+
+void keyboard_push_scan(uint8_t code, int e0, int release) {
+    if(raw_on)
+        raw_push((uint16_t) ((e0 ? KBD_RAW_E0 : 0) |
+                             (release ? KBD_RAW_BREAK : 0) | (code & 0x7F)));
+}
+
+int keyboard_raw_get(void) {
+    if(raw_head == raw_tail)
+        return 0;
+    int ev = raw_buf[raw_tail];
+    raw_tail = (raw_tail + 1) & KBD_RAW_MASK;
+    return KBD_RAW_VALID | ev;
+}
+
 /** asm IRQ stub (keyboard_asm) that calls @ref keyboard_read_key. */
 extern void keyboard_int();
 
@@ -212,6 +260,9 @@ void keyboard_read_key() {
         kbd_e0 = 1;
         return;
     }
+
+    if(raw_on)
+        raw_push((uint16_t) ((kbd_e0 ? KBD_RAW_E0 : 0) | code));
 
     if(kbd_e0) {
         kbd_e0 = 0;

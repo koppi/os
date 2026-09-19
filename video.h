@@ -38,6 +38,32 @@ void video_lock(void);
 void video_unlock(void);
 ///@}
 
+/**
+ * @name Full-screen grab (a ring-3 program takes over the display)
+ *
+ * The compositor owns the screen by default. @ref video_grab parks it -- it
+ * stops painting and stops presenting -- and hands the shadow surface to the
+ * caller, which then pushes frames with @ref video_blit8: an 8-bpp indexed
+ * image of the grabbed size, expanded through @ref video_set_palette and
+ * scaled by the largest integer factor that still fits, centred on black.
+ * Indexed rather than 32-bpp because the frame crosses a syscall boundary
+ * every tick and a 320x200 game screen is 64 KiB paletted against 256 KiB
+ * true-colour. @ref video_ungrab restores the desktop.
+ */
+///@{
+/** @brief Take the screen for a @p w x @p h indexed surface. @return 1 on
+ *         success, 0 if there is no framebuffer or it is already grabbed. */
+int  video_grab(uint32_t w, uint32_t h);
+/** @brief Give the screen back to the compositor. */
+void video_ungrab(void);
+/** @return Non-zero while a program holds the screen. */
+int  video_grabbed(void);
+/** @brief Install the 256-entry palette (0x00RRGGBB per entry). */
+void video_set_palette(const uint32_t *argb);
+/** @brief Present one w*h indexed frame. */
+void video_blit8(const uint8_t *pix);
+///@}
+
 /** @brief Render one char straight to the visible framebuffer (boot / panic).
  *         No-op until @ref vbe_init has run. */
 void fbcon_putc(char c);

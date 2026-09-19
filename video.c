@@ -382,6 +382,103 @@ void video_set_geometry(uint32_t w, uint32_t h) {
     if (fbcon_cy >= fbcon_rows) fbcon_cy = fbcon_rows ? fbcon_rows - 1 : 0;
 }
 
+/* ------------------------------------------------------------------ *
+ *  Full-screen grab                                                    *
+ * ------------------------------------------------------------------ */
+
+/* Set while a ring-3 program owns the screen (apps/doom). The compositor
+ * thread checks it every frame and parks; nothing else draws. */
+static volatile int grab_on;
+static uint32_t     grab_w, grab_h;
+/* Palette entries are stored already packed for the destination surface, so
+ * the per-pixel inner loop below is a table lookup and a store. */
+static uint32_t     grab_pal[256];
+
+int video_grabbed(void) { return grab_on; }
+
+int video_grab(uint32_t w, uint32_t h) {
+    if (!bfb_addr || grab_on || !w || !h)
+        return 0;
+    if (w > 4096 || h > 4096)
+        return 0;
+
+    grab_w = w;
+    grab_h = h;
+    for (int i = 0; i < 256; i++)
+        grab_pal[i] = 0;
+
+    /* Let the compositor finish the frame it may be half-way through before
+     * taking over -- it only checks the flag between frames -- then paint the
+     * screen black once. Everything outside the scaled image is never written
+     * again, so a leftover desktop would otherwise frame the game. */
+    grab_on = 1;
+    sleep(40);
+    fbcon_suspend();
+    draw_rect(0, 0, vbemem.xres, vbemem.yres, 0x000000);
+    fb_present(0, 0, vbemem.xres, vbemem.yres);
+    return 1;
+}
+
+void video_ungrab(void) {
+    if (!grab_on)
+        return;
+    grab_on = 0;   /* the compositor repaints the desktop on its next frame */
+}
+
+void video_set_palette(const uint32_t *argb) {
+    int direct = (vbemem.buffer == (uint32_t *) fb_base);
+    for (int i = 0; i < 256; i++)
+        grab_pal[i] = direct ? pack_color(argb[i]) : (argb[i] & 0xFFFFFF);
+}
+
+void video_blit8(const uint8_t *pix) {
+    if (!grab_on || !pix)
+        return;
+
+    /* Re-read the geometry every frame: a virtio-gpu window resize changes it
+     * under us and the scale has to follow. The writes below are not under
+     * video_lock -- fb_present takes it, and the lock is not recursive -- but
+     * a resize cannot push them out of the buffer: video_grow_shadow reserved
+     * enough for the largest mode, so every geometry this can interleave is
+     * one that fits. A resize mid-blit costs one torn frame, and it wipes the
+     * shadow on the way through, which re-blacks the letterbox for free. */
+    uint32_t sw = vbemem.xres, sh = vbemem.yres;
+    if (sw < grab_w || sh < grab_h)
+        return;
+
+    uint32_t scale = sw / grab_w;
+    if (sh / grab_h < scale)
+        scale = sh / grab_h;
+    if (scale < 1)
+        return;
+
+    uint32_t dw = grab_w * scale, dh = grab_h * scale;
+    uint32_t ox = (sw - dw) / 2, oy = (sh - dh) / 2;
+
+    for (uint32_t y = 0; y < grab_h; y++) {
+        const uint8_t *src = pix + (size_t) y * grab_w;
+        uint32_t *row = (uint32_t *)
+            ((uint8_t *) vbemem.buffer + (size_t) (oy + y * scale) * vbemem.pitch) + ox;
+
+        if (scale == 1) {
+            for (uint32_t x = 0; x < grab_w; x++)
+                row[x] = grab_pal[src[x]];
+        } else {
+            uint32_t *p = row;
+            for (uint32_t x = 0; x < grab_w; x++) {
+                uint32_t c = grab_pal[src[x]];
+                for (uint32_t k = 0; k < scale; k++)
+                    *p++ = c;
+            }
+            /* The remaining scale-1 rows of this source line are copies. */
+            for (uint32_t r = 1; r < scale; r++)
+                memcpy((uint8_t *) row + (size_t) r * vbemem.pitch, row, dw * 4);
+        }
+    }
+
+    fb_present((int) ox, (int) oy, (int) dw, (int) dh);
+}
+
 void refresh_screen() {
     /* Text-mode boot: nothing to composite; parking here also keeps
      * paint_desktop() from racing the console for the keyboard ring. */
@@ -395,6 +492,13 @@ void refresh_screen() {
     fbcon_suspend();
 
     for (;;) {
+        /* A grabbed screen belongs to the program holding it: do not paint
+         * over its frames, and do not present a shadow it is mid-way through
+         * writing. */
+        if (grab_on) {
+            sleep(16);
+            continue;
+        }
         paint_desktop();
         fb_present(0, 0, vbemem.xres, vbemem.yres);
         /* Cap the compositor to ~60 fps. Left unthrottled it redraws the whole

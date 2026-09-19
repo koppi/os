@@ -16,6 +16,8 @@
 #include <percpu.h>
 #include <spinlock.h>
 #include <log.h>
+#include <video.h>
+#include <keyboard.h>
 
 /*
  * Process in memory
@@ -401,6 +403,20 @@ void remove_proc(int pid) {
     process_t *cur = get_proc_by_id(pid);
     if(cur == 0)
         return;
+
+    /*
+     * Drop any full-screen grab the process was holding. A program that
+     * exits through gfx_close (syscall 23) has already released it, but one
+     * that faults -- or is killed between taking the screen and giving it
+     * back -- would otherwise leave the compositor parked and the display
+     * frozen on its last frame, with no way back short of a reboot. Only one
+     * grab exists at a time and only a user process can take it, so reaping
+     * is the right place to be sure it is gone.
+     */
+    if(video_grabbed()) {
+        keyboard_raw_mode(0);
+        video_ungrab();
+    }
 
     uint32_t plf = spin_lock(&proc_lock);
 

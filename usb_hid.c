@@ -48,8 +48,60 @@ static const char kbd_ascii_shift[128] = {
     '1','2','3','4','5','6','7','8','9','0','.',
 };
 
+/*
+ * HID usage -> PS/2 scancode-set-1 make code, for the raw key stream a
+ * full-screen program reads (see keyboard.h). 0 means "no equivalent"; the
+ * high byte marks a key whose PS/2 form carries the 0xE0 prefix, which is how
+ * the consumer tells the arrow cluster from the numeric keypad.
+ *
+ * Only what a game plausibly binds is filled in -- the letters, digits, the
+ * arrows and the modifiers -- because this table exists for input, not for
+ * text: text still comes from kbd_ascii above.
+ */
+#define HID_E0 0x100   /* set-1 form of this key carries the 0xE0 prefix */
+static const uint16_t kbd_scan[128] = {
+    /* 00 */ 0, 0, 0, 0,
+    /* 04 a..z */ 0x1E,0x30,0x2E,0x20,0x12,0x21,0x22,0x23,0x17,0x24,0x25,0x26,0x32,
+    /* 11 n..z */ 0x31,0x18,0x19,0x10,0x13,0x1F,0x14,0x16,0x2F,0x11,0x2D,0x15,0x2C,
+    /* 1e 1..0 */ 0x02,0x03,0x04,0x05,0x06,0x07,0x08,0x09,0x0A,0x0B,
+    /* 28 */ 0x1C,0x01,0x0E,0x0F,0x39,0x0C,0x0D,0x1A,0x1B,0x2B, 0, 0x27,0x28,
+    /* 35 */ 0x29,0x33,0x34,0x35,0x3A,
+    /* 3a F1..F12 */ 0x3B,0x3C,0x3D,0x3E,0x3F,0x40,0x41,0x42,0x43,0x44,0x57,0x58,
+    /* 46 PrtSc, ScrLk, Pause. PrintScreen and Pause are multi-byte
+       sequences on PS/2 (E0 2A E0 37 / E1 1D 45 ...), which the raw ring
+       does not model, so they are dropped rather than half-decoded. */
+    0, 0x46, 0,
+    /* 49 Ins,Home,PgUp,Del,End,PgDn */
+    HID_E0|0x52, HID_E0|0x47, HID_E0|0x49, HID_E0|0x53, HID_E0|0x4F, HID_E0|0x51,
+    /* 4f right,left,down,up */
+    HID_E0|0x4D, HID_E0|0x4B, HID_E0|0x50, HID_E0|0x48,
+    /* 53 NumLk,/,*,-,+,enter */ 0x45, HID_E0|0x35, 0x37, 0x4A, 0x4E, HID_E0|0x1C,
+    /* 59 keypad 1..0,. */ 0x4F,0x50,0x51,0x4B,0x4C,0x4D,0x47,0x48,0x49,0x52,0x53,
+};
+
+/* Report byte 0 is a modifier bitmap; bit n maps to these make codes. */
+static const uint16_t kbd_mod_scan[8] = {
+    0x1D,        /* left ctrl  */
+    0x2A,        /* left shift */
+    0x38,        /* left alt   */
+    HID_E0 | 0x5B,   /* left GUI   */
+    HID_E0 | 0x1D,   /* right ctrl */
+    0x36,        /* right shift*/
+    HID_E0 | 0x38,   /* right alt  */
+    HID_E0 | 0x5C,   /* right GUI  */
+};
+
+/** @brief Feed one usage's press/release into the raw scancode stream. */
+static void push_scan_usage(uint8_t usage, int release) {
+    if(usage >= 128)
+        return;
+    uint16_t sc = kbd_scan[usage];
+    if(sc)
+        keyboard_push_scan((uint8_t) (sc & 0xFF), (sc & HID_E0) != 0, release);
+}
+
 /** @brief Was HID usage @p code present in an 8-byte keyboard report? */
-static int report_has_key(uint8_t *rpt, uint8_t code) {
+static int report_has_key(const uint8_t *rpt, uint8_t code) {
     for(int i = 2; i < 8; i++)
         if(rpt[i] == code)
             return 1;
@@ -73,7 +125,29 @@ void usb_hid_report_keyboard(const uint8_t *rpt, int len, uint8_t prev[8]) {
         char c = shift ? kbd_ascii_shift[code] : kbd_ascii[code];
         if(c)
             keyboard_push_char(c);
+        push_scan_usage(code, 0);
     }
+
+    /*
+     * The raw stream also needs the two things the ASCII path above drops: a
+     * key going *up*, and the modifier keys (which live in byte 0, not in the
+     * usage array at all). Without this a USB keyboard could move the player
+     * forward but never stop, and could not strafe or run.
+     */
+    for(int i = 2; i < 8; i++) {
+        uint8_t code = prev[i];
+        if(code >= 4 && code < 128 && !report_has_key(rpt, code))
+            push_scan_usage(code, 1);
+    }
+    uint8_t changed = (uint8_t) (rpt[0] ^ prev[0]);
+    for(int b = 0; b < 8; b++) {
+        if(!(changed & (1u << b)))
+            continue;
+        uint16_t sc = kbd_mod_scan[b];
+        keyboard_push_scan((uint8_t) (sc & 0xFF), (sc & HID_E0) != 0,
+                           !(rpt[0] & (1u << b)));
+    }
+
     memcpy(prev, (void *)rpt, 8);
 }
 

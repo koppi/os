@@ -20,9 +20,11 @@
 #include <rtc.h>
 #include <pit.h>
 #include <commands.h>
+#include <video.h>
+#include <io.h>
 
 /** One past the highest valid call number. */
-#define MAX_SYSCALL 22
+#define MAX_SYSCALL 28
 
 /** Set to 1 to log every syscall on the console (default 0: off). */
 #define SYSCALL_TRACE 0
@@ -131,6 +133,74 @@ static uint32_t sys_spawn(const char *path, const char *args) {
     return (uint32_t) console_spawn_request(path ? path : "", args ? args : "");
 }
 
+/**
+ * @name Full-screen graphics (#22..#25)
+ *
+ * The four calls a ring-3 program needs to own the display: grab it, install
+ * a palette, push frames, give it back. See @ref video_grab for why a frame
+ * crosses the boundary as 8-bpp indexed pixels rather than true colour.
+ *
+ * A grab also switches the keyboard into raw-scancode mode, because every
+ * program that wants the whole screen wants key releases and the arrow keys
+ * with it, and pairing the two here means neither can be left on by itself.
+ */
+///@{
+
+/** @brief `gfx_open` (#22): take the screen for a @p w x @p h indexed surface. */
+static uint32_t sys_gfx_open(uint32_t w, uint32_t h) {
+    if(!video_grab(w, h))
+        return 0;
+    keyboard_raw_mode(1);
+    return 1;
+}
+
+/** @brief `gfx_close` (#23): hand the screen back to the desktop. */
+static uint32_t sys_gfx_close(void) {
+    keyboard_raw_mode(0);
+    video_ungrab();
+    return 0;
+}
+
+/** @brief `gfx_palette` (#24): install 256 entries of 0x00RRGGBB. */
+static uint32_t sys_gfx_palette(const uint32_t *pal) {
+    if(!pal || !video_grabbed())
+        return (uint32_t) -1;
+    video_set_palette(pal);
+    return 0;
+}
+
+/** @brief `gfx_blit` (#25): present one indexed frame of the grabbed size. */
+static uint32_t sys_gfx_blit(const uint8_t *pix) {
+    if(!pix || !video_grabbed())
+        return (uint32_t) -1;
+    video_blit8(pix);
+    return 0;
+}
+///@}
+
+/**
+ * @brief `getscan` (#26): pop one raw key event, or 0 if none are queued.
+ *
+ * Non-blocking, unlike `getkey` (#17): a game polls it once per frame and
+ * must not stall when the player is not typing.
+ */
+static uint32_t sys_getscan(void) {
+    return (uint32_t) keyboard_raw_get();
+}
+
+/**
+ * @brief `msleep` (#27): block the caller for @p ms milliseconds.
+ *
+ * Capped at a second: a frame-paced program never asks for more, and a bad
+ * argument should not wedge a process for minutes with no way to interrupt it.
+ */
+static uint32_t sys_msleep(uint32_t ms) {
+    if(ms > 1000)
+        ms = 1000;
+    sleep((int) ms);
+    return 0;
+}
+
 /** Call number → implementation. NULL entries are unimplemented. */
 static uintptr_t syscalls[] = {
     (uintptr_t) printf,              // printf   0
@@ -154,7 +224,13 @@ static uintptr_t syscalls[] = {
     (uintptr_t) sys_run,             // run      18  (console_exec on behalf of ring 3)
     (uintptr_t) sys_getcwd,          // getcwd   19
     (uintptr_t) sys_listdir,         // listdir  20
-    (uintptr_t) sys_spawn            // spawn    21  (load+run a program for ring 3)
+    (uintptr_t) sys_spawn,           // spawn    21  (load+run a program for ring 3)
+    (uintptr_t) sys_gfx_open,        // gfx_open    22  (full-screen grab, video.c)
+    (uintptr_t) sys_gfx_close,       // gfx_close   23
+    (uintptr_t) sys_gfx_palette,     // gfx_palette 24
+    (uintptr_t) sys_gfx_blit,        // gfx_blit    25
+    (uintptr_t) sys_getscan,         // getscan     26  (raw scancode, non-blocking)
+    (uintptr_t) sys_msleep           // msleep      27
 };
 
 /**
