@@ -52,6 +52,13 @@ each is on.
   trampoline to `0x8000` ([`ap_boot.S`](ap_boot.S)) and raises
   INIT-SIPI-SIPI. Each AP loads the kernel page tables, sets up its APIC / FPU /
   TSS in `ap_main` and parks until `sched_init` releases it into the scheduler.
+  The RSDP that starts that chain is **copied out** of GRUB's boot-information
+  structure while it is being parsed ([`multiboot2.c`](multiboot2.c)), rather
+  than pointed at: the page-table storage window begins at the end of the
+  kernel image and, once the image had grown enough, landed exactly on where
+  GRUB had put that structure. The first page table erased the RSDP, no MADT
+  was found, and the machine came up on one core — a silent four-fold
+  slowdown whose only trace was one warning line.
 * **SMP scheduler** ([`sched.c`](sched.c)): one global run queue (the process
   ring) under `sched_lock`; each core tracks its own current thread and a
   `process_t::cpu` field keeps a process from running on two cores at once.
@@ -346,6 +353,16 @@ for anything more (there is no TLS or resolver cache).
   the SB16 mixer inline from the IRQ and flag the HD Audio thread to re-apply
   the codec's output amp ([`sb16.c`](sb16.c), [`hda.c`](hda.c),
   [`keyboard.c`](keyboard.c)).
+* **PCM from ring 3** — [`snd.c`](snd.c) is a ring buffer between a userspace
+  program that produces audio on its own schedule and a card that consumes it
+  at a fixed rate: `snd_open`/`snd_avail`/`snd_write`/`snd_close`
+  (syscalls 28-31), interleaved stereo 16-bit at 44.1 kHz. Both back ends
+  drain it ahead of the MOD player, so a game is never heard over the music,
+  and the module becomes audible again when the stream closes. This is what
+  [`apps/doom`](apps/doom) mixes its sound effects into. The HD Audio DMA
+  buffer was shortened from 186 ms to 46 ms for it (and is now polled every
+  2 ms instead of 5), which is the difference between music and a game that
+  hears its own gunfire on time.
 
 ### Support libraries (freestanding, in-tree)
 * [`printf.c`](printf.c) (eyalroz/printf), [`ctype.c`](ctype.c),
@@ -374,9 +391,11 @@ for anything more (there is no TLS or resolver cache).
   `spawn`(21, load+run a program, blocking),
   `gfx_open`(22)/`gfx_close`(23)/`gfx_palette`(24)/`gfx_blit`(25) (take the
   whole screen and push indexed frames to it — see **Graphics / UI**),
-  `getscan`(26, one raw key event, non-blocking) and `msleep`(27) — see
-  [`syscall.c`](syscall.c). `write_file()` in [`lib/`](lib) wraps #16; 17-21
-  back [`apps/zsh`](apps/zsh) and 22-27 back [`apps/doom`](apps/doom).
+  `getscan`(26, one raw key event, non-blocking), `msleep`(27), and
+  `snd_open`(28)/`snd_close`(29)/`snd_write`(30)/`snd_avail`(31) (stream PCM
+  to the sound card — see **Audio**) — see [`syscall.c`](syscall.c).
+  `write_file()` in [`lib/`](lib) wraps #16; 17-21 back
+  [`apps/zsh`](apps/zsh) and 22-31 back [`apps/doom`](apps/doom).
 * The ELF loader ([`elf.c`](elf.c)) maps every page of a `PT_LOAD` segment to
   its own frame and covers the `.bss` tail, so multi-page ring-3 binaries load.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
@@ -507,11 +526,22 @@ pick a weapon, Esc is the menu. Quit from the menu and the desktop comes back.
 * **Writing** goes the other way round: a write stream buffers in memory and
   `fclose` hands the whole thing to `spit`. Save games work; config
   persistence does not (it is `#if ORIGCODE` upstream).
+* **Sound.** doomgeneric ships `i_sound.c` with its backends off — they are
+  SDL_mixer and Allegro — but the `DG_sound_module` hook is there, so the
+  port fills it with a mixer of its own
+  ([`i_sound_koppi.c`](apps/doom/i_sound_koppi.c)): eight voices of 8-bit DMX
+  samples, stepped through with a 16.16 phase accumulator (no pre-conversion,
+  and a cached sound costs nothing because the WAD is mapped), summed with
+  vanilla's panning curve into the PCM ring. `Update()` renders exactly what
+  `snd_avail` reports, so the sample rate paces the mixer rather than the
+  frame rate.
 
-No sound and no mouse yet — `i_sound.c` is compiled with its backends off, as
-doomgeneric ships it. [`test/doom-boot.sh`](test/doom-boot.sh) (`make
-qemu-doom`) drives the game headless in QEMU and screenshots each step. See
-[`apps/doom/PORTING.md`](apps/doom/PORTING.md) for the shim, the five engine
+**No music** — Doom's is MUS, which needs a synthesiser; vanilla had an OPL2
+chip and chocolate-doom carries a software one, and neither is here yet. No
+mouse either. [`test/doom-boot.sh`](test/doom-boot.sh) (`make qemu-doom`)
+drives the game headless in QEMU, screenshots each step, and for the `sound`
+scenario records the codec to a WAV and reports what is in it. See
+[`apps/doom/PORTING.md`](apps/doom/PORTING.md) for the shim, the six engine
 edits and the rest of the limitations.
 
 [doomgeneric]: https://github.com/ozkl/doomgeneric

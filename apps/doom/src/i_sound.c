@@ -18,7 +18,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-#if defined(FEATURE_SOUND) && !defined(__DJGPP__)
+// koppi-os: FEATURE_SOUND selects a platform sound module, not SDL_mixer
+// specifically. The port supplies its own DG_sound_module (i_sound_koppi.c),
+// so guard the header on the SDL backend actually being built.
+#if defined(FEATURE_SOUND) && defined(ORIGCODE) && !defined(__DJGPP__)
 #include <SDL_mixer.h>
 #endif
 

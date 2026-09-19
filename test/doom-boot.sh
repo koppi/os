@@ -7,10 +7,15 @@
 # which is how the game's own input path — raw scancodes, make *and* break —
 # gets exercised. Every step leaves a PNG behind.
 #
-#   test/doom-boot.sh [demo|menu|play|quit|timedemo|noiwad|all]   (default: all)
+#   test/doom-boot.sh [demo|menu|play|quit|timedemo|noiwad|sound|all]
+#                                                              (default: all)
 #
 # Needs a WAD staged on the RAM disk (apps/doom/PORTING.md) for everything
 # except `noiwad`. Output, one subdirectory per scenario, in $OUT.
+#
+# The `sound` scenario points QEMU's audio backend at a WAV file instead of a
+# speaker, so the sound path can be checked the same way as the video one:
+# what came out is a file you can measure (and listen to).
 set -u
 cd "$(dirname "$0")/.."
 OUT=${OUT:-/tmp/doom-boot}
@@ -23,6 +28,10 @@ for t in qemu-system-i386 socat; do
     command -v "$t" >/dev/null || { echo "doom-boot: need $t"; exit 1; }
 done
 [ -f os.iso ] || { echo "doom-boot: no os.iso -- run 'make iso' first"; exit 1; }
+
+# Audio: normally off (a headless run has nothing to play to). The `sound`
+# scenario sets this to capture the codec's output to a WAV.
+AUDIO=()
 
 # run <name> <command line> <script>
 #
@@ -39,7 +48,7 @@ run() {
     qemu-system-i386 -vga "$VGA" -m 512M -no-reboot -smp 4 $KVM \
         -rtc base=localtime,clock=vm \
         -drive file=os.iso,if=ide,index=1,media=cdrom \
-        -boot d,menu=off -display none \
+        -boot d,menu=off -display none "${AUDIO[@]}" \
         -serial "unix:$d/ser.sock,server,nowait" \
         -monitor "unix:$d/mon.sock,server,nowait" &
     local qpid=$!
@@ -122,6 +131,47 @@ do_noiwad() {
     run noiwad 'doom -iwad /rd/nope.wad' $'6:shot:error'
 }
 
+# Sound. Record the codec's output to a WAV and report what is in it: silence
+# while the machine boots (the module is muted from boot), then the demo's
+# gunfire once the game has the PCM stream, then the module again after the
+# game gives it back.
+do_sound() {
+    local d="$OUT/sound"
+    AUDIO=(-audiodev "wav,id=snd0,path=$d/capture.wav"
+           -device intel-hda -device hda-output,audiodev=snd0)
+    run sound doom \
+        $'16:key:esc\n1:key:down\n1:key:down\n1:key:down\n1:key:down\n1:key:down\n1:key:ret\n2:key:y\n3:serial:sound on\n6:shot:desktop'
+    AUDIO=()
+    wav_report "$d/capture.wav"
+}
+
+# Peak and RMS per second of a 16-bit stereo WAV: enough to see that audio
+# came out, when, and that it is not a constant tone or a wall of clipping.
+wav_report() {
+    local f=$1
+    [ -f "$f" ] || { echo "    no capture written"; return; }
+    command -v python3 >/dev/null || { echo "    capture: $(du -h "$f" | cut -f1) (install python3 for a breakdown)"; return; }
+    python3 - "$f" <<'PY'
+import sys, wave, array
+w = wave.open(sys.argv[1], 'rb')
+n, rate, ch = w.getnframes(), w.getframerate(), w.getnchannels()
+a = array.array('h'); a.frombytes(w.readframes(n))
+print(f"    {n} frames, {rate} Hz, {ch} ch")
+print("    sec  peak    rms  pan")
+for s in range(n // rate):
+    seg = a[s*rate*ch:(s+1)*rate*ch]
+    if not seg:
+        break
+    pk = max(max(seg), -min(seg))
+    rms = int((sum(x*x for x in seg) / len(seg)) ** 0.5)
+    pan = "-"
+    if ch == 2:
+        l, r = seg[0::2], seg[1::2]
+        pan = "stereo" if any(x != y for x, y in zip(l, r)) else "mono"
+    print(f"    {s:3d} {pk:6d} {rms:6d}  {pan}")
+PY
+}
+
 case "${1:-all}" in
     demo)     do_demo ;;
     menu)     do_menu ;;
@@ -129,6 +179,9 @@ case "${1:-all}" in
     quit)     do_quit ;;
     timedemo) do_timedemo ;;
     noiwad)   do_noiwad ;;
-    all)      do_demo; do_menu; do_play; do_quit; do_timedemo; do_noiwad ;;
-    *)        echo "usage: $0 [demo|menu|play|quit|timedemo|noiwad|all]"; exit 1 ;;
+    sound)    do_sound ;;
+    all)      do_demo; do_menu; do_play; do_quit; do_timedemo; do_noiwad
+              do_sound ;;
+    *)        echo "usage: $0 [demo|menu|play|quit|timedemo|noiwad|sound|all]"
+              exit 1 ;;
 esac

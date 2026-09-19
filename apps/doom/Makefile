@@ -8,9 +8,10 @@ OBJCOPY = objcopy
 #   DOOMGENERIC_RES* render at Doom's native size; the kernel scales it up
 #   FILES_DIR        first place d_iwad.c looks for an IWAD
 #   NORMALUNIX       selects the non-Windows code paths in the engine
+#   FEATURE_SOUND    compile the sound path in and use DG_sound_module
 DOOMCFG = -DCMAP256 \
           -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 \
-          -DNORMALUNIX -DLINUX \
+          -DNORMALUNIX -DLINUX -DFEATURE_SOUND \
           -DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_SOFT=1 \
           '-DFILES_DIR="/rd"'
 
@@ -29,12 +30,17 @@ LDFLAGS = -melf_i386 -T doom.lds -Map doom.map
 
 DOOMSRC = $(wildcard src/*.c)
 DOOMOBJ = $(DOOMSRC:.c=.o)
-PORTOBJ = doomgeneric_koppi.o w_file_koppi.o
+PORTOBJ = doomgeneric_koppi.o w_file_koppi.o i_sound_koppi.o
 SHIMOBJ = shim/printf.o shim/string.o shim/stdlib.o shim/stdio.o \
           shim/libm.o shim/libm_s.o shim/arith64.o
 OBJ     = $(DOOMOBJ) $(PORTOBJ) $(SHIMOBJ)
 
 all: doom
+
+# The engine is configured almost entirely through -D, so a change to the
+# flags above has to rebuild everything -- otherwise turning FEATURE_SOUND on
+# leaves stale objects that were compiled with it off.
+$(OBJ): Makefile
 
 doom: $(OBJ) doom.lds
 	@$(LD) $(LDFLAGS) -o doom $(OBJ)

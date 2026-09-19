@@ -46,6 +46,10 @@ Vanilla controls: **arrows** move and turn, **Ctrl** fires, **space** uses,
 automap, **Esc** is the menu. Quit from the menu (or `-timedemo`, which exits
 when it is done) and the desktop comes back.
 
+Sound effects play through whichever card the kernel found; `-nosound` turns
+them off. There is no music (see below). The volume keys and the console's
+`sound 0-100` set the level while the game runs, the same as for the module.
+
 The game takes the whole screen at 320x200 and the kernel scales it up by the
 largest whole number that fits, centred on black — 2x on a 640x480 or 800x600
 display, 4x on a 1440x900 laptop panel. Resize the QEMU window with
@@ -57,11 +61,12 @@ display, 4x on a 1440x900 laptop panel. Resize the QEMU window with
 src/                  vendored doomgeneric. Only the platform files that do
                       not apply here were dropped (SDL, X11, Win32, Allegro,
                       emscripten, the OPL/PC-speaker music backends,
-                      w_file_posix/w_file_win32/w_file_stdc). Five edits,
+                      w_file_posix/w_file_win32/w_file_stdc). Six edits,
                       each marked with a "koppi-os:" comment — see below.
 shim/                 the i386 / freestanding C library
 doomgeneric_koppi.c   the platform layer: the six DG_* entry points
 w_file_koppi.c        the WAD backend (whole file in memory)
+i_sound_koppi.c       DG_sound_module: an eight-channel mixer
 doom.lds              flat ring-3 image at 8 MiB, entry `main`
 ```
 
@@ -114,6 +119,60 @@ to set-1 scancodes and reports releases and modifiers, which the ASCII path
 had no reason to track. That is the path a machine with no PS/2 controller
 (a MacBook) has to use.
 
+## Sound
+
+Upstream doomgeneric ships `i_sound.c` with its backends compiled out, because
+the ones it has are SDL_mixer and Allegro. The hook is there, though --
+`DG_sound_module` under `FEATURE_SOUND` -- so the port defines that flag and
+fills it in (`i_sound_koppi.c`).
+
+What SDL_mixer would have done has to be done by hand, so that file is a
+mixer: up to eight voices of 8-bit DMX samples, summed into the interleaved
+stereo frames the kernel's PCM ring takes (`snd.h`, syscalls 28-31).
+
+```
+snd_open()          claim the card -> the sample rate to produce
+snd_avail()         room left, in frames
+snd_write(buf, n)   queue stereo frames -> how many were taken
+snd_close()         give it back
+```
+
+Some of it falls out of decisions already made elsewhere:
+
+* **A cached sound costs nothing.** The WAD is mapped whole, so
+  `W_CacheLumpNum` hands back a pointer into it; a sfxinfo's `driver_data` is
+  three fields saying where in that mapping its samples are. None of the
+  sample cache, eviction or `snd_cachesize` accounting the SDL backend
+  carries is needed.
+* **Nothing is pre-converted.** Samples stay 8-bit at their own rate (11025 Hz
+  in Doom's case) and are stepped through with a 16.16 phase accumulator while
+  mixing -- an add and a table lookup per output sample, against expanding
+  every sound in the game to eight times its size at load.
+* **Vanilla's panning curve**, because that is what the game was voiced for:
+  each side falls off with the square of the distance from it.
+* **The ring is the clock.** `Update()` renders exactly what `snd_avail`
+  reports and no more, so the mixer follows the sample rate rather than the
+  frame rate, at 35 fps or at 1000.
+
+On the kernel side `snd.c` is the buffer between a program that produces
+audio when it feels like it and a card that consumes it at a fixed rate. Both
+backends drain it ahead of the MOD player, so a game is never heard over the
+music, and the module becomes audible again when the program closes the
+stream -- or when `remove_proc` closes it on the program's behalf, the same
+safety net the screen grab has.
+
+Two latency knobs, and they add up:
+
+| | frames | ms at 44.1 kHz |
+| --- | --- | --- |
+| `HDA_STREAM_HALF_FRAMES` (hda.h), x2 for the ring | 1024 | ~46 |
+| `SND_RING_FRAMES` (snd.c) | 4096 | ~93 |
+
+The HD Audio figure used to be 4096 frames per half -- 186 ms, fine for music
+and far too much for a game. It is now polled every 2 ms instead of 5, which
+keeps the same wide margin against a missed DMA crossing in a quarter of the
+window.
+
 ## Files
 
 The kernel VFS reads a FAT chain forward, 512 bytes per syscall, and cannot
@@ -162,7 +221,7 @@ general `sscanf` and does not pretend to be.
 
 ## Changes to the vendored engine
 
-Five, each marked with a `koppi-os:` comment:
+Six, each marked with a `koppi-os:` comment:
 
 | file | change |
 | --- | --- |
@@ -171,18 +230,27 @@ Five, each marked with a `koppi-os:` comment:
 | `d_iwad.c` | `BuildIWADDirList` also looks in `/hda`, `/fda` and the working directory. |
 | `m_config.c` | `GetDefaultConfigDir` returns `/rd/`, or `-savedir`. There is no home directory and no per-process working directory to default to. |
 | `m_config.c` | `M_GetSaveGameDir` returns the config directory unchanged instead of a `.savegame/` subdirectory of it, because the FAT driver cannot create one. |
+| `i_sound.c` | the `<SDL_mixer.h>` include also requires `ORIGCODE`. `FEATURE_SOUND` selects *a* platform sound module, not SDL's specifically. |
 
 Everything else — the renderer, the game logic, `w_wad.c`, `z_zone.c` — is
 doomgeneric as it ships.
 
 ## Known limitations
 
-* **No sound.** `i_sound.c` is compiled with its backends off, exactly as
-  upstream doomgeneric ships it. The kernel has a working HD Audio / SB16
-  path ([`hda.c`](../../hda.c)) and wiring Doom's mixer to it is the obvious
-  next step, but nothing here does it yet.
+* **No music.** Sound effects work; music does not. Doom's music is MUS, a
+  packed MIDI, and turning that into audio needs a synthesiser -- vanilla had
+  an OPL2 chip, chocolate-doom carries a software emulation of one.
+  doomgeneric ships neither (its music backends hand MIDI to SDL_mixer or
+  Allegro), so there is nothing here to wire up: it is a port of
+  chocolate-doom's `opl/` plus `i_oplmusic.c`, on top of the PCM ring that is
+  now in place. `DG_music_module` accepts everything and plays nothing, which
+  keeps `s_sound.c` on its ordinary path.
 * **No mouse.** `usemouse` is 0. The PS/2 mouse driver reports absolute
   position for the desktop cursor, not the relative deltas `ev_mouse` wants.
+* **One sound at a time on a Sound Blaster.** The SB16 path runs the card in
+  mono, so the mixer's stereo output is downmixed on the way out and the
+  panning is lost. HD Audio, which is what a real laptop and the default QEMU
+  machine have, is stereo.
 * **No config persistence.** `SaveDefaultCollection` and
   `LoadDefaultCollection` are inside `#if ORIGCODE` upstream, so key rebinds
   last only as long as the process. (`LoadDefaultCollection` wants `fscanf`,
@@ -202,11 +270,18 @@ the game over the serial console, drives it through the QEMU monitor and saves
 a screenshot per step, so the port can be checked without a display:
 
 ```bash
-make qemu-doom               # all six scenarios -> /tmp/doom-boot
-test/doom-boot.sh play       # just one: demo|menu|play|quit|timedemo|noiwad
+make qemu-doom               # all seven scenarios -> /tmp/doom-boot
+test/doom-boot.sh sound      # one: demo|menu|play|quit|timedemo|noiwad|sound
 VGA=std test/doom-boot.sh demo   # the 24-bpp 800x600 path instead of virtio
 ```
 
 The scenarios cover the attract-mode demo, the menu (arrow keys, so the
 0xE0-prefixed scancodes), held movement keys, quitting back to a usable
 shell, `-timedemo`, and a missing IWAD.
+
+`sound` points QEMU's audio backend at a WAV file instead of a speaker, so
+what came out is a file you can measure and listen to. It reports peak, RMS
+and stereo/mono per second, and a good run reads: silence while the machine
+boots (the module is muted from boot), fifteen seconds of stereo once the
+game has the stream, silence again after it quits, then the module in mono
+once the console's `sound on` unmutes it.

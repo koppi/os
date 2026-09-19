@@ -53,6 +53,10 @@ enum {
     SYS_GFX_BLIT    = 25,
     SYS_GETSCAN     = 26,
     SYS_MSLEEP      = 27,
+    SYS_SND_OPEN    = 28,
+    SYS_SND_CLOSE   = 29,
+    SYS_SND_WRITE   = 30,
+    SYS_SND_AVAIL   = 31,
 };
 
 /* getscan (#26) result bits; mirrors KBD_RAW_* in the kernel's keyboard.h. */
