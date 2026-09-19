@@ -3,6 +3,7 @@
 *.elf
 *.map
 *.iso
+ap_boot.bin
 iso/
 hda.img
 floppy.img
