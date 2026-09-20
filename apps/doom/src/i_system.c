@@ -163,6 +163,23 @@ byte *I_ZoneBase (int *size)
     return zonemem;
 }
 
+// koppi-os: chocolate-doom's allocation helper, which the vendored OPL
+// music support uses. Failing to grow a MIDI track is not recoverable and
+// silently continuing with the old pointer would be worse than stopping.
+
+void *I_Realloc(void *ptr, size_t size)
+{
+    void *new_ptr = realloc(ptr, size);
+
+    if (size != 0 && new_ptr == NULL)
+    {
+        I_Error("I_Realloc: failed on reallocation of %u bytes",
+                (unsigned) size);
+    }
+
+    return new_ptr;
+}
+
 void I_PrintBanner(char *msg)
 {
     int i;

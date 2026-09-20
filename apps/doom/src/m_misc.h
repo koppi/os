@@ -29,6 +29,9 @@ boolean M_WriteFile(char *name, void *source, int length);
 int M_ReadFile(char *name, byte **buffer);
 void M_MakeDirectory(char *dir);
 char *M_TempFile(char *s);
+// koppi-os: see m_misc.c.
+FILE *M_fopen(const char *filename, const char *mode);
+int M_remove(const char *path);
 boolean M_FileExists(char *file);
 long M_FileLength(FILE *handle);
 boolean M_StrToInt(const char *str, int *result);

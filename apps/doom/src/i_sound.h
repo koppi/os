@@ -239,10 +239,26 @@ void I_BindSoundVariables(void);
 void I_InitTimidityConfig(void);
 #ifdef FEATURE_SOUND
 extern sound_module_t DG_sound_module;
-extern music_module_t DG_music_module;
+// koppi-os: no DG_music_module. InitMusicModule uses music_opl_module
+// below directly, so there is nothing for the port to define here.
 #endif
 extern sound_module_t sound_pcsound_module;
-extern music_module_t music_opl_module;
+extern const music_module_t music_opl_module;
+
+// koppi-os: the OPL music module (apps/doom/opl/, vendored from
+// chocolate-doom) is newer than this tree and emulates three revisions of
+// Doom's own OPL driver. Nothing here calls I_SetOPLDriverVer, so it stays
+// at the default.
+
+typedef enum
+{
+    opl_doom1_1_666,    // Doom 1 v1.666
+    opl_doom2_1_666,    // Doom 2 v1.666, Hexen, Heretic
+    opl_doom_1_9        // Doom v1.9, Strife
+} opl_driver_ver_t;
+
+void I_SetOPLDriverVer(opl_driver_ver_t ver);
+void I_OPL_DevMessages(char *, size_t);
 
 // For OPL module:
 

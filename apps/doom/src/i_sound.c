@@ -58,7 +58,9 @@ char *snd_musiccmd = "";
 // Low-level sound and music modules we are using
 
 static sound_module_t *sound_module = NULL;
-static music_module_t *music_module = NULL;
+// koppi-os: const, because the music module it points at is chocolate-doom's
+// and that one is declared const. Nothing writes through it.
+static const music_module_t *music_module = NULL;
 
 int snd_musicdevice = SNDDEVICE_SB;
 int snd_sfxdevice = SNDDEVICE_SB;
@@ -134,7 +136,10 @@ static void InitSfxModule(boolean use_sfx_prefix)
 static void InitMusicModule(void)
 {
 #ifdef FEATURE_SOUND
-    music_module = &DG_music_module;
+    // koppi-os: the platform music module is chocolate-doom's OPL one,
+    // vendored into apps/doom/opl/ and used as it stands rather than
+    // wrapped in a DG_music_module of our own.
+    music_module = &music_opl_module;
 #endif /* FEATURE_SOUND */
 }
 

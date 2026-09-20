@@ -43,6 +43,7 @@
 #include "i_swap.h"
 #include "i_system.h"
 #include "i_video.h"
+#include "m_config.h"
 #include "m_misc.h"
 #include "v_video.h"
 #include "w_wad.h"
@@ -179,12 +180,33 @@ char *M_TempFile(char *s)
         tempdir = ".";
     }
 #else
-    // In Unix, just use /tmp.
+    // koppi-os: there is no /tmp -- the VFS mounts whole volumes, not a
+    // directory tree with conventional places in it. Scratch files go
+    // wherever the config does, which is the boot RAM disk unless -savedir
+    // says otherwise, and that is genuinely temporary storage.
 
-    tempdir = "/tmp";
+    tempdir = configdir;
+
+    // configdir already ends in a separator (M_SetConfigDir guarantees it),
+    // and the VFS does not fold "//" the way a Unix kernel would.
+    return M_StringJoin(tempdir, s, NULL);
 #endif
 
     return M_StringJoin(tempdir, DIR_SEPARATOR_S, s, NULL);
+}
+
+// koppi-os: two wrappers the OPL music support (apps/doom/opl/, vendored
+// from a newer chocolate-doom) expects. Upstream they exist to handle UTF-8
+// paths on Windows; here they are the plain calls.
+
+FILE *M_fopen(const char *filename, const char *mode)
+{
+    return fopen(filename, mode);
+}
+
+int M_remove(const char *path)
+{
+    return remove(path);
 }
 
 boolean M_StrToInt(const char *str, int *result)

@@ -20,8 +20,9 @@
  *     lookup per output sample and saves expanding every sound in the game
  *     to eight times its size.
  *
- * `DG_music_module` is a set of stubs. Doom's music is MUS, which needs a
- * MIDI synthesiser -- see PORTING.md.
+ * Music is not here at all: it is chocolate-doom's OPL support, vendored
+ * into opl/ and reached directly by i_sound.c. All this file does for it is
+ * mix the synthesiser's output in, which is also what advances the score.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -33,6 +34,8 @@
 #include "deh_str.h"
 #include "w_wad.h"
 #include "z_zone.h"
+
+#include "opl_koppi.h"
 
 #include "ksys.h"
 
@@ -149,12 +152,24 @@ static int16_t clip16(int32_t v) {
     return (int16_t) v;
 }
 
-/** @brief Sum every playing channel into @p nframes of interleaved stereo. */
+/** @brief Sum the music and every playing channel into @p nframes of
+ *         interleaved stereo. */
 static void MixChunk(int16_t *dst, uint32_t nframes) {
     static int32_t accl[MIX_CHUNK], accr[MIX_CHUNK];
+    static int16_t oplbuf[MIX_CHUNK * 2];
 
-    memset(accl, 0, nframes * sizeof(int32_t));
-    memset(accr, 0, nframes * sizeof(int32_t));
+    /* Music first, and it starts the accumulator rather than being added to
+     * it. No attenuation here: the OPL module already scales note velocities
+     * by the music volume the player set, and a second fixed reduction on
+     * top would just move the balance away from what the engine intends.
+     *
+     * Rendering is also what moves the sequencer forward, so it happens
+     * every chunk whether or not a song is playing. */
+    OPL_Koppi_Render(oplbuf, nframes);
+    for (uint32_t i = 0; i < nframes; i++) {
+        accl[i] = oplbuf[2 * i];
+        accr[i] = oplbuf[2 * i + 1];
+    }
 
     for (int c = 0; c < NUM_CHANNELS; c++) {
         channel_t *ch = &channels[c];
@@ -319,47 +334,16 @@ sound_module_t DG_sound_module = {
 };
 
 /* ------------------------------------------------------------------ *
- *  Music: not implemented                                             *
+ *  Music                                                              *
  * ------------------------------------------------------------------ */
 
 /*
- * Doom's music is MUS (a compressed MIDI), which needs a synthesiser to
- * become audio -- chocolate-doom carries a software OPL2 for exactly this.
- * There is none here yet, so the module accepts everything and plays
- * nothing, which keeps s_sound.c on its normal path instead of making the
- * absence of music a special case everywhere.
+ * Doom's music is MUS -- a packed MIDI -- and what turned it into sound was
+ * an OPL2 chip. chocolate-doom's emulation of one is vendored in opl/ and
+ * used as it stands; i_sound.c reaches for music_opl_module directly, so
+ * there is no DG_music_module here to forward to it.
+ *
+ * All this file does for music is let the synthesiser into the mix, which
+ * MixChunk does above. Musical time advances as those samples are rendered,
+ * so the score cannot drift away from the shots fired over it.
  */
-static boolean I_Koppi_InitMusic(void)              { return true; }
-static void    I_Koppi_ShutdownMusic(void)          { }
-static void    I_Koppi_SetMusicVolume(int v)        { (void) v; }
-static void    I_Koppi_PauseMusic(void)             { }
-static void    I_Koppi_ResumeMusic(void)            { }
-static void   *I_Koppi_RegisterSong(void *d, int l) { (void) d; (void) l; return NULL; }
-static void    I_Koppi_UnRegisterSong(void *h)      { (void) h; }
-static void    I_Koppi_PlaySong(void *h, boolean l) { (void) h; (void) l; }
-static void    I_Koppi_StopSong(void)               { }
-static boolean I_Koppi_MusicIsPlaying(void)         { return false; }
-
-static snddevice_t music_devices[] = {
-    SNDDEVICE_PCSPEAKER,
-    SNDDEVICE_ADLIB,
-    SNDDEVICE_SB,
-    SNDDEVICE_GENMIDI,
-    SNDDEVICE_AWE32,
-};
-
-music_module_t DG_music_module = {
-    music_devices,
-    arrlen(music_devices),
-    I_Koppi_InitMusic,
-    I_Koppi_ShutdownMusic,
-    I_Koppi_SetMusicVolume,
-    I_Koppi_PauseMusic,
-    I_Koppi_ResumeMusic,
-    I_Koppi_RegisterSong,
-    I_Koppi_UnRegisterSong,
-    I_Koppi_PlaySong,
-    I_Koppi_StopSong,
-    I_Koppi_MusicIsPlaying,
-    NULL,      /* Poll: nothing to poll */
-};

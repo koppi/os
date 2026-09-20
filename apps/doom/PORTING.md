@@ -46,9 +46,10 @@ Vanilla controls: **arrows** move and turn, **Ctrl** fires, **space** uses,
 automap, **Esc** is the menu. Quit from the menu (or `-timedemo`, which exits
 when it is done) and the desktop comes back.
 
-Sound effects play through whichever card the kernel found; `-nosound` turns
-them off. There is no music (see below). The volume keys and the console's
-`sound 0-100` set the level while the game runs, the same as for the module.
+Sound and music play through whichever card the kernel found; `-nosound`,
+`-nosfx` and `-nomusic` turn them off. The volume keys and the console's
+`sound 0-100` set the level while the game runs, the same as for the module,
+and the options menu has Doom's own separate sound and music sliders.
 
 The game takes the whole screen at 320x200 and the kernel scales it up by the
 largest whole number that fits, centred on black — 2x on a 640x480 or 800x600
@@ -61,8 +62,12 @@ display, 4x on a 1440x900 laptop panel. Resize the QEMU window with
 src/                  vendored doomgeneric. Only the platform files that do
                       not apply here were dropped (SDL, X11, Win32, Allegro,
                       emscripten, the OPL/PC-speaker music backends,
-                      w_file_posix/w_file_win32/w_file_stdc). Six edits,
+                      w_file_posix/w_file_win32/w_file_stdc). Nine edits,
                       each marked with a "koppi-os:" comment — see below.
+opl/                  the music support, vendored from chocolate-doom:
+                      Nuked OPL3 (opl3.c), the sequencer's callback queue,
+                      the MIDI reader and i_oplmusic.c, unmodified. Plus
+                      opl_koppi.c, this port's backend for them.
 shim/                 the i386 / freestanding C library
 doomgeneric_koppi.c   the platform layer: the six DG_* entry points
 w_file_koppi.c        the WAD backend (whole file in memory)
@@ -157,9 +162,48 @@ Some of it falls out of decisions already made elsewhere:
 On the kernel side `snd.c` is the buffer between a program that produces
 audio when it feels like it and a card that consumes it at a fixed rate. Both
 backends drain it ahead of the MOD player, so a game is never heard over the
-music, and the module becomes audible again when the program closes the
+module, and the module becomes audible again when the program closes the
 stream -- or when `remove_proc` closes it on the program's behalf, the same
 safety net the screen grab has.
+
+## Music
+
+Doom's music is MUS, a packed MIDI, and what turned it into sound in 1993 was
+an OPL2 chip. There is no OPL here, so `opl/` carries chocolate-doom's
+emulation of one -- Nuked OPL3, the callback queue its sequencer runs on, the
+MIDI reader and `i_oplmusic.c` -- all unmodified. doomgeneric dropped this
+support (its own music backends hand MIDI to SDL_mixer or Allegro), so it
+comes from chocolate-doom rather than from the tree in `src/`.
+
+What this port writes is `opl_koppi.c`, which replaces two upstream files at
+once: `opl.c`, the layer that picks between a real OPL and an emulated one,
+and `opl_sdl.c`, the emulated one. Neither has anything to choose between
+here -- there is no hardware OPL on any machine this runs on -- so the driver
+table is an indirection to nowhere and what is left is the synthesiser wired
+to this system's clock.
+
+That wiring is the interesting part. Upstream, `opl_sdl.c` is a post-mix
+hook: SDL_mixer calls it, and it renders and advances musical time in
+response. Here the game's own mixer is in charge, so `OPL_Koppi_Render` is a
+pull, and **musical time advances only as samples are consumed**. Nothing is
+scheduled against a wall clock, so the score cannot drift away from the shots
+fired over it however the frame rate wanders. Rendering stops at the next
+sequencer callback rather than running to the end of the block, so a note
+lands on the sample it was written for.
+
+It is also all one thread -- the mixer, the MIDI callbacks it runs, and every
+`I_*Song` call from the game loop -- so `OPL_Lock` and `OPL_Unlock` have
+nothing to do, where upstream needs two mutexes for SDL's audio thread.
+
+Nuked builds its 16 KB waveform table at startup (`OPL_WF_TABLE_RUNTIME=1`)
+rather than carrying `wf_rom.h`, which is a thousand lines of the same data.
+
+`I_OPL_RegisterSong` converts MUS to MIDI in memory and then writes it to a
+temporary file for the MIDI reader to open again. That round trip is
+upstream's, kept rather than unpicked: it costs one small write and read on
+the RAM disk per song -- a handful of times in a session -- and `M_TempFile`
+now points at the config directory, because there is no `/tmp` on a system
+whose VFS mounts whole volumes rather than a directory tree.
 
 Two latency knobs, and they add up:
 
@@ -221,7 +265,9 @@ general `sscanf` and does not pretend to be.
 
 ## Changes to the vendored engine
 
-Six, each marked with a `koppi-os:` comment:
+Nine, each marked with a `koppi-os:` comment. The first six were needed to
+run at all; the last three are the newer interfaces the vendored music
+support in `opl/` expects, which this tree predates.
 
 | file | change |
 | --- | --- |
@@ -231,26 +277,28 @@ Six, each marked with a `koppi-os:` comment:
 | `m_config.c` | `GetDefaultConfigDir` returns `/rd/`, or `-savedir`. There is no home directory and no per-process working directory to default to. |
 | `m_config.c` | `M_GetSaveGameDir` returns the config directory unchanged instead of a `.savegame/` subdirectory of it, because the FAT driver cannot create one. |
 | `i_sound.c` | the `<SDL_mixer.h>` include also requires `ORIGCODE`. `FEATURE_SOUND` selects *a* platform sound module, not SDL's specifically. |
+| `i_sound.c` / `.h` | `InitMusicModule` points at `music_opl_module` directly, so there is no `DG_music_module` wrapper forwarding to it; `opl_driver_ver_t` and `I_SetOPLDriverVer` are declared for it. |
+| `doomtype.h` / `i_swap.h` | `PACKED_STRUCT` and the two big-endian swaps. chocolate-doom spells a packed struct differently and gets its byte swapping from SDL; MIDI is big-endian, which nothing in a WAD is. |
+| `m_misc.c` / `.h` / `i_system.c` | `M_fopen`, `M_remove` and `I_Realloc`, three wrappers the newer code calls, plus `M_TempFile` pointing at the config directory instead of `/tmp`. |
 
 Everything else — the renderer, the game logic, `w_wad.c`, `z_zone.c` — is
 doomgeneric as it ships.
 
 ## Known limitations
 
-* **No music.** Sound effects work; music does not. Doom's music is MUS, a
-  packed MIDI, and turning that into audio needs a synthesiser -- vanilla had
-  an OPL2 chip, chocolate-doom carries a software emulation of one.
-  doomgeneric ships neither (its music backends hand MIDI to SDL_mixer or
-  Allegro), so there is nothing here to wire up: it is a port of
-  chocolate-doom's `opl/` plus `i_oplmusic.c`, on top of the PCM ring that is
-  now in place. `DG_music_module` accepts everything and plays nothing, which
-  keeps `s_sound.c` on its ordinary path.
+* **`-nosfx` silences the music too.** The PCM stream is opened by the sound
+  module, and the mixer that pumps the synthesiser is the sound module's
+  `Update`, so with no sound effects nothing drives the music either.
+  `-nomusic` on its own works as expected.
 * **No mouse.** `usemouse` is 0. The PS/2 mouse driver reports absolute
   position for the desktop cursor, not the relative deltas `ev_mouse` wants.
-* **One sound at a time on a Sound Blaster.** The SB16 path runs the card in
-  mono, so the mixer's stereo output is downmixed on the way out and the
-  panning is lost. HD Audio, which is what a real laptop and the default QEMU
-  machine have, is stereo.
+* **Mono on a Sound Blaster.** The SB16 path runs the card in mono, so the
+  mixer's stereo output is downmixed on the way out and the panning is lost.
+  HD Audio, which is what a real laptop and the default QEMU machine have,
+  is stereo.
+* **OPL2, not OPL3.** Nuked emulates an OPL3 and `OPL_Init` says so, but the
+  extra voices only come on with `DMXOPTION=-opl3`, and there is no
+  environment to set it in. Doom's music was written for an OPL2 anyway.
 * **No config persistence.** `SaveDefaultCollection` and
   `LoadDefaultCollection` are inside `#if ORIGCODE` upstream, so key rebinds
   last only as long as the process. (`LoadDefaultCollection` wants `fscanf`,

@@ -52,6 +52,11 @@
 #define PACKEDATTR
 #endif
 
+// koppi-os: chocolate-doom spells a packed struct this way, and the OPL
+// music support vendored into apps/doom/opl/ comes from there.
+
+#define PACKED_STRUCT(...) struct __VA_ARGS__ PACKEDATTR
+
 // C99 integer types; with gcc we just use this.  Other compilers 
 // should add conditional statements that define the C99 types.
 

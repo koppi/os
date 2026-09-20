@@ -9,17 +9,21 @@ OBJCOPY = objcopy
 #   FILES_DIR        first place d_iwad.c looks for an IWAD
 #   NORMALUNIX       selects the non-Windows code paths in the engine
 #   FEATURE_SOUND    compile the sound path in and use DG_sound_module
+#   OPL_WF_TABLE_RUNTIME
+#                    build Nuked's 16 KB waveform table at startup instead of
+#                    vendoring wf_rom.h, which is 1000 lines of the same data
 DOOMCFG = -DCMAP256 \
           -DDOOMGENERIC_RESX=320 -DDOOMGENERIC_RESY=200 \
           -DNORMALUNIX -DLINUX -DFEATURE_SOUND \
           -DPRINTF_ALIAS_STANDARD_FUNCTION_NAMES_SOFT=1 \
+          -DOPL_WF_TABLE_RUNTIME=1 \
           '-DFILES_DIR="/rd"'
 
 CFLAGS = -m32 -std=gnu11 -O2 -pipe -ffreestanding -fno-builtin -nostdlib \
          -fno-stack-protector -fno-pic -fno-pie -fno-common \
          -fno-tree-loop-distribute-patterns -fno-strict-aliasing \
          -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
-         -I shim -I src $(DOOMCFG)
+         -I shim -I src -I opl $(DOOMCFG)
 
 # The vendored engine is 1990s C and warns copiously; our own files are not,
 # so they are built with warnings on.
@@ -30,10 +34,14 @@ LDFLAGS = -melf_i386 -T doom.lds -Map doom.map
 
 DOOMSRC = $(wildcard src/*.c)
 DOOMOBJ = $(DOOMSRC:.c=.o)
+# The OPL music support, vendored from chocolate-doom (opl/), plus this
+# port's backend for it.
+OPLSRC  = $(wildcard opl/*.c)
+OPLOBJ  = $(OPLSRC:.c=.o)
 PORTOBJ = doomgeneric_koppi.o w_file_koppi.o i_sound_koppi.o
 SHIMOBJ = shim/printf.o shim/string.o shim/stdlib.o shim/stdio.o \
           shim/libm.o shim/libm_s.o shim/arith64.o
-OBJ     = $(DOOMOBJ) $(PORTOBJ) $(SHIMOBJ)
+OBJ     = $(DOOMOBJ) $(OPLOBJ) $(PORTOBJ) $(SHIMOBJ)
 
 all: doom
 
@@ -48,6 +56,13 @@ doom: $(OBJ) doom.lds
 	@size doom
 
 src/%.o: src/%.c
+	@$(CC) $(VENDORCFLAGS) -c $< -o $@
+
+# opl_koppi.c is ours; the rest of opl/ is vendored and warns like it.
+opl/opl_koppi.o: opl/opl_koppi.c
+	@$(CC) $(PORTCFLAGS) -c $< -o $@
+
+opl/%.o: opl/%.c
 	@$(CC) $(VENDORCFLAGS) -c $< -o $@
 
 shim/%.o: shim/%.c

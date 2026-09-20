@@ -54,6 +54,10 @@ void I_Quit (void);
 
 void I_Error (char *error, ...);
 
+// koppi-os: realloc that does not return on failure. Used by the OPL music
+// support vendored into apps/doom/opl/.
+void *I_Realloc(void *ptr, size_t size);
+
 void I_Tactile (int on, int off, int total);
 
 boolean I_GetMemoryValue(unsigned int offset, void *value, int size);

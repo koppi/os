@@ -69,5 +69,23 @@ static inline unsigned long swapLE32(unsigned long val) {
 #endif  // __DJGPP__
 
 
+// koppi-os: the OPL music support vendored into apps/doom/opl/ comes from a
+// chocolate-doom that takes its byte swapping from SDL. MIDI is big-endian,
+// unlike the WAD structures this header was written for, so these are the
+// two swaps the tree had no use for before.
+
+#if ( __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__ )
+#define SDL_SwapBE16(x) ((unsigned short) (x))
+#define SDL_SwapBE32(x) ((unsigned int) (x))
+#else
+#define SDL_SwapBE16(x)                                                 \
+        ((unsigned short) ((((unsigned short) (x) & 0x00ffu) << 8) |    \
+                           (((unsigned short) (x) & 0xff00u) >> 8)))
+#define SDL_SwapBE32(x)                                                 \
+        ((unsigned int) ((((unsigned int) (x) & 0x000000ffu) << 24) |   \
+                         (((unsigned int) (x) & 0x0000ff00u) <<  8) |   \
+                         (((unsigned int) (x) & 0x00ff0000u) >>  8) |   \
+                         (((unsigned int) (x) & 0xff000000u) >> 24)))
 #endif
 
+#endif

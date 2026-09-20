@@ -362,7 +362,7 @@ for anything more (there is no TLS or resolver cache).
   (syscalls 28-31), interleaved stereo 16-bit at 44.1 kHz. Both back ends
   drain it ahead of the MOD player, so a game is never heard over the music,
   and the module becomes audible again when the stream closes. This is what
-  [`apps/doom`](apps/doom) mixes its sound effects into. The HD Audio DMA
+  [`apps/doom`](apps/doom) mixes its sound effects *and* its OPL music into. The HD Audio DMA
   buffer was shortened from 186 ms to 46 ms for it (and is now polled every
   2 ms instead of 5), which is the difference between music and a game that
   hears its own gunfire on time.
@@ -539,12 +539,21 @@ pick a weapon, Esc is the menu. Quit from the menu and the desktop comes back.
   `snd_avail` reports, so the sample rate paces the mixer rather than the
   frame rate.
 
-**No music** — Doom's is MUS, which needs a synthesiser; vanilla had an OPL2
-chip and chocolate-doom carries a software one, and neither is here yet. No
-mouse either. [`test/doom-boot.sh`](test/doom-boot.sh) (`make qemu-doom`)
-drives the game headless in QEMU, screenshots each step, and for the `sound`
+* **Music.** Doom's is MUS, a packed MIDI, and what played it in 1993 was an
+  OPL2 chip. [`apps/doom/opl`](apps/doom/opl) carries chocolate-doom's
+  emulation of one — Nuked OPL3, the sequencer's callback queue, the MIDI
+  reader and `i_oplmusic.c`, unmodified — with a backend written for this
+  system in place of upstream's `opl.c` + `opl_sdl.c`. The interesting part
+  is the clock: upstream is a post-mix hook that SDL_mixer drives, whereas
+  here the game's mixer pulls, so **musical time advances only as samples are
+  consumed** and the score cannot drift away from the shots fired over it.
+  It is also all one thread, so the two mutexes upstream needs for SDL's
+  audio thread become nothing.
+
+No mouse. [`test/doom-boot.sh`](test/doom-boot.sh) (`make qemu-doom`) drives
+the game headless in QEMU, screenshots each step, and for the `sound`
 scenario records the codec to a WAV and reports what is in it. See
-[`apps/doom/PORTING.md`](apps/doom/PORTING.md) for the shim, the six engine
+[`apps/doom/PORTING.md`](apps/doom/PORTING.md) for the shim, the nine engine
 edits and the rest of the limitations.
 
 [doomgeneric]: https://github.com/ozkl/doomgeneric
