@@ -169,6 +169,64 @@ static int heap_grow(thread_t *t, page_dir_t *pdir, size_t need) {
     return 1;
 }
 
+/**
+ * @brief Try to satisfy a realloc without moving the block.
+ *
+ * The block keeps its address and grows into the free blocks that follow it,
+ * or gives back the tail when it shrinks. @return non-zero if it worked.
+ *
+ * This is not an optimisation. A caller that grows an array one element at a
+ * time -- which the MIDI reader in apps/doom does, once per event -- turns
+ * allocate-copy-free into a staircase of holes, each one element smaller
+ * than the block that would fit in it, because @ref ufree only coalesces
+ * forwards. Loading one Doom track that way asked for tens of megabytes and
+ * hit @ref PROC_HEAP_MAX. Growing in place costs nothing and the pattern
+ * becomes linear.
+ *
+ * Caller holds @c uheap_lock.
+ */
+static int urealloc_inplace(heap_info_t *hi, heap_header_t *h, size_t len) {
+    len = heap_align(len);
+    size_t was = h->size;
+
+    if (len > h->size) {
+        /* What would be there if the free blocks after this one were taken
+         * over? Measure first: a partial absorb that then fails would leave
+         * the list shorter for nothing. */
+        size_t avail = h->size;
+        int absorbed = 0;
+        heap_header_t *n = h->next;
+
+        while (n != 0 && n->magic == HEAP_MAGIC && n->is_free && avail < len) {
+            avail += sizeof(heap_header_t) + n->size;
+            absorbed++;
+            n = n->next;
+        }
+        if (avail < len)
+            return 0;
+
+        h->size = avail;
+        h->next = n;
+        hi->used -= (size_t) absorbed * sizeof(heap_header_t);
+    }
+
+    /* Hand back the tail, if what is left of it could hold a block. */
+    if (h->size >= len + sizeof(heap_header_t) + 4) {
+        heap_header_t *tail = (heap_header_t *)
+            ((uint8_t *) h + sizeof(heap_header_t) + len);
+        tail->magic   = HEAP_MAGIC;
+        tail->size    = h->size - len - sizeof(heap_header_t);
+        tail->is_free = 1;
+        tail->next    = h->next;
+        h->next  = tail;
+        h->size  = len;
+        hi->used += sizeof(heap_header_t);
+    }
+
+    hi->used += h->size - was;
+    return 1;
+}
+
 /*
  * A user process's heap free list is a shared mutable structure reached from
  * more than one kernel entry point: the process's own malloc/free/realloc
@@ -247,6 +305,13 @@ void *urealloc_sys(void *ptr, size_t nsize) {
     heap_header_t *h = (heap_header_t *) ((uint8_t *) ptr - sizeof(heap_header_t));
     if(h->magic != HEAP_MAGIC)
         return 0;
+
+    uint32_t f = spin_lock(&uheap_lock);
+    int grown = urealloc_inplace((heap_info_t *) cur->thread_list->heap, h, nsize);
+    spin_unlock(&uheap_lock, f);
+    if(grown)
+        return ptr;
+
     size_t old = h->size;
 
     void *np = umalloc_sys(nsize);
