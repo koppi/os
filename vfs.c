@@ -243,6 +243,19 @@ file *vfs_file_open_user(char *name, char *mode) {
 }
 
 /**
+ * @brief Is @p f's device id one this table can be indexed with?
+ *
+ * A `file` handle arrives here from ring 3 -- the fread syscall passes the
+ * pointer the program gave it straight through -- so its dev field is an
+ * untrusted integer, not a device. Indexing devs[] with it unchecked reads
+ * past the array and calls whatever function pointer is there. NFS handles
+ * (@ref NFS_DEV_ID) are routed out before this is reached.
+ */
+static int dev_ok(const file *f) {
+    return f && f->dev < MAX_DEVICES && devs[f->dev];
+}
+
+/**
  * @brief Read the next chunk of an open file.
  * @param f   Handle from @ref vfs_file_open.
  * @param str Destination buffer, sized by the caller from @c f->len.
@@ -252,7 +265,7 @@ void vfs_file_read(file *f, char *str) {
         nfs_vfs_read(f, str);
         return;
     }
-    if(f && devs[f->dev]) {
+    if(dev_ok(f)) {
         int s = fs_enter();
         devs[f->dev]->read(f, str);
         fs_leave(s);
@@ -269,7 +282,7 @@ void vfs_file_write(file *f, char *str) {
         nfs_vfs_write(f, str);
         return;
     }
-    if(f && devs[f->dev]) {
+    if(dev_ok(f)) {
         int s = fs_enter();
         devs[f->dev]->write(f, str);
         fs_leave(s);
@@ -340,7 +353,7 @@ void vfs_file_close(file *f) {
             kfree(f);
             return;
         }
-        if(devs[f->dev]) {
+        if(dev_ok(f)) {
             int s = fs_enter();
             devs[f->dev]->close(f);
             fs_leave(s);
@@ -356,7 +369,7 @@ void vfs_file_close(file *f) {
  */
 void vfs_file_close_user(file *f) {
     if(f) {
-        if(devs[f->dev]) {
+        if(dev_ok(f)) {
             int s = fs_enter();
             devs[f->dev]->close(f);
             fs_leave(s);

@@ -184,6 +184,13 @@ void print_dir(directory_t *dir) {
  */
 uint32_t get_phys_sector(file *f) {
     device_t *dev = get_dev_by_id(f->dev);
+    /* An unknown device id gives NULL here, and the dereference below
+     * would read a function pointer out of the real-mode interrupt
+     * vector table and call it. A `file` handle reaches this from ring 3
+     * (the fread syscall passes one straight through), so its dev field
+     * is not to be trusted. */
+    if(!dev)
+        return 0;
     return dev->minfo.first_data_sector +
            (f->current_cluster - 2) * dev->minfo.cluster_sectors;
 }
@@ -207,6 +214,13 @@ directory_t *fat_get_dir(file *f) {
     char *dos_file_name = kmalloc(NAME_LEN + 1);
     to_dos_file_name(f->name, dos_file_name);
     device_t *dev = get_dev_by_id(f->dev);
+    /* An unknown device id gives NULL here, and the dereference below
+     * would read a function pointer out of the real-mode interrupt
+     * vector table and call it. A `file` handle reaches this from ring 3
+     * (the fread syscall passes one straight through), so its dev field
+     * is not to be trusted. */
+    if(!dev)
+        return 0;
 
     for(uint32_t i = 0; i < dev->minfo.root_size; i++) {
         directory_t *dir = (directory_t *) dev->read(dev->minfo.root_offset + i);
@@ -240,6 +254,13 @@ int fat_touch(char *name) {
     char *dos_file_name = kmalloc(NAME_LEN + 1);
     to_dos_file_name(f.name, dos_file_name);
     device_t *dev = get_dev_by_id(f.dev);
+    /* An unknown device id gives NULL here, and the dereference below
+     * would read a function pointer out of the real-mode interrupt
+     * vector table and call it. A `file` handle reaches this from ring 3
+     * (the fread syscall passes one straight through), so its dev field
+     * is not to be trusted. */
+    if(!dev)
+        return 0;
     
     for(uint32_t i = 0; i < dev->minfo.root_size; i++) {
         directory_t *dir = (directory_t *) dev->read(dev->minfo.root_offset + i);
@@ -277,6 +298,13 @@ void fat_read(file *f, char *buf) {
         return;
     
     device_t *dev = get_dev_by_id(f->dev);
+    /* An unknown device id gives NULL here, and the dereference below
+     * would read a function pointer out of the real-mode interrupt
+     * vector table and call it. A `file` handle reaches this from ring 3
+     * (the fread syscall passes one straight through), so its dev field
+     * is not to be trusted. */
+    if(!dev)
+        return;
     unsigned char *sector = (unsigned char *) dev->read(get_phys_sector(f));
     memcpy(buf, sector, SECTOR_SIZE);
     
@@ -517,6 +545,13 @@ void fat_write_all(file *f, char *buf, uint32_t len) {
     if(!f)
         return;
     device_t *dev = get_dev_by_id(f->dev);
+    /* An unknown device id gives NULL here, and the dereference below
+     * would read a function pointer out of the real-mode interrupt
+     * vector table and call it. A `file` handle reaches this from ring 3
+     * (the fread syscall passes one straight through), so its dev field
+     * is not to be trusted. */
+    if(!dev)
+        return;
     if(!dev)
         return;
 
@@ -601,6 +636,13 @@ int fat_delete(char *name) {
     }
     
     device_t *dev = get_dev_by_id(f.dev);
+    /* An unknown device id gives NULL here, and the dereference below
+     * would read a function pointer out of the real-mode interrupt
+     * vector table and call it. A `file` handle reaches this from ring 3
+     * (the fread syscall passes one straight through), so its dev field
+     * is not to be trusted. */
+    if(!dev)
+        return 0;
     directory_t *dir = fat_get_dir(&f);
     if(dir) {
         memset(dir, 0, sizeof(directory_t));
@@ -738,10 +780,27 @@ file fat_search(char *name) {
             pathname[i] = name[i];
         }
         pathname[i] = 0;
+
+        /* "a//b" and a trailing slash both produce an empty component. Skip
+         * it the way every other filesystem does, rather than looking up ""
+         * and then descending through the miss. */
+        if(pathname[0] == 0) {
+            name = strchr(name, '/');
+            continue;
+        }
+
         if(root) {
             cur_dir = fat_directory(pathname, cur_dir.dev);
             root = 0;
         } else {
+            /* Only a directory can be descended into. Without this a missed
+             * component hands fat_open_subdir a handle whose fields are
+             * whatever was on the stack, and it reads a device id out of
+             * them. */
+            if(cur_dir.type != FS_DIR) {
+                cur_dir.type = FS_NULL;
+                return cur_dir;
+            }
             cur_dir = fat_open_subdir(cur_dir, pathname);
         }
         name = strchr(name, '/');
