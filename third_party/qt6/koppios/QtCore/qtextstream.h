@@ -1,0 +1,1 @@
+../../src/corelib/serialization/qtextstream.h

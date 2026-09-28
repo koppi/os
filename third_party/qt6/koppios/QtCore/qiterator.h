@@ -1,0 +1,1 @@
+../../src/corelib/tools/qiterator.h

@@ -1,0 +1,1 @@
+../../src/corelib/tools/qspan.h

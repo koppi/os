@@ -1,0 +1,1 @@
+../../src/corelib/text/qstringlist.h

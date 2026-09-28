@@ -9,6 +9,7 @@ all:
 	$(MAKE) -C hello-set
 	$(MAKE) -C hello-thread
 	$(MAKE) -C hello-pthread
+	$(MAKE) -C hello-qt
 	$(MAKE) -C example
 	$(MAKE) -C mem
 	$(MAKE) -C lua
@@ -28,6 +29,7 @@ clean:
 	$(MAKE) -C hello-set clean
 	$(MAKE) -C hello-thread clean
 	$(MAKE) -C hello-pthread clean
+	$(MAKE) -C hello-qt clean
 	$(MAKE) -C example clean
 	$(MAKE) -C mem clean
 	$(MAKE) -C lua clean

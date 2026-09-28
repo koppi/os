@@ -1,0 +1,1 @@
+../../src/corelib/text/qbytearray.h

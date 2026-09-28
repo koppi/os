@@ -583,8 +583,32 @@ for anything more (there is no TLS or resolver cache).
     through `pthread_mutex_t` specifically, a 5,000-item producer/consumer
     over a condition variable, and thread-local storage read back correctly
     by 4 separate threads. `PASS`, 5 separate runs.
+  * [`apps/hello-qt`](apps/hello-qt) — **real Qt6** (staged as `helloqt`):
+    genuine, vendored Qt 6.8.4 `QString` source (see
+    [`third_party/qt6`](../third_party/qt6)) — not a reimplementation —
+    built in Qt's own `QT_BOOTSTRAPPED` configuration (no `QObject`, no
+    threading yet) and linked against this kernel's own runtime/syscalls.
+    Only two real Qt files are patched at all, both changes marked inline:
+    one new OS-detection branch, and the feature-flag set every other
+    corelib header needed (found by grepping the source, not chased one
+    compile error at a time). `--gc-sections` drops what a `QString`-only
+    demo never calls (`QRegularExpression`, most of `QLocale`'s calendar
+    backends); what's left still needs real locale-aware number formatting
+    (`QLocaleData`), so `QCalendar`/`QDateTime`/`QTimeZone` come along too
+    — see `third_party/qt6/README.md` for why this footprint, not smaller.
+    Checks concatenation, `mid()`, `QString::number()`, `split()` and
+    `toUpper()` (real Unicode case-folding tables) against expected
+    output. One real, general-purpose bug surfaced getting this to fit:
+    the kernel's ELF loader stages a program into a **hard 1 MiB window**
+    (`elf.c`'s `MEMORY_LOAD_ADDRESS` .. `0x800000`) before mapping it —
+    the debug-info-laden first build (4.6 MiB) didn't just fail to load,
+    repeated attempts to load an oversized file leaked page-table blocks
+    until the kernel panicked (`page_table_malloc: OUT OF BLOCKS`). Not
+    fixed here (`-O0 -g` → `-Os`, stripped, brought it to 350 KiB instead,
+    comfortably under the window) — a real robustness gap for whoever
+    loads an oversized ELF next. `PASS`, 3 separate runs.
 
-  All eight C++ apps above were also verified under the default `-smp 4`
+  All nine C++ apps above were also verified under the default `-smp 4`
   boot (see **SMP / multi-core**): `cpus`/`ps` show them scheduled onto
   whichever core is free, same as any other process, with no regressions
   from the C++ runtime.

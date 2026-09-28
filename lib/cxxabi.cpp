@@ -170,4 +170,13 @@ void __glibcxx_assert_fail(const char *, int, const char *, const char *conditio
     halt(condition);
 }
 
+/* Reached if real C++ code (not ours -- everything here builds
+ * -fno-exceptions, so nothing we write can throw) calls std::terminate()
+ * directly, e.g. a third-party library's own explicit error path. Same
+ * halt()-and-hang treatment as everything else above: there is nothing to
+ * unwind to or report through. */
+void terminate() noexcept {
+    halt("terminate");
+}
+
 } // namespace std

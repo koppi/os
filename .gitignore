@@ -18,6 +18,7 @@ apps/hello-umap/helloump
 apps/hello-set/helloset
 apps/hello-thread/hellothr
 apps/hello-pthread/hellopth
+apps/hello-qt/helloqt
 apps/example/example
 apps/mem/mem
 apps/lua/lua

@@ -1,0 +1,1 @@
+../../src/corelib/global/qlogging.h

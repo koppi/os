@@ -1,0 +1,1 @@
+../../src/corelib/global/qtversion.h
