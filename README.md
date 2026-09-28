@@ -377,9 +377,15 @@ for anything more (there is no TLS or resolver cache).
 
 ### Userspace
 * Minimal C library in [`lib/`](lib) (`stdio`, `stdlib`, `string`, `unistd`,
-  `system_calls`); headers in [`include/lib/`](include/lib). Programs are
-  built position-dependent (`-fno-pic -fno-pie`): the `int 0x72` ABI passes the
-  first argument in `%ebx`, which PIC code reserves for the GOT.
+  `system_calls`, plus the C++ runtime described below); headers in
+  [`include/lib/`](include/lib), with `extern "C"` guards so C++ apps can
+  include them directly. Programs are built position-dependent
+  (`-fno-pic -fno-pie`): the `int 0x72` ABI passes the first argument in
+  `%ebx`, which PIC code reserves for the GOT. `memcpy` and `ptrdiff_t`
+  (in [`include/types.h`](include/types.h)) were made to actually match the
+  standard signature/width GCC assumes (returns `dest`; `__PTRDIFF_TYPE__`)
+  once libstdc++ headers started exposing the mismatch — harmless for the
+  existing C code (every call site already discarded the old `void` return).
 * Per-process user heap ([`heap.c`](heap.c)) backing the `malloc`/`free`/
   `realloc` syscalls: a first-fit free list that starts at 4 pages and
   [grows on demand](heap.c) (`heap_grow`) up to 64 MiB. Each process also gets
@@ -407,14 +413,28 @@ for anything more (there is no TLS or resolver cache).
   * [`apps/hello`](apps/hello) — prints a line via the `printf` syscall and
     returns
   * [`apps/hello-cpp`](apps/hello-cpp) — first C++ userspace app (staged as
-    `hellocpp`): g++ freestanding (`-fno-exceptions -fno-rtti`) against the
-    same C libc headers, with a from-scratch Itanium ABI shim
-    ([`cxxabi.cpp`](apps/hello-cpp/cxxabi.cpp) — `operator new`/`delete` over
-    `malloc`/`free`, `__cxa_pure_virtual`, guard functions) and a small entry
-    trampoline ([`cxx_start.c`](apps/hello-cpp/cxx_start.c)) that is this
-    app's actual ELF entry point instead of `main`, since global constructors
-    need `.init_array` walked before anything else runs. Exercises global
-    constructors, virtual dispatch and heap allocation through `new`/`delete`.
+    `hellocpp`): g++ against the same C libc headers, with a from-scratch
+    Itanium ABI shim ([`lib/cxxabi.cpp`](lib/cxxabi.cpp) — `operator
+    new`/`delete` over `malloc`/`free`, `__cxa_pure_virtual`, guard
+    functions) and a small entry trampoline
+    ([`lib/cxx_start.c`](lib/cxx_start.c)) that is this app's actual ELF
+    entry point instead of `main`, since global constructors need
+    `.init_array` walked before anything else runs. Both are shared with
+    every other C++ app. Exercises global constructors, virtual dispatch and
+    heap allocation through `new`/`delete`.
+  * [`apps/hello-stl`](apps/hello-stl) — first app to use the *real*
+    libstdc++ headers (staged as `hellostl`): `std::vector`, `std::sort`,
+    range-for, all against GCC's actual 32-bit `<vector>`/`<algorithm>`
+    (needs the `g++-multilib` host package for the i386 headers, and the
+    compile must **not** pass `-ffreestanding` — that sets
+    `_GLIBCXX_HOSTED=0`, which walls those headers off behind a `#error` in
+    `bits/requires_hosted.h`). There is still no compiled libstdc++.a, so
+    `lib/cxxabi.cpp` also supplies the full `std::__throw_*` error-path
+    shim (`bits/functexcept.h`) that the headers call instead of `throw`
+    under `-fno-exceptions`. `std::string` was not attempted — its char
+    specialization is `extern template`-instantiated into the real
+    libstdc++.a, which this target doesn't have, so it likely doesn't
+    link with header-only usage the way `vector`/`algorithm` do.
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — reads a number, a char and a string with
     `scanf` and echoes them back
@@ -691,7 +711,7 @@ hda.sh floppy.sh   scripts to (re)build the FAT images (initrd / hd / floppy)
 ### Prerequisites (Debian/Ubuntu)
 
 ```bash
-sudo apt -y install grub-common xorriso mtools gcc-multilib qemu-system-x86 grub-pc-bin
+sudo apt -y install grub-common xorriso mtools gcc-multilib g++-multilib qemu-system-x86 grub-pc-bin
 ```
 
 ### Build

@@ -28,7 +28,7 @@ void strncpy(char *str, char *format, size_t len);
 int strcmp(char *str1, char *str2);
 int strncmp(char *str1, char *str2, size_t len);
 void memset(void *start, uint32_t val, size_t len);
-void memcpy(void *dest, void *src, int size);
+void *memcpy(void *dest, const void *src, size_t size);
 void *memmove(void *dest, const void *src, size_t len);
 void itoa(int val, char *str, int base);
 int atoi(char *str);

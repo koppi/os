@@ -1,6 +1,7 @@
 /**
- * @file apps/hello-cpp/cxx_start.c
- * @brief Real ELF entry point for a C++ app.
+ * @file lib/cxx_start.c
+ * @brief Real ELF entry point for a C++ app. Shared by every C++ app; each
+ *        one's linker script must say `ENTRY(_start)` instead of `ENTRY(main)`.
  *
  * Plain C apps here are entered straight at `main` (see apps/hello/hello.lds):
  * the kernel pushes a return address pointing at end_process_return() onto

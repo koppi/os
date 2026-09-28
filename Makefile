@@ -16,6 +16,10 @@ SRCS = $(wildcard *.c *.S) $(wildcard lib/*.c)
 # ap_boot.S is a flat binary (AP trampoline), not an ELF asm object, so it is
 # excluded from the generic *.c/*.S rule and built via ap_boot_bin.o.
 SRCS := $(filter-out ap_boot.S,$(SRCS))
+# lib/cxx_start.c is a userspace-only ELF entry point for C++ apps (it calls
+# `main`, which the kernel has no symbol named); it belongs to lib/Makefile's
+# own build, not the kernel's.
+SRCS := $(filter-out lib/cxx_start.c,$(SRCS))
 AP_BOOT_BIN = ap_boot_bin.o
 OBJS = $(addsuffix .o,$(basename $(SRCS))) font.o $(AP_BOOT_BIN)
 KERNEL = kernel.elf

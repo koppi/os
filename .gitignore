@@ -11,6 +11,7 @@ initrd.img
 apps/01/01
 apps/hello/hello
 apps/hello-cpp/hellocpp
+apps/hello-stl/hellostl
 apps/example/example
 apps/mem/mem
 apps/lua/lua

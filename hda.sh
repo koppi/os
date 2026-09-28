@@ -34,6 +34,7 @@ mcopy -i "$IMG" -D o apps/zsh/zsh         ::zsh
 mcopy -i "$IMG" -D o apps/zsh/zshrc       ::zshrc
 mcopy -i "$IMG" -D o apps/hello/hello     ::hello
 mcopy -i "$IMG" -D o apps/hello-cpp/hellocpp ::hellocpp
+mcopy -i "$IMG" -D o apps/hello-stl/hellostl ::hellostl
 mcopy -i "$IMG" -D o apps/01/01           ::tst
 mcopy -i "$IMG" -D o apps/example/example ::example
 mcopy -i "$IMG" -D o apps/mem/mem         ::mem

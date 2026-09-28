@@ -21,7 +21,7 @@ typedef signed long long int64_t;
 
 typedef unsigned int size_t;
 
-typedef long int ptrdiff_t;
+typedef __PTRDIFF_TYPE__ ptrdiff_t;
 typedef __UINTPTR_TYPE__ uintptr_t;
 
 typedef int pid_t;
