@@ -449,6 +449,10 @@ for anything more (there is no TLS or resolver cache).
     custom libc's declarations of them, but different signatures, which is a
     hard conflict no include-path trick papers over. Output goes through
     `_write` (syscall 12, declared locally) instead, which doesn't collide.
+    All three C++ apps above were also verified under the default `-smp 4`
+    boot (see **SMP / multi-core**): `cpus`/`ps` show them scheduled onto
+    whichever core is free, same as any other process, with no regressions
+    from the C++ runtime.
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — reads a number, a char and a string with
     `scanf` and echoes them back
