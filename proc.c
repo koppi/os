@@ -45,10 +45,16 @@
  * stacks, heap, argv into the heap, then the initial frames onto the stacks.
  * Each needs the previous one's addresses.
  *
- * Failure is reported but not unwound — the page directory, the thread control
- * block and any frames already mapped are leaked. A process that fails to
- * start is rare and fatal to what asked for it, so nothing here tries to be
- * recoverable.
+ * Up through the ELF load, failure is unwound: @ref create_address_space and
+ * @ref load_elf are both routinely refused input a ring-3 process fully
+ * controls (an oversized or malformed executable), so a process that fails
+ * here is neither rare nor fatal to anything but this one `run` — leaking its
+ * page directory on every attempt would hand any unprivileged process a
+ * repeatable way to exhaust the page-table pool (@ref page_table_malloc) and
+ * panic the kernel. Past that point the remaining steps only fail on genuine
+ * resource exhaustion, so they keep the old leak-and-report behaviour: the
+ * page directory, the thread control block and any frames already mapped are
+ * abandoned rather than unwound.
  *
  * The error paths do not touch @ref sched_state. Nothing here ever closes the
  * preemption gate, so re-opening it on the way out would have handed the
@@ -69,19 +75,33 @@ static int start_proc_locked(char *name, char *arguments) {
     proc->pdir = create_address_space();
     if(!proc->pdir) {
         printf("Failed finding address space\n");
+        kfree(proc);
         return PROC_STOPPED;
     }
-    
+
     proc->thread_list = create_thread();
-    if(proc->thread_list == 0)
+    if(proc->thread_list == 0) {
+        delete_address_space(proc->pdir);
+        kfree(proc);
         return PROC_STOPPED;
+    }
     proc->thread_list->main = 1;
     proc->thread_list->parent = (void *) proc;
 
     if(!load_elf(name, proc->thread_list, proc->pdir)) {
+        // load_elf refuses plenty of attacker-controlled input (oversized or
+        // malformed executables) well before anything but the page directory
+        // itself is built, so undo exactly what got built: the one self-linked
+        // thread create_thread() made, and the address space create_address_space()
+        // cloned kernel slots into. Mirrors the teardown order remove_proc() uses
+        // once a process is further along.
+        kfree(proc->thread_list->fpu_state_raw);
+        kfree(proc->thread_list);
+        delete_address_space(proc->pdir);
+        kfree(proc);
         return PROC_STOPPED;
     }
-    
+
     if(!build_stack(proc->thread_list, proc->pdir, 0)) {
         printf("Failed allocating memory, error 1\n");
         return PROC_STOPPED;

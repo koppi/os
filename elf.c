@@ -99,6 +99,14 @@ int load_elf_file(char *name) {
         // past it rather than corrupting memory.
         if((uint32_t) (j * 512) >= (0x800000u - MEMORY_LOAD_ADDRESS)) {
             printf("elf: file too large for the load window\n");
+            // Undo the vmm_map() calls the loop below already made for this
+            // rejected file - same unmap load_elf() does after a successful
+            // load, just run here instead since we bail out before that point.
+            // Left unmapped, these pages (and the page tables backing them)
+            // are never freed: a process only has to `run` an oversized file a
+            // few times to exhaust the page-table pool and panic the kernel.
+            for(uint32_t p = 0; p < (uint32_t) file_size; p++)
+                vmm_unmap(get_kern_directory(), (uint32_t) MEMORY_LOAD_ADDRESS + (p * PAGE_SIZE));
             vfs_file_close(f);
             return 0;
         }
