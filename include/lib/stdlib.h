@@ -19,9 +19,17 @@
 
 #include "../types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void *malloc(size_t len);
 void free(void *ptr);
 void *realloc(void *ptr, size_t nsize);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 

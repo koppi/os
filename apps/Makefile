@@ -1,6 +1,7 @@
 all:
 	$(MAKE) -C 01
 	$(MAKE) -C hello
+	$(MAKE) -C hello-cpp
 	$(MAKE) -C example
 	$(MAKE) -C mem
 	$(MAKE) -C lua
@@ -12,6 +13,7 @@ all:
 clean:
 	$(MAKE) -C 01 clean
 	$(MAKE) -C hello clean
+	$(MAKE) -C hello-cpp clean
 	$(MAKE) -C example clean
 	$(MAKE) -C mem clean
 	$(MAKE) -C lua clean

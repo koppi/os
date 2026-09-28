@@ -406,6 +406,15 @@ for anything more (there is no TLS or resolver cache).
   disk images:
   * [`apps/hello`](apps/hello) — prints a line via the `printf` syscall and
     returns
+  * [`apps/hello-cpp`](apps/hello-cpp) — first C++ userspace app (staged as
+    `hellocpp`): g++ freestanding (`-fno-exceptions -fno-rtti`) against the
+    same C libc headers, with a from-scratch Itanium ABI shim
+    ([`cxxabi.cpp`](apps/hello-cpp/cxxabi.cpp) — `operator new`/`delete` over
+    `malloc`/`free`, `__cxa_pure_virtual`, guard functions) and a small entry
+    trampoline ([`cxx_start.c`](apps/hello-cpp/cxx_start.c)) that is this
+    app's actual ELF entry point instead of `main`, since global constructors
+    need `.init_array` walked before anything else runs. Exercises global
+    constructors, virtual dispatch and heap allocation through `new`/`delete`.
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — reads a number, a char and a string with
     `scanf` and echoes them back

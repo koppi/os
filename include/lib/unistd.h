@@ -19,6 +19,10 @@
 
 #include "../types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Unimplemented in the kernel: always returns -1. */
 pid_t fork();
 void exit(int code);
@@ -26,6 +30,10 @@ pid_t wait(int *x);
 //pid_t wait(pid_t proc, int *x, int code);
 pid_t getpid();
 pid_t getppid();
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 

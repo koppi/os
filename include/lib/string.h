@@ -19,6 +19,10 @@
 
 #include "../types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void strcpy(char *str, const char *format);
 void strncpy(char *str, char *format, size_t len);
 int strcmp(char *str1, char *str2);
@@ -37,5 +41,9 @@ char tolower(char c);
 int vsprintf(char *str, const char *format, va_list args);
 char *strchr(char *str, int c);
 char *strcat(char *dest, char *src);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

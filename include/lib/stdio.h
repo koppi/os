@@ -29,12 +29,20 @@ typedef struct {
     uint32_t type;
 } FILE;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void printf(char *buffer, ...);
 void scanf(char *format, ...);
 FILE *fopen(char *filename, char *mode);
 void fclose(FILE *f);
 size_t _write(const void *buf, size_t len);
 int fread(void *ptr, size_t size, FILE *f);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
 
