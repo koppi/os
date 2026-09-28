@@ -431,10 +431,24 @@ for anything more (there is no TLS or resolver cache).
     `bits/requires_hosted.h`). There is still no compiled libstdc++.a, so
     `lib/cxxabi.cpp` also supplies the full `std::__throw_*` error-path
     shim (`bits/functexcept.h`) that the headers call instead of `throw`
-    under `-fno-exceptions`. `std::string` was not attempted — its char
-    specialization is `extern template`-instantiated into the real
-    libstdc++.a, which this target doesn't have, so it likely doesn't
-    link with header-only usage the way `vector`/`algorithm` do.
+    under `-fno-exceptions`. `std::string` *does* link this way despite the
+    worry above — see `apps/hello-str`.
+  * [`apps/hello-str`](apps/hello-str) — `std::string` (staged as
+    `hellostr`): construction, `+`/`+=`, `substr`, `find`, comparison,
+    `std::to_string(int)`. Turned out to link fine header-only after all —
+    the `extern template`-instantiated-into-libstdc++.a worry in
+    `apps/hello-stl` above didn't bite for this usage. What *did* need
+    fixing: `memcmp`/`memchr` didn't exist in `lib/string.c` at all (needed
+    by `char_traits<char>::compare`/`find` — added, standard signatures, no
+    existing callers to break since they're new). And this app deliberately
+    does **not** include our own `<stdio.h>`: the real `<string>` pulls in
+    the real system `<cstdio>` internally (for `to_string(float)`/`(double)`,
+    which call the real `vsnprintf` — unavailable here, so avoid those two
+    overloads too), and that declares the actual libc `printf`/`FILE`/
+    `fopen`/`fclose`/`fread`/`scanf` — same global `extern "C"` names as our
+    custom libc's declarations of them, but different signatures, which is a
+    hard conflict no include-path trick papers over. Output goes through
+    `_write` (syscall 12, declared locally) instead, which doesn't collide.
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — reads a number, a char and a string with
     `scanf` and echoes them back

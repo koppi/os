@@ -56,6 +56,30 @@ void *memcpy(void *dest, const void *src, size_t size) {
     return dest;
 }
 
+int memcmp(const void *a, const void *b, size_t n) {
+    const unsigned char *p1 = a;
+    const unsigned char *p2 = b;
+    while (n--) {
+        if (*p1 != *p2) {
+            return (int) *p1 - (int) *p2;
+        }
+        p1++;
+        p2++;
+    }
+    return 0;
+}
+
+void *memchr(const void *s, int c, size_t n) {
+    const unsigned char *p = s;
+    while (n--) {
+        if (*p == (unsigned char) c) {
+            return (void *) p;
+        }
+        p++;
+    }
+    return 0;
+}
+
 void * memmove(void *dest, const void *src, size_t len) {
   char *d = dest;
   const char *s = src;

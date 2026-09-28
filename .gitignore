@@ -12,6 +12,7 @@ apps/01/01
 apps/hello/hello
 apps/hello-cpp/hellocpp
 apps/hello-stl/hellostl
+apps/hello-str/hellostr
 apps/example/example
 apps/mem/mem
 apps/lua/lua
