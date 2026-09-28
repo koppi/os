@@ -493,8 +493,19 @@ for anything more (there is no TLS or resolver cache).
     container, unlike `hello-map`, so this checks membership + a sum rather
     than sorted order), `find`/`count`, an explicit `reserve(10000)` to
     stress the policy directly, then a full drain. Also builds without
-    `-I.. -I../include`, same reason as `cxx_rbtree.cpp`. All five C++ apps
-    above were also verified under the default `-smp 4` boot (see **SMP /
+    `-I.. -I../include`, same reason as `cxx_rbtree.cpp`.
+  * [`apps/hello-set`](apps/hello-set) — `std::set` (staged as `helloset`):
+    the one entry in this list that needed **zero** new runtime code —
+    `std::set` is backed by the exact same `std::_Rb_tree` as `std::map`
+    (keyed on the value itself instead of a pair's first member), so it
+    links straight against the `lib/cxx_rbtree.cpp` functions
+    `apps/hello-map` already exercises. Confirms that shim is genuinely
+    general rather than accidentally `std::map`-shaped. Checks duplicate
+    inserts are dropped (a real behavioral check, not just tree shape),
+    sorted order, `find`/`count`, `lower_bound`/`upper_bound` (tree
+    traversal from an arbitrary, possibly-absent key, unlike a plain
+    `begin()`/`end()` walk), then a full drain. All six C++ apps above were
+    also verified under the default `-smp 4` boot (see **SMP /
     multi-core**): `cpus`/`ps` show them scheduled onto whichever core is
     free, same as any other process, with no regressions from the C++
     runtime.

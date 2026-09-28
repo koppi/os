@@ -6,6 +6,7 @@ all:
 	$(MAKE) -C hello-str
 	$(MAKE) -C hello-map
 	$(MAKE) -C hello-umap
+	$(MAKE) -C hello-set
 	$(MAKE) -C example
 	$(MAKE) -C mem
 	$(MAKE) -C lua
@@ -22,6 +23,7 @@ clean:
 	$(MAKE) -C hello-str clean
 	$(MAKE) -C hello-map clean
 	$(MAKE) -C hello-umap clean
+	$(MAKE) -C hello-set clean
 	$(MAKE) -C example clean
 	$(MAKE) -C mem clean
 	$(MAKE) -C lua clean
