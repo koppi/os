@@ -163,4 +163,11 @@ void __throw_bad_function_call() {
     halt("bad_function_call");
 }
 
+/* GCC 15's _GLIBCXX_ASSERTIONS hardening (on by default): a failed internal
+ * precondition check (e.g. map::erase on an invalid iterator) calls this
+ * instead of assert()/abort(), neither of which exist here either. */
+void __glibcxx_assert_fail(const char *, int, const char *, const char *condition) {
+    halt(condition);
+}
+
 } // namespace std

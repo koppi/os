@@ -4,6 +4,7 @@ all:
 	$(MAKE) -C hello-cpp
 	$(MAKE) -C hello-stl
 	$(MAKE) -C hello-str
+	$(MAKE) -C hello-map
 	$(MAKE) -C example
 	$(MAKE) -C mem
 	$(MAKE) -C lua
@@ -18,6 +19,7 @@ clean:
 	$(MAKE) -C hello-cpp clean
 	$(MAKE) -C hello-stl clean
 	$(MAKE) -C hello-str clean
+	$(MAKE) -C hello-map clean
 	$(MAKE) -C example clean
 	$(MAKE) -C mem clean
 	$(MAKE) -C lua clean

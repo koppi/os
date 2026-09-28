@@ -20,6 +20,15 @@ CXXFLAGS += -Werror -Wall -Wextra
 CXXFLAGS += -fno-exceptions -fno-rtti -fno-use-cxa-atexit -fno-threadsafe-statics
 CXXFLAGS += -fno-pic -fno-pie -fno-stack-protector
 
+# cxx_rbtree.cpp only needs <map> (for the real std::_Rb_tree_node_base
+# layout) -- no -I.. -I../include, since include/stddef.h (a kernel-internal
+# placeholder, unrelated to this) shadows the compiler's own <stddef.h> via
+# that search path and breaks max_align_t inside <bits/memory_resource.h>.
+CXXFLAGS_RBTREE = -m32 -c -std=gnu++20 -fno-builtin -nostdlib
+CXXFLAGS_RBTREE += -Werror -Wall -Wextra
+CXXFLAGS_RBTREE += -fno-exceptions -fno-rtti -fno-use-cxa-atexit -fno-threadsafe-statics
+CXXFLAGS_RBTREE += -fno-pic -fno-pie -fno-stack-protector
+
 all:
 	@$(CC) $(CFLAGS) unistd.c
 	@$(CC) $(CFLAGS) string.c
@@ -28,6 +37,7 @@ all:
 	@$(CC) $(CFLAGS) system_calls.c
 	@$(CC) $(CFLAGS) cxx_start.c
 	@$(CXX) $(CXXFLAGS) cxxabi.cpp
+	@$(CXX) $(CXXFLAGS_RBTREE) cxx_rbtree.cpp
 
 clean:
 	@rm -f *.o

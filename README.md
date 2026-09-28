@@ -449,10 +449,33 @@ for anything more (there is no TLS or resolver cache).
     custom libc's declarations of them, but different signatures, which is a
     hard conflict no include-path trick papers over. Output goes through
     `_write` (syscall 12, declared locally) instead, which doesn't collide.
-    All three C++ apps above were also verified under the default `-smp 4`
-    boot (see **SMP / multi-core**): `cpus`/`ps` show them scheduled onto
-    whichever core is free, same as any other process, with no regressions
-    from the C++ runtime.
+  * [`apps/hello-map`](apps/hello-map) — `std::map` (staged as `hellomap`):
+    a *self-checking* stress test rather than a plain demo, since it exposed
+    the one piece of `std::map`/`std::set` that genuinely isn't header-only —
+    `<bits/stl_tree.h>` declares four non-template functions
+    (`_Rb_tree_increment`/`_Rb_tree_decrement`/
+    `_Rb_tree_insert_and_rebalance`/`_Rb_tree_rebalance_for_erase`) whose
+    bodies normally live in libstdc++'s compiled `tree.cc`.
+    [`lib/cxx_rbtree.cpp`](lib/cxx_rbtree.cpp) reimplements the standard
+    red-black tree insert-fixup/delete-fixup/successor-predecessor
+    algorithms from scratch against the real, ABI-fixed
+    `std::_Rb_tree_node_base` layout (pulled in via `<map>`, not redeclared).
+    `lib/cxxabi.cpp` also gained `std::__glibcxx_assert_fail` — GCC 15 ships
+    `_GLIBCXX_ASSERTIONS` hardening on by default, and `map::erase` hits it.
+    The app inserts 40 keys ascending (the worst case for rotations), erases
+    a third of them (hitting leaf/one-child/two-child erase cases), then
+    verifies sorted order, values, iterator count, `find`/`count`, and a
+    full drain via repeated `begin()`-erase, printing `PASS`/`FAIL` rather
+    than trusting the output by eye. `lib/cxx_rbtree.cpp` builds **without**
+    `-I.. -I../include` (unlike the rest of `lib/`): those pull in
+    `include/stddef.h` (another kernel-internal placeholder, see
+    `apps/hello-str` above for the same class of problem with `stdio.h`)
+    ahead of the compiler's real one, breaking `max_align_t` inside
+    `<bits/memory_resource.h>` — this file only needs `<map>`, so it just
+    doesn't pass those flags. All four C++ apps above were also verified
+    under the default `-smp 4` boot (see **SMP / multi-core**): `cpus`/`ps`
+    show them scheduled onto whichever core is free, same as any other
+    process, with no regressions from the C++ runtime.
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — reads a number, a char and a string with
     `scanf` and echoes them back
