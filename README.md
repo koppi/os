@@ -472,10 +472,32 @@ for anything more (there is no TLS or resolver cache).
     `apps/hello-str` above for the same class of problem with `stdio.h`)
     ahead of the compiler's real one, breaking `max_align_t` inside
     `<bits/memory_resource.h>` — this file only needs `<map>`, so it just
-    doesn't pass those flags. All four C++ apps above were also verified
-    under the default `-smp 4` boot (see **SMP / multi-core**): `cpus`/`ps`
-    show them scheduled onto whichever core is free, same as any other
-    process, with no regressions from the C++ runtime.
+    doesn't pass those flags.
+  * [`apps/hello-umap`](apps/hello-umap) — `std::unordered_map` (staged as
+    `helloump` — FAT here is strict 8.3, no long-name support, so it's
+    truncated to fit like every other staged binary): another
+    self-checking stress test, same reasoning as `apps/hello-map`.
+    `_Hashtable` itself is header-only, but its default rehash policy,
+    `std::__detail::_Prime_rehash_policy`, leaves `_M_next_bkt`/
+    `_M_need_rehash` out-of-line — normally compiled into libstdc++'s
+    `hashtable_c++0x.cc`. [`lib/cxx_hashtable.cpp`](lib/cxx_hashtable.cpp)
+    implements them fresh: the header's own comment gives the whole contract
+    for `_M_next_bkt` ("a bucket size no smaller than n"), which does not
+    require matching GCC's actual (much larger, hand-tuned) prime table —
+    any bucket count keeps chaining correct, primality just keeps
+    `hash % bucket_count` from degenerating, so this finds the next prime by
+    plain trial division instead of transcribing a big literal table this
+    project has no way to verify against ground truth. 200 inserts (forcing
+    several rehashes past the default initial bucket count), staged erasure,
+    a value checksum (iteration order is unspecified for an unordered
+    container, unlike `hello-map`, so this checks membership + a sum rather
+    than sorted order), `find`/`count`, an explicit `reserve(10000)` to
+    stress the policy directly, then a full drain. Also builds without
+    `-I.. -I../include`, same reason as `cxx_rbtree.cpp`. All five C++ apps
+    above were also verified under the default `-smp 4` boot (see **SMP /
+    multi-core**): `cpus`/`ps` show them scheduled onto whichever core is
+    free, same as any other process, with no regressions from the C++
+    runtime.
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — reads a number, a char and a string with
     `scanf` and echoes them back

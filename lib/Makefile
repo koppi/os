@@ -20,14 +20,16 @@ CXXFLAGS += -Werror -Wall -Wextra
 CXXFLAGS += -fno-exceptions -fno-rtti -fno-use-cxa-atexit -fno-threadsafe-statics
 CXXFLAGS += -fno-pic -fno-pie -fno-stack-protector
 
-# cxx_rbtree.cpp only needs <map> (for the real std::_Rb_tree_node_base
-# layout) -- no -I.. -I../include, since include/stddef.h (a kernel-internal
-# placeholder, unrelated to this) shadows the compiler's own <stddef.h> via
-# that search path and breaks max_align_t inside <bits/memory_resource.h>.
-CXXFLAGS_RBTREE = -m32 -c -std=gnu++20 -fno-builtin -nostdlib
-CXXFLAGS_RBTREE += -Werror -Wall -Wextra
-CXXFLAGS_RBTREE += -fno-exceptions -fno-rtti -fno-use-cxa-atexit -fno-threadsafe-statics
-CXXFLAGS_RBTREE += -fno-pic -fno-pie -fno-stack-protector
+# cxx_rbtree.cpp / cxx_hashtable.cpp only need real libstdc++ headers
+# (<map> / <unordered_map>, for the real std::_Rb_tree_node_base /
+# std::__detail::_Prime_rehash_policy layouts) -- no -I.. -I../include,
+# since include/stddef.h (a kernel-internal placeholder, unrelated to
+# either) shadows the compiler's own <stddef.h> via that search path and
+# breaks max_align_t inside <bits/memory_resource.h>.
+CXXFLAGS_STLIMPL = -m32 -c -std=gnu++20 -fno-builtin -nostdlib
+CXXFLAGS_STLIMPL += -Werror -Wall -Wextra
+CXXFLAGS_STLIMPL += -fno-exceptions -fno-rtti -fno-use-cxa-atexit -fno-threadsafe-statics
+CXXFLAGS_STLIMPL += -fno-pic -fno-pie -fno-stack-protector
 
 all:
 	@$(CC) $(CFLAGS) unistd.c
@@ -37,7 +39,8 @@ all:
 	@$(CC) $(CFLAGS) system_calls.c
 	@$(CC) $(CFLAGS) cxx_start.c
 	@$(CXX) $(CXXFLAGS) cxxabi.cpp
-	@$(CXX) $(CXXFLAGS_RBTREE) cxx_rbtree.cpp
+	@$(CXX) $(CXXFLAGS_STLIMPL) cxx_rbtree.cpp
+	@$(CXX) $(CXXFLAGS_STLIMPL) cxx_hashtable.cpp
 
 clean:
 	@rm -f *.o
