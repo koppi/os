@@ -10,8 +10,8 @@
 #include <syscall.h>
 #include <idt.h>
 #include <exception.h>
-//#include <proc/proc.h>
-//#include <proc/thread.h>
+#include <proc.h>
+#include <sched.h>
 #include <printf.h>
 #include <kconsole.h>
 #include <keyboard.h>
@@ -25,7 +25,7 @@
 #include <io.h>
 
 /** One past the highest valid call number. */
-#define MAX_SYSCALL 32
+#define MAX_SYSCALL 35
 
 /** Set to 1 to log every syscall on the console (default 0: off). */
 #define SYSCALL_TRACE 0
@@ -244,6 +244,41 @@ static uint32_t sys_snd_avail(void) {
 }
 ///@}
 
+/**
+ * @name Userspace threading (#32..#34)
+ *
+ * A second (third, ...) thread inside the calling process, sharing its
+ * address space -- what `fork` (#3) was meant to be for a child process, but
+ * for siblings instead. See create_user_thread() (proc.c) for the frame/stack
+ * setup and sched_thread_alive() (sched.c) for how `thread_join` polls.
+ */
+///@{
+
+/** @brief `thread_create` (#32): start a thread at @p entry(@p arg) inside
+ *  the calling process. @return The new thread's id, or -1 on failure. */
+static uint32_t sys_thread_create(uint32_t entry, uint32_t arg) {
+    process_t *cur = current_user_proc();
+    if(!cur)
+        return (uint32_t) -1;
+    return (uint32_t) create_user_thread(cur, entry, arg);
+}
+
+/** @brief `thread_join` (#33): block until thread @p tid exits. Returns
+ *  immediately for an already-exited or unknown id. */
+static uint32_t sys_thread_join(uint32_t tid) {
+    while(sched_thread_alive((int) tid))
+        sched_yield();
+    return 0;
+}
+
+/** @brief `thread_yield` (#34): give up the rest of the calling thread's
+ *  quantum. */
+static uint32_t sys_thread_yield(void) {
+    sched_yield();
+    return 0;
+}
+///@}
+
 /** Call number → implementation. NULL entries are unimplemented. */
 static uintptr_t syscalls[] = {
     (uintptr_t) printf,              // printf   0
@@ -277,7 +312,10 @@ static uintptr_t syscalls[] = {
     (uintptr_t) sys_snd_open,        // snd_open    28  (PCM output, snd.c)
     (uintptr_t) sys_snd_close,       // snd_close   29
     (uintptr_t) sys_snd_write,       // snd_write   30
-    (uintptr_t) sys_snd_avail        // snd_avail   31
+    (uintptr_t) sys_snd_avail,       // snd_avail   31
+    (uintptr_t) sys_thread_create,   // thread_create 32
+    (uintptr_t) sys_thread_join,     // thread_join   33
+    (uintptr_t) sys_thread_yield     // thread_yield  34
 };
 
 /**

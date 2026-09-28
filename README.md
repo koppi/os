@@ -92,6 +92,40 @@ each is on.
   priority preempt within a tick. SMP-aware — see **SMP / multi-core** above.
 * Processes (flat binaries loaded from the filesystem) — [`proc.c`](proc.c)
 * Threads — [`thread.c`](thread.h)
+* **Userspace threading**: `thread_create`/`thread_join`/`thread_yield`
+  (syscalls 32-34, `create_user_thread()` in [`proc.c`](proc.c)) expose the
+  process/thread-ring split above to ring 3 — a process was already "an
+  address space plus a ring of threads" and the scheduler already
+  round-robins that ring, so a second thread just needed a frame built the
+  same way [`stack_fill()`](proc.c) builds the main thread's (matched
+  byte-for-byte against the real context-switch pop order in
+  [`smp_asm.S`](smp_asm.S), not the separate one-time boot path in
+  [`sched_run_thread()`](sched.c)) and splicing into the ring under
+  `sched_lock`. `build_stack()`/`build_heap()` were already
+  `nthreads`-parameterized for exactly this (every thread gets its own
+  stack *and* its own heap arena, offset by a fixed per-thread span so they
+  miss the image and each other) — nothing there had ever been exercised by
+  more than the one main thread until now. A new `process_t::thread_slots`
+  field hands out that offset monotonically, unlike the live `threads`
+  count, so a thread that exits and one created afterward never collide on
+  the same span. One real bug fixed along the way: `end_process_return()`
+  (the trampoline at `RETURN_ADDR` a thread's entry function returns
+  through, `main()` included) called syscall 5 (`return n` /
+  `end_process()`), which unconditionally tears down the *whole* process;
+  switched to syscall 4 (`exit` / `stop_thread()`), which already correctly
+  branches on whether the returning thread is the main one — behavior-
+  preserving for every existing single-threaded program, and now also
+  correct for a worker thread falling off the end of its function.
+  **Caveat**: `process_t::cpu` claims one CPU per *process*, not per thread
+  — sibling threads are preemptively interleaved on whichever core is
+  currently running that process, not truly parallel across cores, without
+  deeper scheduler surgery. A ring-3 mutex ([`lib/mutex.c`](lib/mutex.c),
+  the same `__sync_lock_test_and_set`/`__sync_lock_release` GCC builtins
+  `spinlock.c` uses — they compile to a plain unprivileged `xchg`, no
+  `cli`/`sti` needed, so they work unmodified outside ring 0) backs
+  [`apps/hello-thread`](apps/hello-thread): 4 threads each do 25,000
+  mutex-protected increments of a shared counter; joined, it must read
+  exactly 100,000 or the mutex is broken. `PASS`, 5 separate boot runs.
 * `int 0x72` syscall gate — [`syscall.c`](syscall.c). Implemented calls:
   `printf`, `gets`/`scanf`, `fork`, `exit`, process return, `fopen`, `fclose`,
   `malloc`, `free`, `realloc`, `write`, `fread`, `time`, `clock`, `spit`
@@ -402,9 +436,12 @@ for anything more (there is no TLS or resolver cache).
   whole screen and push indexed frames to it — see **Graphics / UI**),
   `getscan`(26, one raw key event, non-blocking), `msleep`(27), and
   `snd_open`(28)/`snd_close`(29)/`snd_write`(30)/`snd_avail`(31) (stream PCM
-  to the sound card — see **Audio**) — see [`syscall.c`](syscall.c).
-  `write_file()` in [`lib/`](lib) wraps #16; 17-21 back
-  [`apps/zsh`](apps/zsh) and 22-31 back [`apps/doom`](apps/doom).
+  to the sound card — see **Audio**), and `thread_create`(32)/`thread_join`(33)/
+  `thread_yield`(34) (a second, third, ... thread inside the calling process,
+  sharing its address space — see **Userspace threading**) — see
+  [`syscall.c`](syscall.c). `write_file()` in [`lib/`](lib) wraps #16; 17-21
+  back [`apps/zsh`](apps/zsh), 22-31 back [`apps/doom`](apps/doom), and 32-34
+  back [`apps/hello-thread`](apps/hello-thread).
 * The ELF loader ([`elf.c`](elf.c)) maps every page of a `PT_LOAD` segment to
   its own frame and covers the `.bss` tail, so multi-page ring-3 binaries load.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
@@ -504,11 +541,20 @@ for anything more (there is no TLS or resolver cache).
     inserts are dropped (a real behavioral check, not just tree shape),
     sorted order, `find`/`count`, `lower_bound`/`upper_bound` (tree
     traversal from an arbitrary, possibly-absent key, unlike a plain
-    `begin()`/`end()` walk), then a full drain. All six C++ apps above were
-    also verified under the default `-smp 4` boot (see **SMP /
-    multi-core**): `cpus`/`ps` show them scheduled onto whichever core is
-    free, same as any other process, with no regressions from the C++
-    runtime.
+    `begin()`/`end()` walk), then a full drain.
+  * [`apps/hello-thread`](apps/hello-thread) — the first app to use
+    **userspace threading** (staged as `hellothr`; see **Scheduling &
+    processes** above for `thread_create`/`thread_join`/the ring-3 mutex):
+    4 threads each do 25,000 `mutex_lock`/`mutex_unlock`-guarded increments
+    of one shared counter, joined, must total exactly 100,000. A broken
+    mutex or a bug in the new scheduler-ring splice would show up as an
+    occasionally-wrong number, not a crash, so this checks the number
+    rather than trusting a clean exit. `PASS`, 5 separate runs.
+
+  All seven C++ apps above were also verified under the default `-smp 4`
+  boot (see **SMP / multi-core**): `cpus`/`ps` show them scheduled onto
+  whichever core is free, same as any other process, with no regressions
+  from the C++ runtime.
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — reads a number, a char and a string with
     `scanf` and echoes them back

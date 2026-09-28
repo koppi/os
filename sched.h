@@ -116,6 +116,13 @@ int sched_set_policy(int pid, int policy);
  * @return 0 on success, -1 if no such thread.
  */
 int sched_set_weight(int pid, int weight);
+/**
+ * @brief Is thread @p pid still in the run queue?
+ * @return Non-zero if found (anywhere, not just as a ring head), 0 if it has
+ *         already exited and unlinked itself (see stop_thread()) or never
+ *         existed. The poll primitive behind `thread_join`.
+ */
+int sched_thread_alive(int pid);
 /** @brief Insert @p proc into the scheduler ring. */
 void sched_add_proc(process_t *proc);
 /** @brief Unlink the process owning thread id @p id from the ring. */

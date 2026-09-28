@@ -755,6 +755,14 @@ int sched_set_weight(int pid, int weight) {
     return t != 0 ? 0 : -1;
 }
 
+/** @brief Is thread @p pid still in the run queue? See sched.h. */
+int sched_thread_alive(int pid) {
+    uint32_t f = spin_lock(&sched_lock);
+    thread_t *t = thread_by_id_locked(pid);
+    spin_unlock(&sched_lock, f);
+    return t != 0;
+}
+
 /** @brief How many processes are in the run queue.
  *  @return The count, read without the lock — a snapshot, not a reservation. */
 int get_nproc() {

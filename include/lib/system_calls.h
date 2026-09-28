@@ -27,6 +27,9 @@ void end_process_return();
 void *syscall_call(int n);
 unsigned syscall3(int n, unsigned a, unsigned b, unsigned c);
 int write_file(const char *path, const void *buf, unsigned len);
+int thread_create(void *entry, void *arg);
+int thread_join(int tid);
+void thread_yield(void);
 
 #ifdef __cplusplus
 }

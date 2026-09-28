@@ -68,6 +68,10 @@ typedef struct proc {
     int state;                /**< @c PROC_NEW / @c PROC_ACTIVE / @c PROC_STOPPED. */
     page_dir_t *pdir;         /**< Page directory. */
     int threads;              /**< Thread count. */
+    int thread_slots;         /**< Next unused build_stack()/build_heap() nthreads
+                                    index; monotonic, unlike @c threads, so a
+                                    thread that exits and one created after it
+                                    never share a virtual-address span. */
     thread_t *thread_list;    /**< Current thread (head of the ring). */
     int cpu;                  /**< CPU index running this process now, -1 if none (SMP). */
     uint32_t last_ran;        /**< pit_ms() when last scheduled (round-robin tiebreak). */
@@ -88,6 +92,10 @@ int heap_fill(thread_t *thread, char *name, char *arguments, uint32_t *argc, uin
 int stack_fill(thread_t *thread, uint32_t argc, uint32_t argv);
 /** @brief Map @p thread's 4-page user heap and initialise it. */
 int build_heap(thread_t *thread, page_dir_t *pdir, int nthreads);
+/** @brief `thread_create` syscall backend: start a new thread inside @p proc,
+ *  sharing its address space, at @p entry with one argument @p arg.
+ *  @return The new thread's pid, or -1 on failure. */
+int create_user_thread(process_t *proc, uint32_t entry, uint32_t arg);
 /** @brief `exit`/return handler: mark the current process stopped. */
 void end_proc(int ret);
 /** @brief Free a stopped process's address space and control block. */

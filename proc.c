@@ -103,9 +103,10 @@ static int start_proc_locked(char *name, char *arguments) {
         printf("Failed allocating memory, error 4\n");
         return PROC_STOPPED;
     }
-    
+
     proc->threads = 1;
-    
+    proc->thread_slots = 1;   /* slot 0 is this main thread */
+
     proc->thread_list->state = PROC_ACTIVE;
     proc->state = PROC_ACTIVE;
 
@@ -232,6 +233,112 @@ int build_heap(thread_t *thread, page_dir_t *pdir, int nthreads) {
     heap_init((vmm_addr_t *) heap, PROC_HEAP_PAGES * PAGE_SIZE);
 
     return 1;
+}
+
+/**
+ * @brief Lay out a new thread's initial user stack (one argument, no
+ *        argc/argv) and the kernel-stack iret frame that enters it.
+ *
+ * The @ref stack_fill equivalent for a thread that is not a process's main
+ * thread: same frame shape, but the user stack only needs a return address
+ * and a single @c void* argument, matching a `void *(*)(void *)` entry point.
+ */
+static int thread_entry_fill(thread_t *thread, uint32_t arg) {
+    uint32_t *stackp = (uint32_t *) thread->stack_limit;
+    *--stackp = arg;
+    *--stackp = (uint32_t) RETURN_ADDR;
+    thread->esp = (uint32_t) stackp;
+
+    stackp = (uint32_t *) thread->stack_kernel_limit;
+    *--stackp = 0x23;                                       // ss
+    *--stackp = thread->esp;                                // esp
+    *--stackp = 0x202;                                       // eflags
+    *--stackp = 0x1B;                                       // cs
+    *--stackp = thread->eip;                                // eip
+    *--stackp = 0;                                           // eax
+    *--stackp = 0;                                           // ebx
+    *--stackp = 0;                                           // ecx
+    *--stackp = 0;                                           // edx
+    *--stackp = 0;                                           // esi
+    *--stackp = 0;                                           // edi
+    *--stackp = thread->stack_limit;                        // ebp
+    *--stackp = 0x23;                                       // ds
+    *--stackp = 0x23;                                       // es
+    *--stackp = 0x23;                                       // fs
+    *--stackp = 0x23;                                       // gs
+    thread->esp_kernel = (uint32_t) stackp;
+
+    /* Drop the kernel-directory aliases map_user_range() left behind, same
+     * as stack_fill()'s tail. */
+    vmm_addr_t ustk = thread->stack_limit - PROC_USER_STACK_PAGES * PAGE_SIZE;
+    vmm_addr_t kstk = thread->stack_kernel_limit - PROC_KERNEL_STACK_PAGES * PAGE_SIZE;
+    for(int p = 0; p < PROC_USER_STACK_PAGES; p++)
+        vmm_unmap_phys(get_kern_directory(), ustk + (uint32_t) p * PAGE_SIZE);
+    for(int p = 0; p < PROC_KERNEL_STACK_PAGES; p++)
+        vmm_unmap_phys(get_kern_directory(), kstk + (uint32_t) p * PAGE_SIZE);
+
+    return 1;
+}
+
+/**
+ * @brief `thread_create` syscall backend.
+ *
+ * Mirrors start_proc_locked()'s dependency order (stack, then heap, then the
+ * entry frame) for a sibling thread instead of a new process: same @c pdir
+ * as every other thread of @p proc, offset to its own stack/heap span by
+ * @c thread_slots (see proc.h -- monotonic, unlike @c threads, so a thread
+ * that already exited and one created afterward never collide on the same
+ * virtual-address span).
+ *
+ * Failure is reported but not unwound past freeing the two kmalloc'd blocks:
+ * consistent with start_proc_locked()'s "rare and fatal to what asked for
+ * it" stance on partial-mapping failures, thread creation is not expected to
+ * routinely fail and this is not the one true place worth the complexity of
+ * unwinding a partial page-table build.
+ */
+int create_user_thread(process_t *proc, uint32_t entry, uint32_t arg) {
+    thread_t *main_thread = proc->thread_list;
+
+    thread_t *thread = create_thread();
+    if(thread == 0)
+        return -1;
+
+    thread->parent = (void *) proc;
+    thread->image_base = main_thread->image_base;
+    thread->image_size = main_thread->image_size;
+    thread->eip = entry;
+
+    int slot = proc->thread_slots++;
+
+    if(!build_stack(thread, proc->pdir, slot) || !build_heap(thread, proc->pdir, slot)) {
+        kfree(thread->fpu_state_raw);
+        kfree(thread);
+        return -1;
+    }
+
+    /* build_heap() seeds the heap allocator through a kernel-directory alias,
+     * same as the main thread's; drop it the way heap_fill() does there. This
+     * thread has no argv to seed, so that is the only cleanup left. */
+    for(int i = 0; i < PROC_HEAP_PAGES; i++)
+        vmm_unmap_phys(get_kern_directory(), thread->heap + (uint32_t) i * PAGE_SIZE);
+
+    if(!thread_entry_fill(thread, arg)) {
+        kfree(thread->fpu_state_raw);
+        kfree(thread);
+        return -1;
+    }
+
+    thread->state = PROC_ACTIVE;
+
+    uint32_t sf = spin_lock(&sched_lock);
+    thread->next = proc->thread_list;
+    thread->prec = proc->thread_list->prec;
+    proc->thread_list->prec->next = thread;
+    proc->thread_list->prec = thread;
+    proc->threads++;
+    spin_unlock(&sched_lock, sf);
+
+    return thread->pid;
 }
 
 /** Most arguments a process can be given, argv[0] included. */
@@ -563,8 +670,9 @@ int start_kernel_proc(char *name, void (*thread)(void)) {
     *--stackp = 0x10;                     // fs
     *--stackp = 0x10;                     // gs
     proc->thread_list->esp_kernel = (uint32_t) stackp;
-    
+
     proc->threads = 1;
+    proc->thread_slots = 1;
     proc->thread_list->state = PROC_ACTIVE;
     proc->state = PROC_ACTIVE;
 
