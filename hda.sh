@@ -40,6 +40,7 @@ mcopy -i "$IMG" -D o apps/hello-map/hellomap ::hellomap
 mcopy -i "$IMG" -D o apps/hello-umap/helloump ::helloump
 mcopy -i "$IMG" -D o apps/hello-set/helloset ::helloset
 mcopy -i "$IMG" -D o apps/hello-thread/hellothr ::hellothr
+mcopy -i "$IMG" -D o apps/hello-pthread/hellopth ::hellopth
 mcopy -i "$IMG" -D o apps/01/01           ::tst
 mcopy -i "$IMG" -D o apps/example/example ::example
 mcopy -i "$IMG" -D o apps/mem/mem         ::mem

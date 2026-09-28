@@ -68,3 +68,8 @@ int thread_join(int tid) {
 void thread_yield(void) {
     syscall3(34, 0, 0, 0);
 }
+
+/* The calling thread's own id (syscall 35). */
+int thread_self(void) {
+    return (int) syscall3(35, 0, 0, 0);
+}

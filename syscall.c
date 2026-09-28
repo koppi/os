@@ -25,7 +25,7 @@
 #include <io.h>
 
 /** One past the highest valid call number. */
-#define MAX_SYSCALL 35
+#define MAX_SYSCALL 36
 
 /** Set to 1 to log every syscall on the console (default 0: off). */
 #define SYSCALL_TRACE 0
@@ -277,6 +277,15 @@ static uint32_t sys_thread_yield(void) {
     sched_yield();
     return 0;
 }
+
+/** @brief `thread_self` (#35): the calling thread's own id (as opposed to
+ *  `getpid`-style process id, which nothing in this kernel implements). */
+static uint32_t sys_thread_self(void) {
+    process_t *cur = current_user_proc();
+    if(!cur)
+        return (uint32_t) -1;
+    return (uint32_t) cur->thread_list->pid;
+}
 ///@}
 
 /** Call number → implementation. NULL entries are unimplemented. */
@@ -315,7 +324,8 @@ static uintptr_t syscalls[] = {
     (uintptr_t) sys_snd_avail,       // snd_avail   31
     (uintptr_t) sys_thread_create,   // thread_create 32
     (uintptr_t) sys_thread_join,     // thread_join   33
-    (uintptr_t) sys_thread_yield     // thread_yield  34
+    (uintptr_t) sys_thread_yield,    // thread_yield  34
+    (uintptr_t) sys_thread_self      // thread_self   35
 };
 
 /**

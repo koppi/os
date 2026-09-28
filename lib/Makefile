@@ -38,6 +38,7 @@ all:
 	@$(CC) $(CFLAGS) stdlib.c
 	@$(CC) $(CFLAGS) system_calls.c
 	@$(CC) $(CFLAGS) mutex.c
+	@$(CC) $(CFLAGS) pthread.c
 	@$(CC) $(CFLAGS) cxx_start.c
 	@$(CXX) $(CXXFLAGS) cxxabi.cpp
 	@$(CXX) $(CXXFLAGS_STLIMPL) cxx_rbtree.cpp

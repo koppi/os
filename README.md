@@ -126,6 +126,32 @@ each is on.
   [`apps/hello-thread`](apps/hello-thread): 4 threads each do 25,000
   mutex-protected increments of a shared counter; joined, it must read
   exactly 100,000 or the mutex is broken. `PASS`, 5 separate boot runs.
+* **A pthread-shaped API** ([`lib/pthread.h`](include/lib/pthread.h) /
+  [`lib/pthread.c`](lib/pthread.c)) over the same syscalls and mutex
+  primitive — `pthread_create`/`join`/`self`/`equal`, mutexes, condition
+  variables (including `pthread_cond_timedwait`, at whole-second resolution
+  — this kernel's `time()` syscall has no finer clock), and
+  `pthread_key_t`-based thread-local storage (a small fixed `(tid, key)`
+  table, linear-searched rather than modulo-indexed since thread ids come
+  from one global counter shared by every process and are never reused —
+  a hashed table could alias two live, unrelated threads onto the same
+  slot). Not a glibc-ABI-compatible pthread: real Qt6 source uses these
+  types entirely through the public API, never by touching their internals,
+  so only the type names, signatures and observable behavior need to match,
+  not the struct layout. Deliberately simplified where honest rather than
+  silently incomplete: every `pthread_attr_t`/scheduling setter is an
+  accepted no-op (nothing to plumb them into — this kernel's own scheduling
+  knobs, `sched_set_priority`/`policy`/`weight`, are not syscall-exposed
+  yet), `pthread_cancel` is cooperative/deferred only (a flag a thread must
+  itself observe via `pthread_testcancel`, matching how `QThread::terminate()`
+  is documented as unsafe/best-effort in real Qt too — not POSIX's async
+  cancellation), and a joined thread's `pthread_exit` value never actually
+  reaches the joiner (`thread_join` has no return-value channel — always
+  `NULL`). [`apps/hello-pthread`](apps/hello-pthread) covers what
+  `apps/hello-thread` didn't: the mutex re-run through the wrapper
+  specifically, a 5,000-item producer/consumer over a condition variable
+  (proves no lost wakeup and no hang), and TLS correctness across 4 threads
+  (each must read back only its own value). `PASS`, 5 separate boot runs.
 * `int 0x72` syscall gate — [`syscall.c`](syscall.c). Implemented calls:
   `printf`, `gets`/`scanf`, `fork`, `exit`, process return, `fopen`, `fclose`,
   `malloc`, `free`, `realloc`, `write`, `fread`, `time`, `clock`, `spit`
@@ -437,11 +463,12 @@ for anything more (there is no TLS or resolver cache).
   `getscan`(26, one raw key event, non-blocking), `msleep`(27), and
   `snd_open`(28)/`snd_close`(29)/`snd_write`(30)/`snd_avail`(31) (stream PCM
   to the sound card — see **Audio**), and `thread_create`(32)/`thread_join`(33)/
-  `thread_yield`(34) (a second, third, ... thread inside the calling process,
-  sharing its address space — see **Userspace threading**) — see
-  [`syscall.c`](syscall.c). `write_file()` in [`lib/`](lib) wraps #16; 17-21
-  back [`apps/zsh`](apps/zsh), 22-31 back [`apps/doom`](apps/doom), and 32-34
-  back [`apps/hello-thread`](apps/hello-thread).
+  `thread_yield`(34)/`thread_self`(35) (a second, third, ... thread inside the
+  calling process, sharing its address space — see **Userspace threading**) —
+  see [`syscall.c`](syscall.c). `write_file()` in [`lib/`](lib) wraps #16;
+  17-21 back [`apps/zsh`](apps/zsh), 22-31 back [`apps/doom`](apps/doom), and
+  32-35 back [`apps/hello-thread`](apps/hello-thread) /
+  [`apps/hello-pthread`](apps/hello-pthread).
 * The ELF loader ([`elf.c`](elf.c)) maps every page of a `PT_LOAD` segment to
   its own frame and covers the `.bss` tail, so multi-page ring-3 binaries load.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
@@ -550,8 +577,14 @@ for anything more (there is no TLS or resolver cache).
     mutex or a bug in the new scheduler-ring splice would show up as an
     occasionally-wrong number, not a crash, so this checks the number
     rather than trusting a clean exit. `PASS`, 5 separate runs.
+  * [`apps/hello-pthread`](apps/hello-pthread) — the pthread-shaped API
+    (staged as `hellopth`; see **Scheduling & processes** above for
+    `lib/pthread.c`): covers what `hello-thread` didn't — the mutex again,
+    through `pthread_mutex_t` specifically, a 5,000-item producer/consumer
+    over a condition variable, and thread-local storage read back correctly
+    by 4 separate threads. `PASS`, 5 separate runs.
 
-  All seven C++ apps above were also verified under the default `-smp 4`
+  All eight C++ apps above were also verified under the default `-smp 4`
   boot (see **SMP / multi-core**): `cpus`/`ps` show them scheduled onto
   whichever core is free, same as any other process, with no regressions
   from the C++ runtime.

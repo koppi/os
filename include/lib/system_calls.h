@@ -30,6 +30,7 @@ int write_file(const char *path, const void *buf, unsigned len);
 int thread_create(void *entry, void *arg);
 int thread_join(int tid);
 void thread_yield(void);
+int thread_self(void);
 
 #ifdef __cplusplus
 }
