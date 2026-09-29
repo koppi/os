@@ -50,7 +50,20 @@
               - Q_OS_FREEBSD_KERNEL is always defined on FreeBSD, even if the userland is from GNU
 */
 
-#if defined(__APPLE__) && (defined(__GNUC__) || defined(__xlC__) || defined(__xlc__))
+#if defined(__KOPPIOS__)
+   /* --- koppios addition, not upstream Qt: koppi's hobby OS
+    * (https://github.com/koppi/os), a freestanding i386 kernel with its own
+    * syscall ABI, not a real Unix -- falls through to the generic
+    * Q_OS_UNIX branch below (deliberately no Q_OS_LINUX: no epoll, no
+    * /proc, no real Linux syscalls beneath this, just a from-scratch
+    * pthread-shaped shim -- see lib/pthread.c in that tree). Checked FIRST,
+    * ahead of every real-OS #elif below: this is compiled with the host's
+    * own g++, which predefines __linux__ (and, on other hosts, __APPLE__/
+    * _WIN32/...) regardless of what target this file is actually building
+    * for, so any real-OS check below would otherwise win first and this
+    * branch would never be reached at all. --- */
+#  define Q_OS_KOPPIOS
+#elif defined(__APPLE__) && (defined(__GNUC__) || defined(__xlC__) || defined(__xlc__))
 #  include <TargetConditionals.h>
 #  define Q_OS_APPLE
 #  if defined(TARGET_OS_MAC) && TARGET_OS_MAC
@@ -129,14 +142,6 @@
 #  define Q_OS_VXWORKS
 #elif defined(__HAIKU__)
 #  define Q_OS_HAIKU
-#elif defined(__KOPPIOS__)
-   /* --- koppios addition, not upstream Qt: koppi's hobby OS
-    * (https://github.com/koppi/os), a freestanding i386 kernel with its own
-    * syscall ABI, not a real Unix -- falls through to the generic
-    * Q_OS_UNIX branch below (deliberately no Q_OS_LINUX: no epoll, no
-    * /proc, no real Linux syscalls beneath this, just a from-scratch
-    * pthread-shaped shim -- see lib/pthread.c in that tree). --- */
-#  define Q_OS_KOPPIOS
 #elif defined(__MAKEDEPEND__)
 #else
 #  error "Qt has not been ported to this OS - see http://www.qt-project.org/"

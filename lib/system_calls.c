@@ -7,8 +7,21 @@ void system(char *arg) {
     }
 }
 
+/*
+ * Syscall 8 ("PWD") was never wired up in the kernel's dispatch table --
+ * it's a NULL entry, left behind once the real implementation moved to
+ * syscall 19 (getcwd(buf, n), used directly by apps/zsh) without this
+ * wrapper being updated to match. Calling it landed on a null function
+ * pointer -- invisible until fopen()'s own use of pwd() (to turn a
+ * relative path into an absolute one) was finally exercised by a caller
+ * that actually opens a file the kernel hasn't already touched, which is
+ * what surfaced this: Qt's font loader opening the font file to render
+ * real glyphs. Route through the real, working getcwd syscall instead.
+ */
 char *pwd() {
-    return (char *) syscall_call(8);
+    static char buf[256];
+    syscall3(19, (unsigned) buf, sizeof buf, 0);
+    return buf;
 }
 
 /*

@@ -20,6 +20,19 @@ SRCS := $(filter-out ap_boot.S,$(SRCS))
 # `main`, which the kernel has no symbol named); it belongs to lib/Makefile's
 # own build, not the kernel's.
 SRCS := $(filter-out lib/cxx_start.c,$(SRCS))
+# lib/pthread_glibc.c is a userspace-only pthread implementation built
+# against the real system <pthread.h>/<sched.h> (for Qt/libstdc++ ABI
+# compatibility -- see its own file comment); <sched.h> collides head-on
+# with this kernel's own top-level sched.h (the in-kernel scheduler) once
+# both are reachable via the same -I., so it is compiled by its own app's
+# Makefile with a narrower include path instead of the kernel's.
+SRCS := $(filter-out lib/pthread_glibc.c,$(SRCS))
+# lib/libc_ext.c is a userspace-only libc extension (real glibc-shaped
+# semaphore/setjmp/time/etc. surface for the real Qt6 graphical closure)
+# built against real system <semaphore.h>/<setjmp.h>/<time.h> and
+# lib/pthread_glibc.c's own clock_gettime()/__errno_location() -- same
+# reasoning and same exclusion as lib/pthread_glibc.c above.
+SRCS := $(filter-out lib/libc_ext.c,$(SRCS))
 AP_BOOT_BIN = ap_boot_bin.o
 OBJS = $(addsuffix .o,$(basename $(SRCS))) font.o $(AP_BOOT_BIN)
 KERNEL = kernel.elf

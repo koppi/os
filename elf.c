@@ -11,7 +11,36 @@
 #include <elf.h>
 #include <printf.h>
 
-#define MEMORY_LOAD_ADDRESS 0x700000
+/**
+ * The ELF staging window: the kernel directory own scratch area for the
+ * raw file bytes, read here before load_elf_relocate() copies each PT_LOAD
+ * segment to its real, linked virtual address (every app own link.lds
+ * uses `. = 8M`, i.e. KERNEL_SPACE_END -- see mm.h). This window used to be
+ * [0x700000, 0x800000) (1 MiB, ending exactly at KERNEL_SPACE_END), which
+ * was enough for every app until a full real Qt6 + FreeType + HarfBuzz +
+ * PCRE2 graphical closure needed staging room two orders of magnitude
+ * bigger than anything before it.
+ *
+ * vmm_map() (used below) allocates a fresh physical frame from the general
+ * pool for each staged page -- it is not an identity mapping, so this
+ * window location is not tied to any specific physical memory the way
+ * the KERNEL_SPACE_END low region is. It only needs to be a virtual
+ * range the kernel directory itself never uses for anything else, since
+ * every kernel *thread* (not user process -- those get their own, separate
+ * page directory) runs on that same shared directory (see the sched.c and
+ * proc.c comments on why their stacks were relocated away from
+ * KERNEL_SPACE_END for exactly this reason).
+ *
+ * [72 MiB, 96 MiB) is genuinely free for this: the mm.h comment already
+ * documents the per-process ceiling (image at 8 MiB plus PROC_HEAP_MAX,
+ * 64 MiB = 72 MiB) and where the kernel heap starts (KHEAP_BASE, 96 MiB)
+ * as the two numbers either side of this gap, and neither a user process
+ * own heap (a different page directory entirely) nor the kernel heap
+ * itself ever maps anything here. 24 MiB of real headroom, not just barely
+ * enough for today closure.
+ */
+#define MEMORY_LOAD_ADDRESS 0x04800000u
+#define MEMORY_LOAD_WINDOW_SIZE (24u * 1024u * 1024u)
 
 /**
  * Checks if the file can be executed in this OS
@@ -94,10 +123,10 @@ int load_elf_file(char *name) {
     uint32_t j = 0;
     int file_size = 0;
     while(f->eof != 1) {
-        // The staging window is [MEMORY_LOAD_ADDRESS, 0x800000) - the programs'
-        // own address space starts at 0x800000. Refuse a file that would spill
-        // past it rather than corrupting memory.
-        if((uint32_t) (j * 512) >= (0x800000u - MEMORY_LOAD_ADDRESS)) {
+        // The staging window is [MEMORY_LOAD_ADDRESS, MEMORY_LOAD_ADDRESS +
+        // MEMORY_LOAD_WINDOW_SIZE). Refuse a file that would spill past it
+        // rather than corrupting memory.
+        if((uint32_t) (j * 512) >= MEMORY_LOAD_WINDOW_SIZE) {
             printf("elf: file too large for the load window\n");
             // Undo the vmm_map() calls the loop below already made for this
             // rejected file - same unmap load_elf() does after a successful

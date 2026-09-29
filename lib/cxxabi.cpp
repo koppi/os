@@ -22,12 +22,22 @@
 
 #include <lib/stdio.h>
 #include <lib/stdlib.h>
+#include <new> // std::align_val_t only -- header-only, no OS dependency
 
 void *operator new(size_t size) {
     return malloc(size);
 }
 
 void *operator new[](size_t size) {
+    return malloc(size);
+}
+
+/* nothrow new (C++11) -- returns nullptr on failure instead of throwing,
+ * which malloc() already does on its own; -fno-exceptions makes this the
+ * ONLY kind of new that could ever meaningfully report failure here, so
+ * unlike the throwing overloads above (which just assume malloc() always
+ * succeeds), this one is genuinely faithful to the standard's contract. */
+void *operator new(size_t size, const std::nothrow_t &) noexcept {
     return malloc(size);
 }
 
@@ -45,6 +55,38 @@ void operator delete(void *p, size_t) noexcept {
 }
 
 void operator delete[](void *p, size_t) noexcept {
+    free(p);
+}
+
+/* Aligned new/delete (C++17, std::align_val_t) -- same underlying
+ * malloc()/free(), the requested alignment is not actually honored (this
+ * kernel's allocator makes no over-alignment guarantee beyond whatever
+ * malloc() itself naturally gives). Only reached by code that merely
+ * declares an over-aligned type without actually depending on the
+ * alignment for correctness (e.g. an unused SIMD-friendly member some
+ * container's storage class provides); a type that genuinely needs
+ * stricter alignment than malloc() provides would silently misbehave. */
+void *operator new(size_t size, std::align_val_t) {
+    return malloc(size);
+}
+
+void *operator new[](size_t size, std::align_val_t) {
+    return malloc(size);
+}
+
+void operator delete(void *p, std::align_val_t) noexcept {
+    free(p);
+}
+
+void operator delete[](void *p, std::align_val_t) noexcept {
+    free(p);
+}
+
+void operator delete(void *p, size_t, std::align_val_t) noexcept {
+    free(p);
+}
+
+void operator delete[](void *p, size_t, std::align_val_t) noexcept {
     free(p);
 }
 

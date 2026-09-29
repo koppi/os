@@ -12,9 +12,75 @@
 #include <lib/string.h>
 #include <spinlock.h>
 
-/** Round an allocation size up so headers stay 4-byte aligned. */
+/**
+ * Round an allocation size up so every block boundary -- and therefore every
+ * payload this allocator hands out -- stays 8-byte aligned, not just 4.
+ *
+ * heap_header_t is 16 bytes and the arena starts page-aligned, so by
+ * induction every payload address is (base of alignment) + a sum of
+ * heap_align()'d sizes: 8-byte alignment here is what keeps that sum a
+ * multiple of 8 after every split. Real Qt6 (QArrayData::allocateHelper(),
+ * third_party/qt6/src/corelib/tools/qarraydata.cpp) documents needing this
+ * itself: "This assumes malloc is able to provide appropriate alignment for
+ * the header -- as it should!" -- it computes where a type's data starts by
+ * rounding the allocation's OWN address up to alignof(AlignedQArrayData)
+ * (8 on x86-32), trusting malloc() already returned something 8-aligned.
+ * At 4-byte alignment that trust is misplaced: a block that relocates via
+ * realloc() can land at a different mod-8 residue than the one its data
+ * pointer was placed at, so Qt's freeSpaceAtBegin() (ptr - that recomputed,
+ * now-different aligned start) goes negative. The generated division by
+ * sizeof(QString) doesn't handle that -- it doesn't take the high half of
+ * the widening multiply the magic-number trick needs, only the low 32 bits
+ * -- so the negative case aliases to a huge value. freeSpaceAtEnd() derives
+ * from it and comes out huge and nonzero too, and QMovableArrayOps::emplace()
+ * only checks freeSpaceAtEnd() for zero, not sign, so it takes the in-place
+ * fast path and placement-news a QString straight past the block's real
+ * capacity -- corrupting the next block's header. Found by watching that
+ * corruption live: GDB hardware watchpoint on the corrupted header's address
+ * caught the write landing inside QArrayDataPointer<char16_t>'s copy ctor,
+ * called from QMovableArrayOps<QString>::emplace()'s fast path.
+ */
 static size_t heap_align(size_t len) {
-    return (len + 3u) & ~((size_t) 3u);
+    return (len + 7u) & ~((size_t) 7u);
+}
+
+/* Temporary diagnostic: a ring buffer of the last few umalloc()
+ * hand-outs (payload address + size), dumped when corruption is
+ * detected so the block physically adjacent to the corrupted header
+ * can be identified. */
+#define HEAP_LOG_N 24
+static struct {
+    void *addr;
+    size_t size;
+} heap_log[HEAP_LOG_N];
+static int heap_log_pos = 0;
+
+static void heap_log_alloc(void *addr, size_t size) {
+    heap_log[heap_log_pos].addr = addr;
+    heap_log[heap_log_pos].size = size;
+    heap_log_pos = (heap_log_pos + 1) % HEAP_LOG_N;
+}
+
+static void heap_log_dump(void *bad_head) {
+    printf("umalloc: last %d allocations (addr, size), corrupted header at %x:\n",
+           HEAP_LOG_N, (unsigned) bad_head);
+    for (int i = 0; i < HEAP_LOG_N; i++) {
+        int idx = (heap_log_pos + i) % HEAP_LOG_N;
+        if (heap_log[idx].addr)
+            printf("  [%d] addr=%x size=%u end=%x\n", i, (unsigned) heap_log[idx].addr,
+                   (unsigned) heap_log[idx].size,
+                   (unsigned) heap_log[idx].addr + (unsigned) heap_log[idx].size);
+    }
+    /* Temporary diagnostic: raw bytes spanning the corrupted header, to
+     * recognize the actual overflowing content. */
+    uint8_t *p = (uint8_t *) bad_head - 48;
+    for (int row = 0; row < 6; row++) {
+        printf("  %x:", (unsigned) (p + row * 16));
+        for (int col = 0; col < 16; col++) {
+            printf(" %x", p[row * 16 + col]);
+        }
+        printf("\n");
+    }
 }
 
 /**
@@ -57,6 +123,7 @@ void *umalloc(size_t len, vmm_addr_t *heap) {
     while(head != 0) {
         if(head->magic != HEAP_MAGIC) {
             printf("\numalloc: heap corruption\n");
+            heap_log_dump(head);
             return 0;
         }
         if(head->is_free && head->size >= len) {
@@ -75,7 +142,9 @@ void *umalloc(size_t len, vmm_addr_t *heap) {
             }
             head->is_free = 0;
             heap_info->used += head->size;
-            return (uint8_t *) head + sizeof(heap_header_t);
+            void *payload = (uint8_t *) head + sizeof(heap_header_t);
+            heap_log_alloc(payload, len);
+            return payload;
         }
         head = head->next;
     }

@@ -37,3 +37,9 @@ pid_t getppid() {
     return 0;
 }
 
+/* See the comment on _SC_NPROCESSORS_ONLN in unistd.h. */
+long sysconf(int name) {
+    (void) name;
+    return 1;
+}
+

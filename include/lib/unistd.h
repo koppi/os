@@ -31,6 +31,16 @@ pid_t wait(int *x);
 pid_t getpid();
 pid_t getppid();
 
+/* sysconf() -- only the one query real Qt6 source (qthread_unix.cpp's
+ * QThread::idealThreadCount(), on the "rest: Solaris, AIX, Tru64" fallback
+ * path real Qt takes for any OS without its own #ifdef branch) needs. No
+ * syscall exposes this kernel's real booted-CPU count to userspace yet, so
+ * this reports 1 -- the same conservative fallback real Qt itself uses on
+ * platforms without a CPU-count facility (see qthread_unix.cpp's Integrity
+ * branch). */
+#define _SC_NPROCESSORS_ONLN 1
+long sysconf(int name);
+
 #ifdef __cplusplus
 }
 #endif

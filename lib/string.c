@@ -1,14 +1,16 @@
 #include <lib/string.h>
 
-void strcpy(char *str, const char *format) {
+char *strcpy(char *str, const char *format) {
     int i;
     for(i = 0; i < strlen(format); i++) {
         str[i] = format[i];
     }
     str[i] = '\0';
+    return str;
 }
 
-void strncpy(char *str, char *format, size_t len) {
+char *strncpy(char *str, char *format, size_t len) {
+    char *ret = str;
     while(len--) {
         if(*format)
             *str++ = *format++;
@@ -16,6 +18,7 @@ void strncpy(char *str, char *format, size_t len) {
             break;
     }
     *str = 0;
+    return ret;
 }
 
 int strcmp(char *str1, char *str2) {
@@ -41,11 +44,12 @@ int strncmp(char *str1, char *str2, size_t len) {
     return 0;
 }
 
-void memset(void *start, uint32_t val, size_t len) {
+void *memset(void *start, uint32_t val, size_t len) {
     asm volatile("rep stosb"
 	             : "=c"((int){0})
 	             : "D"(start), "a"(val), "c"(len)
 	             : "flags", "memory");
+    return start;
 }
 
 void *memcpy(void *dest, const void *src, size_t size) {
