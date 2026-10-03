@@ -23,6 +23,7 @@
 #include <net.h>
 #include <vfs.h>
 #include <commands.h>
+#include <keyboard.h>
 #include <kconsole.h>
 #include <printf.h>
 #include <kheap.h>
@@ -985,23 +986,86 @@ static void run_exec(ssh_conn_t *sc, uint32_t peer_channel, char *cmd) {
     channel_send_eof_close(sc, peer_channel);
 }
 
+/** Prompt the ssh shell draws, and its width in columns. */
+#define SSH_PROMPT     "> "
+#define SSH_PROMPT_LEN 2
+
+/**
+ * Repaint the prompt and line, then park the cursor @p pos characters in.
+ *
+ * @p drawn is how wide the line was last time, so a line that just got
+ * shorter has its tail blanked instead of leaving the old characters behind.
+ */
+static void shell_refresh(const char *buf, int len, int pos, int *drawn) {
+    printf("\r%s%s", SSH_PROMPT, buf);
+    int now = SSH_PROMPT_LEN + len;
+    for (int n = now; n < *drawn; n++) printf(" ");
+    for (int n = now; n < *drawn; n++) printf("\b");
+    *drawn = now;
+    for (int n = len; n > pos; n--) printf("\b");
+}
+
+/**
+ * Command history, kept for as long as the machine is up rather than per
+ * session: there is one account on this OS, and reconnecting to find the
+ * history gone is the kind of small thing that makes a shell feel broken.
+ */
+#define SSH_HIST 16
+static char ssh_hist[SSH_HIST][256];
+static int  ssh_hist_len;
+
+/* This tree's strncpy() always NUL-terminates (lib/string.c), so the copies
+ * here and in the editor need no terminator of their own. */
+static void ssh_hist_add(char *line) {
+    if (!line[0])
+        return;
+    if (ssh_hist_len > 0 && strcmp(ssh_hist[ssh_hist_len - 1], line) == 0)
+        return;                                 /* no runs of the same line */
+    if (ssh_hist_len == SSH_HIST) {             /* drop the oldest */
+        for (int n = 1; n < SSH_HIST; n++)
+            strncpy(ssh_hist[n - 1], ssh_hist[n], sizeof ssh_hist[0] - 1);
+        ssh_hist_len--;
+    }
+    strncpy(ssh_hist[ssh_hist_len], line, sizeof ssh_hist[0] - 1);
+    ssh_hist_len++;
+}
+
 /**
  * @brief Serve an interactive shell session until the client disconnects.
  *
  * Line editing is done here, not by the client: there is no PTY request
  * handled and no terminal mode set, so the client sends raw keystrokes and
- * this loop echoes them, handles backspace and delete, and runs a line on
- * carriage return. `exit` and `logout` close the channel. Characters outside
- * printable ASCII are dropped, so arrow keys and other escape sequences do
- * nothing rather than corrupting the line.
+ * this loop echoes them, edits the line and runs it on carriage return.
+ * `exit` and `logout` close the channel.
+ *
+ * It had the same hole the serial console did, and worse: dropping everything
+ * outside printable ASCII threw away the ESC that *starts* a cursor key but
+ * kept the `[` and the `A` that follow it, so pressing Up typed `[A` into the
+ * command. The client's sequences are reassembled here into the one cursor-key
+ * character the rest of the system uses (@ref keyboard.h) and the editor below
+ * acts on them -- the same keys, with the same meanings, as the shell on the
+ * machine's own keyboard.
+ *
+ * Redrawing stays within `\r`, `\b` and spaces even though the peer is a real
+ * terminal that would understand more: every byte written here also goes to
+ * the machine's local console through @ref ssh_output_hook, and an escape
+ * sequence that a framebuffer console cannot act on would be left sitting in
+ * the log as its own text.
  */
 static void run_shell(ssh_conn_t *sc, uint32_t peer_channel) {
     static char cmdbuf[256];
-    int i = 0;
+    static char saved[256];       /* the line set aside while walking history */
+    int i = 0;                    /* characters in cmdbuf                     */
+    int pos = 0;                  /* the insertion point within them          */
+    int drawn = 0;                /* columns the line occupies on screen      */
+    int hpos = ssh_hist_len;      /* where in the history we are              */
+    int esc = 0;                  /* escape-sequence state: 0 none, 1 ESC, 2 CSI */
 
     out_len = 0;
     ssh_output_hook = capture_char;
-    printf("\nkoppi's hobby OS -- console over ssh\n> ");
+    printf("\nkoppi's hobby OS -- console over ssh\n" SSH_PROMPT);
+    drawn = SSH_PROMPT_LEN;
+    saved[0] = 0;
     flush_output(sc, peer_channel);
 
     while (1) {
@@ -1022,7 +1086,42 @@ static void run_shell(ssh_conn_t *sc, uint32_t peer_channel) {
 
             for (uint32_t k = 0; k < dlen; k++) {
                 uint8_t d = data[k];
+
+                /*
+                 * A cursor key reaches us as ESC [ A (or ESC O A from a client
+                 * in the alternate cursor-key mode), and the three bytes can
+                 * even be split across packets, so the state rides the loop.
+                 * Each sequence becomes one character; one with no key of its
+                 * own is swallowed whole rather than leaving its tail behind.
+                 */
+                if (esc == 1) {
+                    esc = (d == '[' || d == 'O') ? 2 : 0;
+                    if (esc == 2)
+                        continue;
+                    /* A lone ESC: nothing to do with it, but this byte is a
+                     * keystroke of its own, so fall through with it. */
+                } else if (esc == 2) {
+                    if (d >= 0x30 && d <= 0x3F)
+                        continue;               /* parameter / intermediate */
+                    esc = 0;
+                    switch (d) {
+                        case 'A': d = KBD_CH_UP;    break;
+                        case 'B': d = KBD_CH_DOWN;  break;
+                        case 'C': d = KBD_CH_RIGHT; break;
+                        case 'D': d = KBD_CH_LEFT;  break;
+                        case 'H': d = KBD_CH_HOME;  break;
+                        case 'F': d = KBD_CH_END;   break;
+                        default: continue;      /* Insert, Delete, PgUp, ... */
+                    }
+                }
+                if (d == 0x1B) {
+                    esc = 1;
+                    continue;
+                }
+
                 if (d == '\r' || d == '\n') {
+                    /* Finish drawing the line from wherever the cursor sat. */
+                    for (int n = pos; n < i; n++) printf("%c", cmdbuf[n]);
                     cmdbuf[i] = 0;
                     printf("\n");
                     if (i > 0 && (strcmp(cmdbuf, "exit") == 0 || strcmp(cmdbuf, "logout") == 0)) {
@@ -1032,18 +1131,58 @@ static void run_shell(ssh_conn_t *sc, uint32_t peer_channel) {
                         channel_send_eof_close(sc, peer_channel);
                         return;
                     }
-                    if (i > 0)
-                        console_exec(cmdbuf);
-                    i = 0;
-                    printf("> ");
-                } else if (d == 0x08 || d == 0x7F) {
                     if (i > 0) {
-                        i--;
-                        printf("\b \b");
+                        ssh_hist_add(cmdbuf);
+                        console_exec(cmdbuf);
+                    }
+                    i = pos = 0;
+                    hpos = ssh_hist_len;
+                    saved[0] = 0;
+                    printf(SSH_PROMPT);
+                    drawn = SSH_PROMPT_LEN;
+                } else if (d == 0x08 || d == 0x7F) {
+                    if (pos > 0) {              /* delete before the cursor */
+                        for (int n = pos - 1; n < i - 1; n++)
+                            cmdbuf[n] = cmdbuf[n + 1];
+                        i--; pos--;
+                        cmdbuf[i] = 0;
+                        if (pos == i) { printf("\b \b"); drawn--; }
+                        else shell_refresh(cmdbuf, i, pos, &drawn);
+                    }
+                } else if (d == KBD_CH_LEFT) {
+                    if (pos > 0) { pos--; printf("\b"); }
+                } else if (d == KBD_CH_RIGHT) {
+                    if (pos < i) { printf("%c", cmdbuf[pos]); pos++; }
+                } else if (d == KBD_CH_HOME) {
+                    while (pos > 0) { pos--; printf("\b"); }
+                } else if (d == KBD_CH_END) {
+                    while (pos < i) { printf("%c", cmdbuf[pos]); pos++; }
+                } else if (d == KBD_CH_UP) {
+                    if (hpos > 0) {
+                        if (hpos == ssh_hist_len) {
+                            strncpy(saved, cmdbuf, sizeof saved - 1);
+                        }
+                        hpos--;
+                        strncpy(cmdbuf, ssh_hist[hpos], sizeof cmdbuf - 1);
+                        i = pos = (int) strlen(cmdbuf);
+                        shell_refresh(cmdbuf, i, pos, &drawn);
+                    }
+                } else if (d == KBD_CH_DOWN) {
+                    if (hpos < ssh_hist_len) {
+                        hpos++;
+                        strncpy(cmdbuf, hpos == ssh_hist_len ? saved : ssh_hist[hpos],
+                                sizeof cmdbuf - 1);
+                        i = pos = (int) strlen(cmdbuf);
+                        shell_refresh(cmdbuf, i, pos, &drawn);
                     }
                 } else if (d >= 0x20 && d < 0x7F && i < (int)sizeof(cmdbuf) - 1) {
-                    cmdbuf[i++] = (char)d;
-                    printf("%c", (char)d);
+                    for (int n = i; n > pos; n--)      /* insert at the cursor */
+                        cmdbuf[n] = cmdbuf[n - 1];
+                    cmdbuf[pos] = (char)d;
+                    i++;
+                    cmdbuf[i] = 0;
+                    if (pos == i - 1) { printf("%c", (char)d); pos++; drawn++; }
+                    else { pos++; shell_refresh(cmdbuf, i, pos, &drawn); }
                 }
             }
             flush_output(sc, peer_channel);

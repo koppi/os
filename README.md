@@ -340,7 +340,18 @@ with `net_exec()` and block until it finishes.
   channel request bridges to `console_exec()` — the exact same command table
   as the physical keyboard console — echoing keystrokes and mirroring output
   both locally and over the channel; an `exec` request runs one command and
-  exits. Like NFS, this runs entirely on the `net` thread: `ssh_tick()` polls
+  exits. No PTY is negotiated, so the **line editing is done in the kernel**:
+  the same keys as the shell on the machine's own keyboard (Left/Right,
+  Home/End, Up/Down through a 16-line history, Backspace before the cursor),
+  reassembled from the escape sequences the client sends — which is what used
+  to put `[A` in the command, the `ESC` being dropped as unprintable while the
+  two bytes after it were kept. Redrawing stays within `\r`, `\b` and spaces
+  even though the peer is a real terminal that would understand more: every
+  byte written to the channel also goes to the machine's local console, where
+  an escape sequence it cannot act on would be left sitting in the log as its
+  own text. [`test/ssh-boot.sh`](test/ssh-boot.sh) (`make qemu-ssh`) logs in
+  with a stock OpenSSH client and checks the editor, including a sequence
+  split across two packets. Like NFS, this runs entirely on the `net` thread: `ssh_tick()` polls
   the listening socket and, once accepted, runs the whole session to
   completion before returning, so only one SSH session is serviced at a time
   and other `net`-thread work pauses for its duration. `ssh` prints the
@@ -1315,6 +1326,7 @@ screenshot for each. `make usb` builds the GPT USB image the real machine needs.
 
 ```bash
 make qemu-keys    # raw-key-stream check on all three keyboard paths (no WAD)
+make qemu-ssh     # log in over ssh and check the editor (needs ssh + sshpass)
 make kernel.lst   # full objdump disassembly
 make docs         # Doxygen API docs -> docs/html/index.html (needs doxygen)
 make cloc         # source line count (needs cloc)

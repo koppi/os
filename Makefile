@@ -179,6 +179,11 @@ qemu-x220: $(KERNEL) initrd.img
 qemu-mba: iso
 	@bash test/mba-boot.sh all
 
+# Log into the in-kernel SSH server with a stock OpenSSH client and check its
+# shell's line editor (needs ssh + sshpass on the host); logs in /tmp/ssh-boot.
+qemu-ssh: iso
+	@bash test/ssh-boot.sh
+
 # Check the raw key stream (what a full-screen program reads) on all three
 # keyboard paths -- i8042, USB HID over UHCI, USB HID over xHCI with no i8042 at
 # all, which is the MacBook Air's topology. Needs no WAD; logs in /tmp/keys-boot.
@@ -235,6 +240,6 @@ clean::
 	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin ap_boot.tmp.* *.d lib/*.d *~ os.iso iso initrd.img docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-doom cloc docs clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-doom cloc docs clean
 
 -include $(OBJS:.o=.d)
