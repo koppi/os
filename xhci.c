@@ -164,6 +164,7 @@ typedef struct {
     uint32_t ep0_enq, ep0_cycle;
     uint32_t iep_enq[MAX_IEP_PER_DEV], iep_cycle[MAX_IEP_PER_DEV];
     uint8_t  hid_prev[8];       /* previous keyboard report (edge detection) */
+    hid_layout_t hid_layout;    /**< boot or report-ID reports from that keyboard */
 } xdev_t;
 static xdev_t xdev[MAX_SLOTS];
 
@@ -319,6 +320,20 @@ static int get_descriptor(int idx, uint8_t type, uint8_t index, void *buf, int l
         .bRequest = USB_REQ_GET_DESCRIPTOR,
         .wValue = (uint16_t)((type << 8) | index),
         .wIndex = 0, .wLength = (uint16_t)len,
+    };
+    return ctrl_xfer(idx, &s, buf, len, 1);
+}
+
+/* A HID report descriptor belongs to an interface, not to the device, so it has
+ * to be asked for by name: get_descriptor() addresses the device, and a device
+ * asked for one of these as if it were its own device descriptor answers with
+ * nothing. The Apple topcase keyboard is on the other end of this request. */
+static int get_hid_report_descriptor(int idx, uint8_t iface, void *buf, int len) {
+    usb_setup_t s = {
+        .bmRequestType = USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_INTERFACE,
+        .bRequest = USB_REQ_GET_DESCRIPTOR,
+        .wValue = (uint16_t)(USB_DT_HID_REPORT << 8),
+        .wIndex = iface, .wLength = (uint16_t)len,
     };
     return ctrl_xfer(idx, &s, buf, len, 1);
 }
@@ -670,6 +685,24 @@ static int enumerate_port(int port) {
                 int ep_ival = cfg[off + 6];
 
                 if (current_proto == 1 && !found_keyboard) {
+                    /* Whether its reports carry a report ID decides where the
+                     * modifier bitmap is. Nothing here asks the keyboard for
+                     * boot protocol -- an Apple topcase ignores the request --
+                     * so the descriptor is what says how to read it. */
+                    uint8_t rdesc[HID_REPORT_DESC_MAX];
+                    int rn = get_hid_report_descriptor(idx, current_iface,
+                                                      rdesc, sizeof(rdesc));
+                    if (rn > 0) {
+                        d->hid_layout.report_id =
+                            (uint8_t)usb_hid_report_uses_report_id(rdesc, rn);
+                        klogf(LOG_INFO, "xhci: keyboard %s report IDs "
+                              "(%d descriptor bytes)\n",
+                              d->hid_layout.report_id ? "declares" :
+                                                        "declares no", rn);
+                    } else {
+                        klogf(LOG_WARNING, "xhci: keyboard has no report "
+                              "descriptor\n");
+                    }
                     configure_iep(idx, slot_id, psi, port, current_iface, 1,
                                   addr, ep_mps, ep_ival);
                     found_keyboard = 1;
@@ -933,7 +966,8 @@ void xhci_poll(void) {
                 int proto = d->iep_proto[iep_idx];
 
                 if (proto == 1) {
-                    usb_hid_report_keyboard(buf, n, d->hid_prev);
+                    usb_hid_report_keyboard(buf, n, d->hid_prev,
+                                             &d->hid_layout);
                 } else if (proto == 2) {
                     usb_hid_report_mouse(buf, n);
                 } else if (proto == 3) {

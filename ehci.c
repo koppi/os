@@ -163,6 +163,7 @@ static struct {
     int      maxlen;
     int      toggle;
     uint8_t  prev[8];      /* previous keyboard report (edge detection) */
+    hid_layout_t layout;   /**< boot or report-ID reports from that keyboard */
 } islot[MAX_INT];
 
 /* ------------------------------------------------------------------ *
@@ -362,7 +363,8 @@ static void int_service(int s) {
     int got = islot[s].maxlen - (int)QTD_GET_BYTES(tok);
     if (got > 0) {
         if (islot[s].proto == 1)
-            usb_hid_report_keyboard(int_buf[s], got, islot[s].prev);
+            usb_hid_report_keyboard(int_buf[s], got, islot[s].prev,
+                                         &islot[s].layout);
         else
             usb_hid_report_mouse(int_buf[s], got);
     }
@@ -383,6 +385,31 @@ static void hid_boot(edev_t *d, int iface) {
     s = (usb_setup_t){ .bmRequestType = 0x21, .bRequest = HID_REQ_SET_IDLE,
                        .wValue = 0, .wIndex = (uint16_t)iface, .wLength = 0 };
     ehci_control(d, &s, 0, 0, 0);
+}
+
+/**
+ * @brief Does the keyboard on interface @p iface prefix its reports with a
+ *        report ID? Read from its report descriptor, which belongs to the
+ *        interface rather than to the device -- so it has to be asked for by
+ *        name, the way hid_boot() asks for the boot protocol.
+ */
+static uint8_t hid_report_id_layout(edev_t *d, int iface) {
+    usb_setup_t s = { .bmRequestType = USB_DIR_IN | USB_TYPE_STANDARD
+                                    | USB_RECIP_INTERFACE,
+                      .bRequest = USB_REQ_GET_DESCRIPTOR,
+                      .wValue = (uint16_t)(USB_DT_HID_REPORT << 8),
+                      .wIndex = (uint16_t)iface,
+                      .wLength = HID_REPORT_DESC_MAX };
+    uint8_t desc[HID_REPORT_DESC_MAX];
+    int n = ehci_control(d, &s, desc, sizeof(desc), 1);
+    if (n <= 0) {
+        klogf(LOG_WARNING, "ehci: keyboard has no report descriptor\n");
+        return 0;
+    }
+    uint8_t id = (uint8_t)usb_hid_report_uses_report_id(desc, n);
+    klogf(LOG_INFO, "ehci: keyboard %s report IDs (%d descriptor bytes)\n",
+          id ? "declares" : "declares no", n);
+    return id;
 }
 
 static void enum_device(int speed, uint8_t tt_hub, uint8_t tt_port,
@@ -542,7 +569,15 @@ static void enum_device(int speed, uint8_t tt_hub, uint8_t tt_port,
                 int emps = cfg[off + 4] | (cfg[off + 5] << 8);
                 if (proto == 1 || proto == 2) {
                     hid_boot(d, iface);
-                    int_claim(d, (uint8_t)eaddr, emps ? emps : 8, proto);
+                    int s = int_claim(d, (uint8_t)eaddr, emps ? emps : 8,
+                                      proto);
+                    /* SET_PROTOCOL(boot) is a request, not a promise: a
+                     * keyboard whose descriptor declares report IDs can keep
+                     * sending them, one byte further on than a boot report
+                     * reads them. */
+                    if (proto == 1 && s >= 0)
+                        islot[s].layout.report_id =
+                            hid_report_id_layout(d, iface);
                 }
                 return;
             }

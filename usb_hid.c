@@ -11,6 +11,10 @@
 
 #define MAX_HID 4
 
+/* How many reports in a row have to look like boot reports before the driver
+ * believes it over a descriptor that declared report IDs. */
+#define HID_BOOT_LAYOUT_SLACK 3
+
 /** One attached HID interrupt endpoint. */
 typedef struct {
     int      used;
@@ -18,6 +22,7 @@ typedef struct {
     uint8_t  addr;          /**< Owning device address (for detach). */
     uint8_t  protocol;      /**< 1 = keyboard, 2 = mouse. */
     uint8_t  prev[8];       /**< Previous keyboard report (for edge detection). */
+    hid_layout_t layout;    /**< Boot or report-ID reports (see usb_hid.h). */
 } hid_dev_t;
 
 static hid_dev_t hid[MAX_HID];
@@ -126,6 +131,60 @@ static void push_scan_usage(uint8_t usage, int release) {
         keyboard_push_scan((uint8_t) (sc & 0xFF), (sc & HID_E0) != 0, release);
 }
 
+int usb_hid_report_uses_report_id(const uint8_t *desc, int len) {
+    for(int i = 0; i + 1 < len; ) {
+        uint8_t item = desc[i];
+        int     size = (item & 0x03) == 3 ? 4 : (item & 0x03);
+        /* Report ID is a global item (type 1) with tag 0x0D. */
+        if(((item >> 4) & 0x03) == 1 && (item & 0x0F) == 0x0D)
+            return 1;
+        i += 1 + size;
+    }
+    return 0;
+}
+
+/**
+ * @brief Track the layout of one keyboard's reports, and say whether this one
+ *        carries a leading report ID.
+ *
+ * The reserved byte is the only position both layouts agree on, and it is
+ * unambiguous: it is byte 1 of a boot report and byte 2 of a report-ID one,
+ * and a device has to leave it zero either way. So a boot report can never be
+ * mistaken for a report-ID one -- its byte 2 is the first key, not a zero --
+ * which makes the switch to report-ID reports immediate. The switch back needs
+ * the reserved byte to look wrong several times over, so that one odd report
+ * cannot leave the next one being read a byte out.
+ */
+static int hid_layout_sync(hid_layout_t *l, const uint8_t *rpt, int len,
+                           uint8_t prev[8]) {
+    int was = l->report_id;
+
+    if(l->report_id) {
+        /* Read as a boot report this would be a first key at byte 2 and no
+         * modifier at byte 1, which is what a keyboard that took the boot
+         * protocol anyway sends. */
+        int boot_shaped = len > 2 && rpt[1] == 0 && rpt[2] != 0;
+        if(boot_shaped && ++l->boot_misses >= HID_BOOT_LAYOUT_SLACK)
+            l->report_id = 0;
+        else if(!boot_shaped)
+            l->boot_misses = 0;
+    } else if(len > 1 && rpt[1] != 0) {
+        /* Byte 1 is the reserved one in a boot report: if it is set, this is
+         * not a boot report, whatever the descriptor said. */
+        l->report_id = 1;
+    }
+
+    if(l->report_id == was)
+        return l->report_id;
+
+    /* Edge detection compares against the last report, so a layout change has
+     * to start it over rather than diff two formats against each other. */
+    memset(prev, 0, 8);
+    klogf(LOG_INFO, "USB HID: keyboard reports are %s\n",
+          l->report_id ? "report-ID prefixed" : "boot protocol");
+    return l->report_id;
+}
+
 /** @brief Was HID usage @p code present in an 8-byte keyboard report? */
 static int report_has_key(const uint8_t *rpt, uint8_t code) {
     for(int i = 2; i < 8; i++)
@@ -138,9 +197,12 @@ static int report_has_key(const uint8_t *rpt, uint8_t code) {
  * @brief Diff a new keyboard report against the previous one and push newly
  *        pressed keys (mods byte bit 1/5 = shift) into the keyboard ring.
  */
-void usb_hid_report_keyboard(const uint8_t *rpt, int len, uint8_t prev[8]) {
+void usb_hid_report_keyboard(const uint8_t *rpt, int len, uint8_t prev[8],
+                             hid_layout_t *layout) {
     if(len < 3)
         return;
+
+    uint8_t boot[8];       /* report-ID reports, normalised to boot layout */
     if(hid_watch) {
         /* Both host controllers funnel keyboard reports through here, so this
          * is the one place a dump can catch every keyboard on any topology. */
@@ -150,6 +212,21 @@ void usb_hid_report_keyboard(const uint8_t *rpt, int len, uint8_t prev[8]) {
             o += snprintf(hex + o, sizeof(hex) - o, "%02x ", rpt[i]);
         klogf(LOG_INFO, "hid: kbd len %d: %s\n", len, hex);
     }
+
+    /* Reduce a report-ID keyboard's report to the boot layout everything below
+     * is written against: drop the ID, then the reserved byte, and copy the key
+     * array over from where it really starts. Its array holds seven keys, one
+     * more than a boot report has room for, so the seventh is dropped -- which
+     * only shows with seven keys down at once. */
+    if(layout && hid_layout_sync(layout, rpt, len, prev)) {
+        boot[0] = rpt[1];               /* modifier bitmap */
+        boot[1] = 0;                    /* reserved */
+        for(int i = 0; i < 6; i++)
+            boot[2 + i] = 3 + i < len ? rpt[3 + i] : 0;
+        rpt = boot;
+        len = sizeof(boot);
+    }
+
     int shift = (rpt[0] & 0x22) != 0;   /* L/R shift */
     for(int i = 2; i < 8 && i < len; i++) {
         uint8_t code = rpt[i];
@@ -203,7 +280,7 @@ void usb_hid_report_mouse(const uint8_t *rpt, int len) {
 }
 
 static void handle_keyboard(hid_dev_t *h, uint8_t *rpt, int len) {
-    usb_hid_report_keyboard(rpt, len, h->prev);
+    usb_hid_report_keyboard(rpt, len, h->prev, &h->layout);
 }
 
 void usb_hid_set_watch(int on) {
@@ -217,6 +294,28 @@ int usb_hid_watching(void) {
 /** @brief Apply a boot-protocol mouse report to @c mouse_info. */
 static void handle_mouse(uint8_t *rpt, int len) {
     usb_hid_report_mouse(rpt, len);
+}
+
+/**
+ * @brief Fetch a HID report descriptor from interface @p iface.
+ * @return Bytes read, or negative if the device has none to give.
+ *
+ * A HID report descriptor belongs to an interface, not to the device, so the
+ * request has to name it: usb_get_descriptor() asks the device itself and a
+ * device asked for one of these as if it were its own answers with nothing.
+ */
+static int hid_get_report_desc(usb_device_t *dev, uint8_t iface, void *buf,
+                               int len) {
+    usb_setup_t s;
+
+    s = (usb_setup_t){
+        .bmRequestType = USB_DIR_IN | USB_TYPE_STANDARD | USB_RECIP_INTERFACE,
+        .bRequest      = USB_REQ_GET_DESCRIPTOR,
+        .wValue        = (uint16_t)(USB_DT_HID_REPORT << 8),
+        .wIndex        = iface,
+        .wLength       = (uint16_t)len,
+    };
+    return usb_control(dev, &s, buf, len);
 }
 
 /** @brief SET_PROTOCOL(boot) + SET_IDLE(0) on @p iface. */
@@ -254,6 +353,23 @@ void usb_hid_attach(usb_device_t *dev, uint8_t iface, uint8_t protocol,
 
     hid_set_boot(dev, iface);
 
+    /* What the keyboard sends after that request is not guaranteed to be a boot
+     * report, so ask its descriptor which layout to read. Only the report-ID
+     * bit matters here; a keyboard that has one and sends a boot report anyway
+     * is caught from the reports themselves (hid_layout_sync). */
+    hid_layout_t layout = {0, 0};
+    if(protocol == HID_PROTOCOL_KEYBOARD) {
+        uint8_t desc[HID_REPORT_DESC_MAX];
+        int n = hid_get_report_desc(dev, iface, desc, sizeof(desc));
+        if(n > 0) {
+            layout.report_id = (uint8_t)usb_hid_report_uses_report_id(desc, n);
+            klogf(LOG_INFO, "USB HID: keyboard %s report IDs (%d descriptor bytes)\n",
+                  layout.report_id ? "declares" : "declares no", n);
+        } else {
+            klogf(LOG_WARNING, "USB HID: keyboard has no report descriptor\n");
+        }
+    }
+
     int slot = uhci_int_claim(dev, ep_addr, maxlen ? maxlen : 8);
     if(slot < 0) {
         klogf(LOG_ERR, "USB HID: no free interrupt slot\n");
@@ -264,6 +380,7 @@ void usb_hid_attach(usb_device_t *dev, uint8_t iface, uint8_t protocol,
     hid[idx].slot     = slot;
     hid[idx].addr     = dev->address;
     hid[idx].protocol = protocol;
+    hid[idx].layout   = layout;
     memset(hid[idx].prev, 0, sizeof(hid[idx].prev));
 
     klogf(LOG_INFO, "USB HID: %s ready (dev %u, ep 0x%x)\n",
