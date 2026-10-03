@@ -179,6 +179,12 @@ qemu-x220: $(KERNEL) initrd.img
 qemu-mba: iso
 	@bash test/mba-boot.sh all
 
+# Check the raw key stream (what a full-screen program reads) on all three
+# keyboard paths -- i8042, USB HID over UHCI, USB HID over xHCI with no i8042 at
+# all, which is the MacBook Air's topology. Needs no WAD; logs in /tmp/keys-boot.
+qemu-keys: iso
+	@bash test/keys-boot.sh all
+
 # Drive apps/doom headless in QEMU: start the game over the serial console,
 # send keystrokes through the monitor, screenshot each step into /tmp/doom-boot.
 # Needs a WAD staged on the RAM disk (apps/doom/PORTING.md).
@@ -229,6 +235,6 @@ clean::
 	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin ap_boot.tmp.* *.d lib/*.d *~ os.iso iso initrd.img docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-doom cloc docs clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-doom cloc docs clean
 
 -include $(OBJS:.o=.d)

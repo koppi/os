@@ -194,10 +194,22 @@ static void ring_init(trb_t *ring, uint32_t phys_link_target) {
     ring[RING_SZ - 1].d[3] = TRB_TYPE(TRB_LINK) | (1u << 1) /* Toggle Cycle */;
 }
 
-/** @brief Append @p t to @p ring at *@p enq (updating enq / cycle). */
+/**
+ * @brief Append @p t to @p ring at *@p enq (updating enq / cycle).
+ *
+ * The cycle bit is what hands a TRB to the controller, so it is stored last,
+ * after a barrier: a 16-byte struct assignment lets the compiler emit the
+ * four dwords in any order it likes, and the controller is free to fetch the
+ * TRB the moment it sees the bit flip. The closing barrier keeps the whole
+ * TRB ahead of the doorbell write that follows in the caller.
+ */
 static void ring_push(trb_t *ring, uint32_t *enq, uint32_t *cycle, trb_t t) {
-    t.d[3] = (t.d[3] & ~TRB_CYCLE) | (*cycle ? TRB_CYCLE : 0);
-    ring[*enq] = t;
+    uint32_t ctrl = (t.d[3] & ~TRB_CYCLE) | (*cycle ? TRB_CYCLE : 0);
+    ring[*enq].d[0] = t.d[0];
+    ring[*enq].d[1] = t.d[1];
+    ring[*enq].d[2] = t.d[2];
+    dma_wmb();
+    ring[*enq].d[3] = ctrl;
     (*enq)++;
     if (*enq == RING_SZ - 1) {
         /* Set the Link TRB's cycle then wrap. */
@@ -206,6 +218,7 @@ static void ring_push(trb_t *ring, uint32_t *enq, uint32_t *cycle, trb_t t) {
         *enq = 0;
         *cycle ^= 1;
     }
+    dma_wmb();
 }
 
 /* ------------------------------------------------------------------ *
@@ -799,12 +812,14 @@ int xhci_init(void) {
     if (nscratch > 0)
         dcbaa[0] = (uint32_t)&scratch_arr[0];
     opw(OP_CONFIG, max_slots);
+    dma_wmb();                                  /* dcbaa + scratch_arr first */
     opw(OP_DCBAAP, (uint32_t)&dcbaa[0]);
     opw(OP_DCBAAP + 4, 0);
 
     /* Command ring */
     cmd_enq = 0; cmd_cycle = 1;
     ring_init(cmd_ring, (uint32_t)&cmd_ring[0]);
+    dma_wmb();                                  /* the Link TRB first */
     opw(OP_CRCR, (uint32_t)&cmd_ring[0] | 1);   /* RCS = 1 */
     opw(OP_CRCR + 4, 0);
 
@@ -815,6 +830,16 @@ int xhci_init(void) {
     erst[0].size = RING_SZ;
     erst[0].rsv  = 0;
     rtw(IR0_ERSTSZ, 1);
+    /* The controller reads the segment table the moment ERSTBA is written, so
+     * every store above has to be in memory by then. Without this barrier GCC
+     * -O3 sank `erst[0].size` past both ERSTBA writes: the controller read a
+     * segment of size 0, rejected the table (HCE, "host controller error"),
+     * and then every command timed out -- Enable Slot first, so no device was
+     * ever enumerated. On a machine whose only input is USB (a MacBook Air
+     * 2013 has no PS/2 and no EHCI companion) that is the keyboard and the
+     * trackpad gone. Real silicon latches the table whenever it pleases,
+     * which makes the same window a race rather than a certainty. */
+    dma_wmb();
     rtw(IR0_ERSTBA, (uint32_t)&erst[0]);
     rtw(IR0_ERSTBA + 4, 0);
     erdp_update();

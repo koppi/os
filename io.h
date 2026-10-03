@@ -70,6 +70,23 @@ static inline void outportl(uint32_t port, uint32_t val) {
     __asm__ volatile("outl %%eax,%%dx"::"d" (port), "a" (val));
 }
 
+/**
+ * @brief Barrier between filling a DMA structure and handing it to a device.
+ *
+ * x86 retires stores in program order, so no CPU fence is needed here -- but
+ * the compiler is under no such obligation. Only *volatile* accesses are
+ * ordered with respect to each other, so the plain stores that build a
+ * descriptor, a TRB or a ring can legally be scheduled *after* the volatile
+ * MMIO write (or doorbell) that tells the device to go read it. At -O3 that
+ * is not theoretical: it is what GCC did to the xHCI event-ring segment
+ * table, publishing a half-built entry (see xhci.c).
+ *
+ * Call it between the last store that builds a structure and the write that
+ * hands it over -- and, inside a structure the device polls, between the body
+ * and the dword whose flag says "this entry is yours now".
+ */
+static inline void dma_wmb(void) { __asm__ volatile("" ::: "memory"); }
+
 /** @brief Execute a single @c hlt (wait for the next interrupt). */
 void halt(void);
 

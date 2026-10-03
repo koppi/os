@@ -726,7 +726,14 @@ pick a weapon, Esc is the menu. Quit from the menu and the desktop comes back.
   than a mode switch: the ASCII ring has exactly one consumer and a second
   reader would split the keystrokes. [`usb_hid.c`](usb_hid.c) feeds it too,
   mapping HID usages back to set-1 codes, so a machine with no PS/2
-  controller can play.
+  controller can play. That half had no test: `sendkey` reaches the i8042 in
+  the configs the scenarios below use, so the arrows were only ever checked on
+  the one path that is *not* the one a MacBook has. The three of them —
+  i8042, USB HID over UHCI, USB HID over xHCI with the i8042 switched off —
+  are now checked by [`test/keys-boot.sh`](test/keys-boot.sh)
+  (`make qemu-keys`), which needs no WAD, and the `keys` console command
+  prints the same stream on the machine's own screen for a keyboard that
+  sends something unexpected.
 * **The WAD lives in RAM.** The VFS reads a FAT chain forward with no seek, so
   `fopen` slurps a file whole and `w_file_koppi.c` hands the buffer to
   `w_wad.c` as `mapped` — the engine's own mmap path. Lumps are pointers into
@@ -822,6 +829,7 @@ but no longer competes with the shell for keystrokes.)
 | `write <file> <text>` | write one record of text to a file |
 | `rm <file>` | delete a file |
 | `sum <file>` | FNV-1a checksum + byte length of a file |
+| `keys` | print the raw key stream (make/break, `E0` prefix) until Esc |
 | `beep` | play a tone through the AC97 codec |
 | `pci` | list the enumerated PCI devices |
 | `net` | interface MAC, link, counters and the DHCP-assigned address |
@@ -1219,6 +1227,22 @@ and every one of these was invisible under QEMU:
 * **The trackpad arrived in boot protocol.** Apple's firmware sets the topcase
   up for its own boot-time input, so the interface emits 3-byte mouse reports
   until it is explicitly asked for the report protocol.
+* **The event-ring segment table was published half-built.** This one goes the
+  other way round — QEMU catches it and real silicon races it. Unlike
+  [`uhci.c`](uhci.c) and [`ehci.c`](ehci.c), whose descriptors are `volatile`
+  field by field, the xHCI TRBs and the ERST are plain memory, and only
+  *volatile* accesses are ordered against each other: the plain stores that
+  build a structure may legally be scheduled **after** the volatile MMIO write
+  that hands it to the controller. At `-O3` GCC did exactly that, sinking
+  `erst[0].size` past both `ERSTBA` writes. The controller read a segment of
+  size 0, rejected the table (`USBSTS.HCE`, "host controller error"), and from
+  then on every command timed out — Enable Slot first, so **no USB device was
+  ever enumerated**, which on this machine is the keyboard and the trackpad
+  gone. [`io.h`](io.h) grew `dma_wmb()` (a compiler barrier; x86 keeps stores
+  in order, so the hardware needs nothing) and [`xhci.c`](xhci.c) uses it at
+  every hand-off: the ERST, the DCBAA, the command ring, and inside
+  `ring_push`, where a TRB's cycle bit — the bit that says "this entry is
+  yours now" — is now stored last, after the body.
 
 **The 4 MiB identity map.** `map_kernel()` used to identity-map only the low
 4 MiB, which left just four usable blocks in the page-table storage window —
@@ -1260,6 +1284,7 @@ screenshot for each. `make usb` builds the GPT USB image the real machine needs.
 ### Other targets
 
 ```bash
+make qemu-keys    # raw-key-stream check on all three keyboard paths (no WAD)
 make kernel.lst   # full objdump disassembly
 make docs         # Doxygen API docs -> docs/html/index.html (needs doxygen)
 make cloc         # source line count (needs cloc)

@@ -502,6 +502,63 @@ static void console_sound(char *buf) {
 }
 
 /**
+ * @brief Print the raw key stream until Esc: what the keyboard really sends.
+ *
+ * The scancodes a full-screen program reads (keyboard.h's raw ring, behind the
+ * `getscan` syscall) are not the characters the console shows: they carry key
+ * *releases* and the keys that have no character at all -- the arrow cluster
+ * above all, which is what a game binds to movement. When those do not work
+ * there is nothing in the log to look at, and on a machine with no serial port
+ * and no PS/2 controller (a MacBook Air 2013: its keyboard is a USB HID device
+ * behind xHCI) there is no second input path to compare against either. This
+ * prints every event as it arrives, on the machine's own screen, so a key that
+ * does nothing in a game can be told apart from a key that never arrives, and
+ * one that arrives as something else can be named.
+ *
+ * Raw recording is normally paired with the full-screen grab (syscall 22), so
+ * this turns it on for itself and gives it back on the way out; both rings are
+ * flushed either way, so nothing typed here leaks into the next command line.
+ */
+static void console_keys(void) {
+    printf("keys: press keys -- Esc stops.\n"
+           "      E0 marks the arrow/navigation cluster (the keypad has the\n"
+           "      same make codes without it).\n");
+    keyboard_raw_mode(1);
+    for(;;) {
+        int ev = keyboard_raw_get();
+        if(!(ev & KBD_RAW_VALID)) {
+            sleep(1);
+            continue;
+        }
+        uint8_t  sc  = (uint8_t) (ev & 0x7F);
+        int      e0  = (ev & KBD_RAW_E0) != 0;
+        int      brk = (ev & KBD_RAW_BREAK) != 0;
+        const char *name = "";
+        if(e0) {
+            switch(sc) {
+                case 0x48: name = "  up";    break;
+                case 0x50: name = "  down";  break;
+                case 0x4B: name = "  left";  break;
+                case 0x4D: name = "  right"; break;
+                case 0x47: name = "  home";  break;
+                case 0x4F: name = "  end";   break;
+                case 0x49: name = "  pgup";  break;
+                case 0x51: name = "  pgdn";  break;
+                case 0x52: name = "  insert";break;
+                case 0x53: name = "  delete";break;
+                default: break;
+            }
+        }
+        printf("keys: %s %02x %s%s\n", e0 ? "E0" : "--", sc,
+               brk ? "release" : "press  ", name);
+        if(!e0 && !brk && sc == 0x01)           /* Esc pressed */
+            break;
+    }
+    keyboard_raw_mode(0);
+    printf("keys: done.\n");
+}
+
+/**
  * @brief Play a short square-wave tone through the AC97 codec ("beep").
  */
 static void console_beep(void) {
@@ -773,9 +830,9 @@ static void console_http(char *cmd) {
 /**
  * @brief Parse and execute one console command line.
  *
- * Recognised commands: help, mem, ps, ls, cd, start, read, beep, pci, net,
- * ping, dns, http, date, ntpdate, poweroff, reboot. Unknown input produces a
- * "not found" message.
+ * Recognised commands: help, mem, ps, ls, cd, start, read, keys, beep, pci,
+ * net, ping, dns, http, date, ntpdate, poweroff, reboot. Unknown input
+ * produces a "not found" message.
  *
  * @param buf NUL-terminated command line (without the trailing newline).
  */
@@ -795,6 +852,7 @@ void console_exec(char *buf) {
                "sum      - sum <file> (checksum + byte length)\n"
                "beep     - plays a tone\n"
                "sound    - sound [on|off|0-100] (MOD playback)\n"
+               "keys     - print raw key scancodes until Esc (keyboard check)\n"
                "pci      - lists PCI devices\n"
                "net      - network interface status\n"
                "nfs      - NFSv4.1 client mount status\n"
@@ -855,6 +913,8 @@ void console_exec(char *buf) {
         console_sum(buf);
     } else if(strncmp(buf, "sound", 5) == 0) {
         console_sound(buf);
+    } else if(strcmp(buf, "keys") == 0) {
+        console_keys();
     } else if(strncmp(buf, "beep", 4) == 0) {
         console_beep();
     } else if(coreutils_try(buf)) {
