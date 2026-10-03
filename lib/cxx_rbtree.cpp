@@ -2,12 +2,23 @@
  * @file lib/cxx_rbtree.cpp
  * @brief Red-black tree node algorithms backing std::map/std::set.
  *
- * <bits/stl_tree.h> declares four non-template functions --
+ * <bits/stl_tree.h> declares a handful of non-template functions --
  * `_Rb_tree_increment`, `_Rb_tree_decrement`, `_Rb_tree_insert_and_rebalance`,
  * `_Rb_tree_rebalance_for_erase` -- and leaves them out-of-line: in a normal
  * install their bodies live in libstdc++'s compiled tree.cc. Everything else
  * about std::map/std::set is header-only templates (same as vector/string),
  * so this file is the one piece standing between "compiles" and "links".
+ *
+ * `_Rb_tree_increment` and `_Rb_tree_decrement` each come in *two* overloads,
+ * taking `_Rb_tree_node_base *` and `const _Rb_tree_node_base *`, and both are
+ * separately exported by libstdc++ (all four are GLIBCXX_3.4 symbols). The
+ * const ones are what `_Rb_tree_const_iterator::operator++/--` call, so
+ * defining only the non-const pair is enough for a container walked through a
+ * mutable iterator but *not* for one walked through a const_iterator --
+ * `cbegin()`, or a range-for over a `const` map. GCC 15's header happens to
+ * route its const_iterator through the non-const overload and so never
+ * references them, which is why leaving them out went unnoticed there while
+ * GCC 13 and GCC 14 failed to link apps/hello-map and apps/hello-set.
  *
  * `_Rb_tree_node_base` (color + parent/left/right pointers) is a fixed,
  * public part of libstdc++'s ABI, included here via <map> rather than
@@ -85,6 +96,17 @@ _Rb_tree_node_base *_Rb_tree_increment(_Rb_tree_node_base *x) throw() {
     return x;
 }
 
+/* `_Rb_tree_const_iterator::operator++` calls this overload, not the one
+ * above -- so a map/set walked through a const_iterator (`cbegin()`, a
+ * range-for over a `const` map) needs it to link, while one only ever walked
+ * through a mutable iterator does not. Upstream casts the const away and
+ * reuses the non-const traversal; so do we. That is sound here because the
+ * walk only reads `_M_parent`/`_M_left`/`_M_right`: constness of the
+ * *elements* is carried by the caller's iterator type, not by these links. */
+const _Rb_tree_node_base *_Rb_tree_increment(const _Rb_tree_node_base *x) throw() {
+    return _Rb_tree_increment(const_cast<_Rb_tree_node_base *>(x));
+}
+
 _Rb_tree_node_base *_Rb_tree_decrement(_Rb_tree_node_base *x) throw() {
     if (x->_M_color == _S_red && x->_M_parent->_M_parent == x) {
         /* x is the header node (root's parent); "predecessor of end()" is
@@ -105,6 +127,12 @@ _Rb_tree_node_base *_Rb_tree_decrement(_Rb_tree_node_base *x) throw() {
         x = y;
     }
     return x;
+}
+
+/* Same story as the const `_Rb_tree_increment` above, for
+ * `_Rb_tree_const_iterator::operator--`. */
+const _Rb_tree_node_base *_Rb_tree_decrement(const _Rb_tree_node_base *x) throw() {
+    return _Rb_tree_decrement(const_cast<_Rb_tree_node_base *>(x));
 }
 
 void _Rb_tree_insert_and_rebalance(const bool insert_left, _Rb_tree_node_base *x,

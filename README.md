@@ -516,10 +516,19 @@ for anything more (there is no TLS or resolver cache).
   * [`apps/hello-map`](apps/hello-map) — `std::map` (staged as `hellomap`):
     a *self-checking* stress test rather than a plain demo, since it exposed
     the one piece of `std::map`/`std::set` that genuinely isn't header-only —
-    `<bits/stl_tree.h>` declares four non-template functions
+    `<bits/stl_tree.h>` declares a handful of non-template functions
     (`_Rb_tree_increment`/`_Rb_tree_decrement`/
     `_Rb_tree_insert_and_rebalance`/`_Rb_tree_rebalance_for_erase`) whose
     bodies normally live in libstdc++'s compiled `tree.cc`.
+    `_Rb_tree_increment`/`_Rb_tree_decrement` are each *two* overloads
+    (`_Rb_tree_node_base *` and `const _Rb_tree_node_base *`, all four
+    exported by libstdc++ as `GLIBCXX_3.4` symbols); the const ones are what
+    `_Rb_tree_const_iterator::operator++/--` call, so a container walked
+    through a `const_iterator` — `cbegin()`, a range-for over a `const` map —
+    needs them even though a mutable-iterator walk does not. GCC 15's header
+    routes its const_iterator through the non-const overload and so never
+    references them, which is why defining only that pair built fine here but
+    failed to link under GCC 13 and GCC 14.
     [`lib/cxx_rbtree.cpp`](lib/cxx_rbtree.cpp) reimplements the standard
     red-black tree insert-fixup/delete-fixup/successor-predecessor
     algorithms from scratch against the real, ABI-fixed
