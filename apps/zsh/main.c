@@ -15,14 +15,22 @@
  *    7  fclose(f)             14 time()              19 getcwd(buf,n)
  *                                                    20 listdir(path,buf,n)
  *
- * Editor keys (control keys only arrive over a serial console; a PS/2 keyboard
- * gives you the printable set, Backspace, Tab and Enter):
- *    Tab            complete command / file name
- *    ^P / ^N        previous / next history entry
- *    ^U / ^W        kill line / kill word
+ * Editor keys:
+ *    Left / Right   move the cursor within the line   (same key as ^B / ^F)
+ *    Up / Down      previous / next history entry     (same key as ^P / ^N)
+ *    Home / End     start / end of the line           (same key as ^A / ^E)
+ *    Backspace      delete the character before the cursor
+ *    Tab            complete command / file name (moves to the end first)
+ *    ^U / ^W        kill the line / the word before the cursor
  *    ^L             clear screen
  *    ^C             abandon the line
  *    ^D  (empty)    leave the shell (back to the kernel console)
+ *
+ * The cursor keys reach `getkey` as those control characters whatever the
+ * machine's keyboard is -- the kernel decodes them that way on every input
+ * path, and reassembles a terminal's escape sequences over a serial line into
+ * the same thing (see keyboard.h). Ctrl itself is a different matter: the PS/2
+ * decoder does not track it, so ^U/^W/^L/^C/^D still need a serial console.
  */
 
 typedef unsigned int  u32;
@@ -652,7 +660,15 @@ static void exec_line(const char *line) {
 
 static int  g_plen;         /* rendered prompt length */
 
-static void redraw(const char *buf, int len, int *drawn) {
+/**
+ * Repaint the line and leave the cursor at @p pos characters into it.
+ *
+ * Only `\r`, `\b`, spaces and printable text: the framebuffer console drops
+ * every other control character (video.c's fbcon_putc), so there is no
+ * addressable-cursor escape sequence to lean on -- the same reason the cursor
+ * is parked by backing up over the tail rather than by moving to a column.
+ */
+static void refresh(const char *buf, int len, int pos, int *drawn) {
     wc('\r');
     w(g_prompt);
     w(buf);
@@ -663,6 +679,7 @@ static void redraw(const char *buf, int len, int *drawn) {
         for (int i = 0; i < pad; i++) wc('\b');
     }
     *drawn = now;
+    for (int i = len; i > pos; i--) wc('\b');
 }
 
 /** Longest common prefix of @p nc candidate names. */
@@ -676,6 +693,10 @@ static int common_prefix(char cand[][64], int nc, char *out) {
     return slen(out);
 }
 
+/**
+ * Complete the token the line ends with. Only called with the cursor at the
+ * end of the line (see readline), so it appends and never has to split.
+ */
 static void complete(char *buf, int *plen, int *drawn) {
     int len = *plen;
     int ts = len;
@@ -749,9 +770,18 @@ static void complete(char *buf, int *plen, int *drawn) {
     *plen = len;
 }
 
-/** Read one line. Returns the length, or -1 for end-of-input (^D on empty). */
+/**
+ * Read one line. Returns the length, or -1 for end-of-input (^D on empty).
+ *
+ * `pos` is the insertion point, which is what makes the arrow keys mean
+ * something: the editor used to only ever append, so there was nowhere for
+ * Left and Right to go. Every input path hands a cursor key to the getkey
+ * syscall as one control character (the kernel's keyboard.h explains why), and
+ * those characters are the readline bindings this editor already used, so Up
+ * and ^P are the same keystroke here, as are Left and ^B.
+ */
 static int readline(char *buf) {
-    int len = 0, drawn;
+    int len = 0, pos = 0, drawn;
     int hpos = hist_len;
     char saved[LINE];
     saved[0] = 0;
@@ -764,54 +794,102 @@ static int readline(char *buf) {
     for (;;) {
         int c = sys_getkey();
 
-        if (c == '\n' || c == '\r') { wc('\n'); buf[len] = 0; return len; }
+        if (c == '\n' || c == '\r') {
+            /* Leave the cursor past the end, wherever it was while editing. */
+            for (int i = pos; i < len; i++) wc(buf[i]);
+            wc('\n');
+            buf[len] = 0;
+            return len;
+        }
         if (c == 4) { if (len == 0) { wc('\n'); return -1; } continue; }
         if (c == 3) { buf[0] = 0; w("^C\n"); return 0; }
 
-        if (c == 8 || c == 127) {
-            if (len > 0) { len--; buf[len] = 0; w("\b \b"); drawn--; }
+        if (c == 8 || c == 127) {            /* Backspace: before the cursor */
+            if (pos > 0) {
+                for (int i = pos - 1; i < len - 1; i++) buf[i] = buf[i + 1];
+                len--; pos--;
+                buf[len] = 0;
+                if (pos == len) { w("\b \b"); drawn--; }   /* at the end: cheap */
+                else refresh(buf, len, pos, &drawn);
+            }
             continue;
         }
-        if (c == 21) { len = 0; buf[0] = 0; redraw(buf, len, &drawn); continue; }
-        if (c == 23) {
-            while (len > 0 && buf[len - 1] == ' ') len--;
-            while (len > 0 && buf[len - 1] != ' ') len--;
-            buf[len] = 0;
-            redraw(buf, len, &drawn);
+        if (c == 2) {                        /* Left / ^B */
+            if (pos > 0) { pos--; wc('\b'); }
             continue;
         }
-        if (c == 12) {
+        if (c == 6) {                        /* Right / ^F */
+            if (pos < len) { wc(buf[pos]); pos++; }
+            continue;
+        }
+        if (c == 1) {                        /* Home / ^A */
+            while (pos > 0) { pos--; wc('\b'); }
+            continue;
+        }
+        if (c == 5) {                        /* End / ^E */
+            while (pos < len) { wc(buf[pos]); pos++; }
+            continue;
+        }
+        if (c == 21) {                       /* ^U: kill the line */
+            len = 0; pos = 0; buf[0] = 0;
+            refresh(buf, len, pos, &drawn);
+            continue;
+        }
+        if (c == 23) {                       /* ^W: kill the word before pos */
+            int end = pos;
+            while (pos > 0 && buf[pos - 1] == ' ') pos--;
+            while (pos > 0 && buf[pos - 1] != ' ') pos--;
+            int cut = end - pos;
+            if (cut > 0) {
+                for (int i = pos; i + cut <= len; i++) buf[i] = buf[i + cut];
+                len -= cut;
+                buf[len] = 0;
+                refresh(buf, len, pos, &drawn);
+            }
+            continue;
+        }
+        if (c == 12) {                       /* ^L: clear and reprint */
             for (int i = 0; i < 40; i++) wc('\n');
-            w(g_prompt); w(buf);
-            drawn = g_plen + len;
+            drawn = 0;
+            refresh(buf, len, pos, &drawn);
             continue;
         }
-        if (c == 16) {                       /* ^P */
+        if (c == 16) {                       /* Up / ^P */
             if (hpos > 0) {
                 if (hpos == hist_len) sncpy(saved, buf, LINE - 1);
                 hpos--;
                 scpy(buf, hist[hpos]);
-                len = slen(buf);
-                redraw(buf, len, &drawn);
+                len = pos = slen(buf);
+                refresh(buf, len, pos, &drawn);
             }
             continue;
         }
-        if (c == 14) {                       /* ^N */
+        if (c == 14) {                       /* Down / ^N */
             if (hpos < hist_len) {
                 hpos++;
                 scpy(buf, hpos == hist_len ? saved : hist[hpos]);
-                len = slen(buf);
-                redraw(buf, len, &drawn);
+                len = pos = slen(buf);
+                refresh(buf, len, pos, &drawn);
             }
             continue;
         }
-        if (c == '\t') { complete(buf, &len, &drawn); continue; }
+        if (c == '\t') {
+            /* Completion appends, so it needs the cursor at the end; mid-line
+             * it would have to decide what to do with the tail. Move there
+             * first -- the keystroke then does what it looks like it does. */
+            while (pos < len) { wc(buf[pos]); pos++; }
+            complete(buf, &len, &drawn);
+            pos = len;
+            continue;
+        }
 
         if (c >= 32 && c < 127 && len < LINE - 1) {
-            buf[len++] = (char)c;
+            for (int i = len; i > pos; i--) buf[i] = buf[i - 1];
+            buf[pos] = (char)c;
+            len++;
             buf[len] = 0;
-            wc((char)c);
-            drawn++;
+            if (pos == len - 1) { wc((char)c); pos++; drawn++; }  /* append */
+            else { pos++; refresh(buf, len, pos, &drawn); }
         }
     }
 }

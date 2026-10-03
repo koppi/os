@@ -109,18 +109,83 @@ int uart_getc(void) {
     return -1;   // rx stayed empty
 }
 
+/*
+ * Escape-sequence state for the console input ring: 0 = idle, 1 = an ESC has
+ * arrived, 2 = inside a CSI/SS3 sequence waiting for its final byte.
+ *
+ * A terminal sends a cursor key as ESC [ A (or ESC O A once an application has
+ * turned on the alternate cursor-key mode), three bytes arriving back to back.
+ * Forwarded raw they were three keystrokes to whatever was reading, which is
+ * how an arrow key used to insert `[A` into a command line over a serial
+ * console; the kernel's own keyboards do not have this problem because they
+ * decode a cursor key straight to one control character (keyboard.h). So the
+ * sequence is reassembled here and handed on as that same character, which
+ * also means the shell's editor needs to know only one form of a cursor key
+ * whether the keystroke came from a terminal, a PS/2 controller or USB.
+ */
+static int esc_state;
+
+/** @brief CSI/SS3 final byte -> the console's character for that cursor key. */
+static char csi_final_to_char(char f) {
+    switch (f) {
+        case 'A': return KBD_CH_UP;
+        case 'B': return KBD_CH_DOWN;
+        case 'C': return KBD_CH_RIGHT;
+        case 'D': return KBD_CH_LEFT;
+        case 'H': return KBD_CH_HOME;   /* xterm Home */
+        case 'F': return KBD_CH_END;    /* xterm End  */
+        default:  return 0;             /* a sequence the console has no key for */
+    }
+}
+
 void uart_handler(void) {
     /* Drain the whole RX FIFO: one IRQ can cover several buffered bytes. */
     while (inportb(UART_PORT + 5) & 1) {
         char c = (char) inportb(UART_PORT + 0);
 
         /* Legacy line buffer (drained by uart_read); silently drop on overflow
-         * - logging here would recurse through the console on an input flood. */
+         * - logging here would recurse through the console on an input flood.
+         * This keeps the raw bytes, escape sequences included. */
         if (rbpos < RECVBUF_LEN)
             recvbuf[rbpos++] = c;
 
+        if (esc_state == 1) {
+            esc_state = 0;
+            if (c == '[' || c == 'O') {     /* CSI / SS3: a cursor key follows */
+                esc_state = 2;
+                continue;
+            }
+            /*
+             * A bare ESC. Two in a row is the shortcut that shuts the machine
+             * down (and with it QEMU, through the isa-debug-exit device): it
+             * used to be a single ESC, but that cannot coexist with a terminal
+             * whose cursor keys *start* with ESC -- pressing Up would quit.
+             * Press Esc twice instead. Anything else: the ESC was not the
+             * start of a sequence, so drop it and handle this byte normally.
+             */
+            if (c == 27) {
+                exit_qemu(0);
+            }
+        } else if (esc_state == 2) {
+            /*
+             * Inside a sequence. The parameter bytes of a longer one (`ESC [
+             * 3 ~` for Delete, `ESC [ 1 ; 5 C` for Ctrl-Right) are 0x30-0x3F;
+             * the first byte outside that range ends it. Only the sequences
+             * with a key of their own reach the ring, so an unrecognised one
+             * is swallowed whole rather than arriving as its own tail.
+             */
+            if ((unsigned char) c >= 0x30 && (unsigned char) c <= 0x3F)
+                continue;               /* parameter / intermediate byte */
+            esc_state = 0;
+            char key = csi_final_to_char(c);
+            if (key)
+                keyboard_push_char(key);
+            continue;
+        }
+
         if (c == 27) {
-            exit_qemu(0);
+            esc_state = 1;
+            continue;
         }
 
         /* Feed the byte into the shared console input ring (the same hook the

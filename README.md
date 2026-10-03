@@ -792,12 +792,33 @@ reimplement the commands. It classifies each line:
   `run` syscall, so `ls`, `pci`, `date`, `poweroff` … behave exactly as they do
   on the in-kernel console.
 
-Editor keys: `Tab` completes, `^P`/`^N` walk history, `^U`/`^W` kill,
-`^L` clears, `^C` abandons the line, `^D` on an empty line leaves the shell.
-Over a PS/2 keyboard only the printable set plus `Tab`/Backspace reach the
-shell, so history there is via `!!` / `!n` / `!prefix`; a serial console
-(`-serial mon:stdio`) delivers the control keys too. `/rd/zshrc` is sourced at
-start-up — a place for aliases.
+Editor keys: **Left/Right move within the line, Up/Down walk history,
+Home/End jump to either end**, Backspace deletes before the cursor, `Tab`
+completes, `^U`/`^W` kill the line / the word before the cursor, `^L` clears,
+`^C` abandons the line, `^D` on an empty line leaves the shell.
+`/rd/zshrc` is sourced at start-up — a place for aliases.
+
+The cursor keys work on **any** of this machine's keyboards, which they did not
+before: the editor only ever appended, so there was nowhere for Left and Right
+to go, and nothing delivered the keys anyway. The arrow cluster has no ASCII,
+so the PS/2 decoder dropped the 0xE0-prefixed codes, [`usb_hid.c`](usb_hid.c)
+had no table entry for the usages — the whole story on a machine with no PS/2
+controller, like the MacBook Air — and over a serial console the terminal's
+`ESC [ A` arrived as three keystrokes, which put `[A` in the line. Each path
+now decodes a cursor key to the one control character the readline-shaped
+editor was already written around (Up *is* `^P` to it; [`keyboard.h`](keyboard.h)
+says why one byte rather than an escape sequence), and
+[`uart.c`](uart.c) reassembles a terminal's sequences into the same thing. A
+consequence worth knowing at the serial console: a lone `ESC` can no longer
+shut the machine down, because a cursor key starts with one — **press `Esc`
+twice**. Ctrl itself is still not decoded from the PS/2 controller, so
+`^U`/`^W`/`^L`/`^C`/`^D` continue to need a serial console; `!!` / `!n` /
+`!prefix` remain the keyboard-only way to reach history by name.
+
+Insert, Delete and Page Up/Down are deliberately *not* carried: there is no
+conventional control character for them, and inventing one would mean every
+reader of the input ring having to learn it. They are in the raw scancode
+stream, which `keys` prints.
 
 New syscalls behind this: `getkey` (17, one unechoed keystroke), `run` (18,
 `console_exec` on behalf of ring 3), `getcwd` (19), `listdir` (20, for

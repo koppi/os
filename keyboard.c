@@ -100,6 +100,15 @@ static const uint8_t shifted_keyboard_map[] =
 #define SC_E0_VOLDOWN  0x2E
 #define SC_E0_VOLUP    0x30
 
+/* The cursor cluster, same 0xE0 prefix. The keypad sends these make codes
+ * without the prefix, which is how the two are told apart. */
+#define SC_E0_UP       0x48
+#define SC_E0_LEFT     0x4B
+#define SC_E0_RIGHT    0x4D
+#define SC_E0_DOWN     0x50
+#define SC_E0_HOME     0x47
+#define SC_E0_END      0x4F
+
 /*
  * Decoded keystrokes are pushed here by the keyboard IRQ and drained by the
  * console. Without it a key that arrives (make + break) between two polls is
@@ -271,7 +280,16 @@ void keyboard_read_key() {
                 case SC_E0_VOLUP:   sound_volume_up();   break;
                 case SC_E0_VOLDOWN: sound_volume_down(); break;
                 case SC_E0_MUTE:    sound_mute_toggle(); break;
-                default: break;   /* arrows, nav cluster, ... not decoded yet */
+                /* The cursor keys, as the one control character every reader
+                 * of this ring understands (see keyboard.h). The rest of the
+                 * cluster has no such character and stays in the raw ring. */
+                case SC_E0_UP:    kbd_buf_push(KBD_CH_UP);    break;
+                case SC_E0_DOWN:  kbd_buf_push(KBD_CH_DOWN);  break;
+                case SC_E0_LEFT:  kbd_buf_push(KBD_CH_LEFT);  break;
+                case SC_E0_RIGHT: kbd_buf_push(KBD_CH_RIGHT); break;
+                case SC_E0_HOME:  kbd_buf_push(KBD_CH_HOME);  break;
+                case SC_E0_END:   kbd_buf_push(KBD_CH_END);   break;
+                default: break;   /* Insert/Delete/PgUp/PgDn, Print Screen, ... */
             }
         }
         return;
@@ -384,7 +402,11 @@ void gets(char *str, size_t size) {
         else if(c == '\b')
             if(count > 0)
                 count--;
-        printf("%c", c);
+        /* Echo what a terminal can show. A cursor key arrives as a control
+         * character (keyboard.h) and this reader has no editor to apply it to,
+         * so it is swallowed rather than echoed as a stray glyph. */
+        if(c == '\n' || c == '\b' || (unsigned char) c >= 32)
+            printf("%c", c);
         if(c == '\n') {
             str[count] = '\0';
             break;
