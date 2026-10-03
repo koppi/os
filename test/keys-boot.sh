@@ -9,9 +9,12 @@
 #
 #   raw    the scancode ring a full-screen program reads (keyboard.h, behind
 #          the `getscan` syscall) -- make/break with the 0xE0 prefix, which is
-#          what apps/doom binds movement to. The kernel console's `keys`
-#          command prints it; the four arrows have to arrive as E0 48/50/4b/4d,
-#          press and release.
+#          what apps/doom binds movement to, and the plain set-1 make codes
+#          for the modifiers. The kernel console's `keys` command prints it; the
+#          four arrows have to arrive as E0 48/50/4b/4d and both shifts as 2a
+#          and 36, press and release. Shift is checked here because a keyboard
+#          that keeps its modifiers out of the report's usage array loses it
+#          while every other key keeps working.
 #   shell  the character ring, which the shell's line editor reads through
 #          `getkey`. A cursor key reaches it as one control character
 #          (keyboard.h), so the checks here are what the editor *did* with it:
@@ -34,7 +37,10 @@ set -u
 cd "$(dirname "$0")/.."
 OUT=${OUT:-/tmp/keys-boot}
 mkdir -p "$OUT"
-BOOT_WAIT=${BOOT_WAIT:-14}     # seconds from power-on to a usable prompt
+BOOT_WAIT=${BOOT_WAIT:-45}     # seconds from power-on to a usable prompt.
+                                 # The USB topologies enumerate a keyboard (and
+                                 # re-probe it) long after the i8042 one is up,
+                                 # so this is set for them, not the PS/2 case.
 KVM=${KVM:--enable-kvm}
 
 for t in qemu-system-i386 socat; do
@@ -73,6 +79,9 @@ run() {
     sleep 3
     local k
     for k in up down left right; do key "$k"; done
+    # Both shifts, too: a keyboard whose modifier bitmap the driver never sees
+    # still delivers every other key, so only the raw stream shows it missing.
+    key shift; key shift_r
     mon "sendkey esc"              # `keys` stops on Esc
     sleep 2
 
@@ -85,6 +94,11 @@ run() {
     key up; key end; type_ '!'; type_ $'\n'; sleep 1
     # the same Left, but as a terminal's escape sequence over the serial line
     type_ 'echo 12'; type_ $'\033[D'; type_ 'Z'; type_ $'\n'; sleep 1
+    # Shift and a letter, all three from the same key press: `echo Abc`.
+    # Shift is the one key a HID keyboard carries outside the usage array, so
+    # it is the one a driver that never reads the modifier bitmap loses --
+    # silently, with everything else still working.
+    type_ 'echo '; mon "sendkey shift-a"; sleep 0.5; type_ 'bc'; type_ $'\n'; sleep 1
 
     mon quit; sleep 1
     exec 9>&-
@@ -94,16 +108,23 @@ run() {
     # -- what came out -----------------------------------------------------
     local miss= sc want
     grep -a '^keys: E0' "$d/serial.log" | sed 's/^/    /'
+    grep -a '^keys: -- 2[36]' "$d/serial.log" | sed 's/^/    /'
     for sc in 48 50 4b 4d; do
         grep -qa "^keys: E0 $sc press"   "$d/serial.log" || miss="$miss raw:E0-$sc-press"
         grep -qa "^keys: E0 $sc release" "$d/serial.log" || miss="$miss raw:E0-$sc-release"
     done
+    # 2a/36 are the set-1 make codes for left/right shift.
+    for sc in 2a 36; do
+        grep -qa "^keys: -- $sc press"   "$d/serial.log" || miss="$miss raw:-$sc-press"
+        grep -qa "^keys: -- $sc release" "$d/serial.log" || miss="$miss raw:-$sc-release"
+    done
     # Each is the output of a line that could only be built with the cursor
-    # keys: mid-line insert, Home, history + End, and the serial escape form.
-    for want in abXcd 'hi!' 1Z2; do
+    # keys, or with shift: mid-line insert, Home, history + End, the serial
+    # escape form, and an upper-case letter.
+    for want in abXcd 'hi!' 1Z2 Abc; do
         grep -qa "^$want" "$d/serial.log" || miss="$miss shell:$want"
     done
-    echo "    shell: $(for want in abXcd 'hi!' 1Z2; do
+    echo "    shell: $(for want in abXcd 'hi!' 1Z2 Abc; do
                           grep -qa "^$want" "$d/serial.log" && printf '%s ' "$want=ok" \
                                                             || printf '%s ' "$want=MISSING"
                        done)"
@@ -112,7 +133,7 @@ run() {
         echo "    -> $d/serial.log"
         fail=1
     else
-        echo "    PASS ($name): arrows in the raw stream and in the line editor"
+        echo "    PASS ($name): arrows and shifts in the raw stream and in the line editor"
     fi
     echo
 }

@@ -22,6 +22,9 @@ typedef struct {
 
 static hid_dev_t hid[MAX_HID];
 
+/** Report dump for the console "hid" command (see usb_hid_set_watch). */
+static int hid_watch;
+
 /*
  * --- HID keyboard usage (0x04..) -> ASCII, unshifted / shifted ---
  *
@@ -138,6 +141,15 @@ static int report_has_key(const uint8_t *rpt, uint8_t code) {
 void usb_hid_report_keyboard(const uint8_t *rpt, int len, uint8_t prev[8]) {
     if(len < 3)
         return;
+    if(hid_watch) {
+        /* Both host controllers funnel keyboard reports through here, so this
+         * is the one place a dump can catch every keyboard on any topology. */
+        char hex[3 * 16 + 1];
+        int o = 0;
+        for(int i = 0; i < len && i < 16 && o < (int)sizeof(hex) - 3; i++)
+            o += snprintf(hex + o, sizeof(hex) - o, "%02x ", rpt[i]);
+        klogf(LOG_INFO, "hid: kbd len %d: %s\n", len, hex);
+    }
     int shift = (rpt[0] & 0x22) != 0;   /* L/R shift */
     for(int i = 2; i < 8 && i < len; i++) {
         uint8_t code = rpt[i];
@@ -192,6 +204,14 @@ void usb_hid_report_mouse(const uint8_t *rpt, int len) {
 
 static void handle_keyboard(hid_dev_t *h, uint8_t *rpt, int len) {
     usb_hid_report_keyboard(rpt, len, h->prev);
+}
+
+void usb_hid_set_watch(int on) {
+    hid_watch = on;
+}
+
+int usb_hid_watching(void) {
+    return hid_watch;
 }
 
 /** @brief Apply a boot-protocol mouse report to @c mouse_info. */

@@ -33,6 +33,21 @@ void usb_hid_detach(uint8_t addr);
 void usb_hid_poll(void);
 
 /**
+ * @brief Log every HID report to the console as it arrives ("hid" command).
+ * @param on  1 to start dumping, 0 to stop.
+ *
+ * The boot-protocol assumption (report byte 0 is the modifier bitmap) is the
+ * one thing this driver cannot verify for itself: it never reads the report
+ * descriptor, so a keyboard that answers SET_PROTOCOL(boot) with something else
+ * looks exactly like a keyboard whose modifiers are all released. Dumping the
+ * reports is what tells the two apart.
+ */
+void usb_hid_set_watch(int on);
+
+/** @brief Is the "hid" report dump currently on? */
+int usb_hid_watching(void);
+
+/**
  * @brief Translate a HID boot keyboard report and push newly-pressed keys.
  * @param rpt  The 8-byte boot report [mods, resv, key0..key5].
  * @param len  Report length.

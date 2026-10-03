@@ -31,6 +31,7 @@
 #include <ssh.h>
 #include <rtc.h>
 #include <keyboard.h>
+#include <usb_hid.h>
 #include <percpu.h>
 #include <commands.h>
 #include <coreutils.h>
@@ -559,6 +560,23 @@ static void console_keys(void) {
 }
 
 /**
+ * @brief Dump every HID report as it arrives ("hid"), to see what a keyboard
+ *        that does not follow the boot protocol actually sends.
+ */
+static void console_hid(void) {
+    if(usb_hid_watching()) {
+        usb_hid_set_watch(0);
+        printf("hid: dump off.\n");
+        return;
+    }
+    printf("hid: dumping HID reports -- type 'hid' to stop.\n"
+           "      A boot-protocol keyboard reports [mods, 00, key0..key5];\n"
+           "      anything else means the keyboard ignored SET_PROTOCOL(boot)\n"
+           "      or prefixes its report with a report ID.\n");
+    usb_hid_set_watch(1);
+}
+
+/**
  * @brief Play a short square-wave tone through the AC97 codec ("beep").
  */
 static void console_beep(void) {
@@ -915,6 +933,8 @@ void console_exec(char *buf) {
         console_sound(buf);
     } else if(strcmp(buf, "keys") == 0) {
         console_keys();
+    } else if(strcmp(buf, "hid") == 0) {
+        console_hid();
     } else if(strncmp(buf, "beep", 4) == 0) {
         console_beep();
     } else if(coreutils_try(buf)) {
