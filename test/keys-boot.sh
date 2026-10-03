@@ -1,14 +1,21 @@
 #!/bin/bash
-# keys-boot.sh — check the raw key stream (the one a full-screen program reads)
-# on every input topology this kernel runs on, headless, with no WAD needed.
+# keys-boot.sh — check the keyboard on every input topology this kernel runs
+# on, headless, with no WAD needed.
 #
 #   test/keys-boot.sh [ps2|uhci|xhci|all]          (default: all)
 #
-# The arrow cluster is what a game binds to movement and the one thing the
-# character ring cannot carry, so it is what this checks: the kernel console's
-# `keys` command is started over the serial line, the four arrows are injected
-# with the monitor's `sendkey`, and the log has to come back with the 0xE0-
-# prefixed set-1 make codes (E0 48/50/4b/4d) and a release for each.
+# Two phases per topology, because a keystroke takes two different routes into
+# the system and the arrow cluster used to be lost on both:
+#
+#   raw    the scancode ring a full-screen program reads (keyboard.h, behind
+#          the `getscan` syscall) -- make/break with the 0xE0 prefix, which is
+#          what apps/doom binds movement to. The kernel console's `keys`
+#          command prints it; the four arrows have to arrive as E0 48/50/4b/4d,
+#          press and release.
+#   shell  the character ring, which the shell's line editor reads through
+#          `getkey`. A cursor key reaches it as one control character
+#          (keyboard.h), so the checks here are what the editor *did* with it:
+#          text inserted mid-line, Home, and history.
 #
 # One scenario per keyboard this kernel can be driven by, because they are
 # three separate decode paths and only the first was ever covered:
@@ -19,6 +26,10 @@
 #   xhci   USB HID boot keyboard via xhci.c, with the i8042 switched off, so
 #          the only keyboard on the machine is the USB one   (MacBook Air 2013,
 #          X250/T470s with an external keyboard)
+#
+# The shell phase also types a terminal's own `ESC [ D` down the serial line,
+# which is the fourth path: uart.c reassembling an escape sequence into the
+# same cursor key (and not quitting on the ESC, which it used to do).
 set -u
 cd "$(dirname "$0")/.."
 OUT=${OUT:-/tmp/keys-boot}
@@ -51,34 +62,57 @@ run() {
     socat "unix-connect:$d/ser.sock" - < "$d/in.fifo" > "$d/serial.log" 2>/dev/null &
     local spid=$!
     exec 9>"$d/in.fifo"
-    mon() { echo "$1" | socat - "unix-connect:$d/mon.sock" >/dev/null 2>&1; }
+    mon()   { echo "$1" | socat - "unix-connect:$d/mon.sock" >/dev/null 2>&1; }
+    key()   { mon "sendkey $1"; sleep 0.5; }
+    type_() { printf '%s' "$1" >&9; sleep 0.6; }
 
     sleep "$BOOT_WAIT"
-    printf 'keys\n' >&9            # the kernel console's raw-scancode dump
+
+    # -- phase 1: the raw scancode stream ----------------------------------
+    printf 'keys\n' >&9
     sleep 3
     local k
-    for k in up down left right; do mon "sendkey $k"; sleep 0.6; done
+    for k in up down left right; do key "$k"; done
     mon "sendkey esc"              # `keys` stops on Esc
     sleep 2
+
+    # -- phase 2: the shell's line editor ----------------------------------
+    # `echo abcd`, Left Left, X          -> the line becomes `echo abXcd`
+    type_ 'echo abcd'; key left; key left; type_ 'X'; type_ $'\n'; sleep 1
+    # `cho hi`, Home, e                  -> `echo hi`
+    type_ 'cho hi'; key home; type_ 'e'; type_ $'\n'; sleep 1
+    # Up (recalls `echo hi`), End, !     -> `echo hi!`
+    key up; key end; type_ '!'; type_ $'\n'; sleep 1
+    # the same Left, but as a terminal's escape sequence over the serial line
+    type_ 'echo 12'; type_ $'\033[D'; type_ 'Z'; type_ $'\n'; sleep 1
+
     mon quit; sleep 1
     exec 9>&-
     kill $qpid $spid 2>/dev/null; wait $qpid $spid 2>/dev/null
     rm -f "$d"/*.sock "$d"/in.fifo
 
-    # What came out, and whether every arrow made it through press *and*
-    # release with the 0xE0 prefix that tells it from the numeric keypad.
+    # -- what came out -----------------------------------------------------
+    local miss= sc want
     grep -a '^keys: E0' "$d/serial.log" | sed 's/^/    /'
-    local sc miss=
     for sc in 48 50 4b 4d; do
-        grep -qa "^keys: E0 $sc press"   "$d/serial.log" || miss="$miss E0-$sc-press"
-        grep -qa "^keys: E0 $sc release" "$d/serial.log" || miss="$miss E0-$sc-release"
+        grep -qa "^keys: E0 $sc press"   "$d/serial.log" || miss="$miss raw:E0-$sc-press"
+        grep -qa "^keys: E0 $sc release" "$d/serial.log" || miss="$miss raw:E0-$sc-release"
     done
+    # Each is the output of a line that could only be built with the cursor
+    # keys: mid-line insert, Home, history + End, and the serial escape form.
+    for want in abXcd 'hi!' 1Z2; do
+        grep -qa "^$want" "$d/serial.log" || miss="$miss shell:$want"
+    done
+    echo "    shell: $(for want in abXcd 'hi!' 1Z2; do
+                          grep -qa "^$want" "$d/serial.log" && printf '%s ' "$want=ok" \
+                                                            || printf '%s ' "$want=MISSING"
+                       done)"
     if [ -n "$miss" ]; then
         echo "    FAIL ($name): missing$miss"
         echo "    -> $d/serial.log"
         fail=1
     else
-        echo "    PASS ($name): all four arrows, press and release"
+        echo "    PASS ($name): arrows in the raw stream and in the line editor"
     fi
     echo
 }

@@ -18,6 +18,38 @@ uint8_t keyboard_enabled();
 void keyboard_read_key();
 /** @brief Inject a decoded character (used by the USB HID keyboard driver). */
 void keyboard_push_char(char c);
+
+/**
+ * @name Cursor keys in the character stream
+ *
+ * The arrow cluster has no ASCII of its own, which is why it used to be
+ * dropped by every path into the console input ring: the PS/2 decoder threw
+ * the 0xE0-prefixed codes away, @ref usb_hid.c had no table entry for the
+ * usages, and a terminal's escape sequence arrived as its raw bytes -- so the
+ * shell's line editor saw `[A` as two keystrokes to insert, or nothing at all.
+ *
+ * Each path now normalises a cursor key to one of these control characters,
+ * the same ones a reader of this ring already has to understand (they are the
+ * readline/emacs bindings the shell's editor was written around, so Up and ^P
+ * are deliberately the same keystroke to it). One byte rather than an escape
+ * sequence keeps the ring's single-character atom intact: a consumer that does
+ * not know a code simply ignores it instead of inserting the tail of a
+ * sequence it failed to parse. A full-screen program that needs to tell Up
+ * from ^P reads the raw scancode ring instead (@ref keyboard_raw_get).
+ *
+ * The rest of the cluster -- Insert, Delete, Page Up/Down -- has no
+ * conventional control character and is not carried here; it is in the raw
+ * ring, which the `keys` console command prints.
+ */
+///@{
+#define KBD_CH_UP     0x10   /**< Up    == ^P (previous). */
+#define KBD_CH_DOWN   0x0E   /**< Down  == ^N (next).     */
+#define KBD_CH_LEFT   0x02   /**< Left  == ^B (back).     */
+#define KBD_CH_RIGHT  0x06   /**< Right == ^F (forward).  */
+#define KBD_CH_HOME   0x01   /**< Home  == ^A.            */
+#define KBD_CH_END    0x05   /**< End   == ^E.            */
+///@}
+
 /** @brief Peek the oldest buffered key without consuming it (0 if empty). */
 char keyboard_get_lastkey();
 /** @brief Consume the key last returned by @ref keyboard_get_lastkey. */

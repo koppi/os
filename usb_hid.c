@@ -22,7 +22,15 @@ typedef struct {
 
 static hid_dev_t hid[MAX_HID];
 
-/* --- HID keyboard usage (0x04..) -> ASCII, unshifted / shifted --- */
+/*
+ * --- HID keyboard usage (0x04..) -> ASCII, unshifted / shifted ---
+ *
+ * The cursor keys have no ASCII, so they carry the control character every
+ * reader of the console input ring understands (keyboard.h): without an entry
+ * here they were dropped, and on a machine whose only keyboard is USB -- a
+ * MacBook Air 2013 has no PS/2 controller -- that was the arrow keys doing
+ * nothing in the shell, with no other input path to fall back on.
+ */
 static const char kbd_ascii[128] = {
     /* 00 */ 0, 0, 0, 0,
     /* 04 */ 'a','b','c','d','e','f','g','h','i','j','k','l','m',
@@ -31,7 +39,14 @@ static const char kbd_ascii[128] = {
     /* 28 */ '\n', 27, '\b', '\t', ' ', '-', '=', '[', ']', '\\', 0, ';', '\'',
     /* 35 */ '`', ',', '.', '/', 0,
     /* 3a */ 0,0,0,0,0,0,0,0,0,0,0,0,   /* F1..F12 */
-    /* 46 */ 0,0,0,0,0,0,0,0,0,0,0,0,0, /* PrtSc..arrows region */
+    /* 46 */ 0, 0, 0,                   /* PrtSc, ScrLk, Pause */
+    /* 49 */ 0,                         /* Insert: no control character */
+    /* 4a */ KBD_CH_HOME,
+    /* 4b */ 0,                         /* PgUp: no control character */
+    /* 4c */ 0,                         /* Delete: no control character */
+    /* 4d */ KBD_CH_END,
+    /* 4e */ 0,                         /* PgDn: no control character */
+    /* 4f */ KBD_CH_RIGHT, KBD_CH_LEFT, KBD_CH_DOWN, KBD_CH_UP,
     /* 53 */ 0, '/', '*', '-', '+', '\n',
     /* 59 */ '1','2','3','4','5','6','7','8','9','0','.',
 };
@@ -43,7 +58,15 @@ static const char kbd_ascii_shift[128] = {
     '\n', 27, '\b', '\t', ' ', '_', '+', '{', '}', '|', 0, ':', '"',
     '~', '<', '>', '?', 0,
     0,0,0,0,0,0,0,0,0,0,0,0,
-    0,0,0,0,0,0,0,0,0,0,0,0,0,
+    /* Shift does not change a cursor key. */
+    0, 0, 0,
+    0,
+    KBD_CH_HOME,
+    0,
+    0,
+    KBD_CH_END,
+    0,
+    KBD_CH_RIGHT, KBD_CH_LEFT, KBD_CH_DOWN, KBD_CH_UP,
     0, '/', '*', '-', '+', '\n',
     '1','2','3','4','5','6','7','8','9','0','.',
 };

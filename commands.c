@@ -951,6 +951,10 @@ void kmain_console(void) {
                 i--;
                 printf("\b \b");
             }
+        } else if((unsigned char) c < 32) {
+            /* A control character this console has no editor for -- a cursor
+             * key arrives as one (keyboard.h). Dropped rather than typed into
+             * the line: the shell is where line editing lives. */
         } else if(i < (int)sizeof(cmdbuf) - 1) {
             cmdbuf[i++] = c;
             printf("%c", c);
