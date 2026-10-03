@@ -514,17 +514,22 @@ int sched_yield(void) {
 }
 
 /* -------------------------------------------------------------------- */
-/* clock_gettime() -- CLOCK_REALTIME/CLOCK_MONOTONIC both backed by the  */
-/* same whole-second time() syscall (14): this kernel has no finer       */
-/* clock exposed to userspace, so tv_nsec is always 0. QElapsedTimer and */
-/* the timedlock/clockwait functions above inherit that same             */
-/* whole-second resolution as a result.                                  */
+/* clock_gettime(): CLOCK_REALTIME is the RTC's whole-second time() (14).   */
+/* Every other clock (MONOTONIC, BOOTTIME, ...) is millisecond uptime from   */
+/* the PIT via the clock syscall (15), so Qt's timers and ppoll() timeouts   */
+/* get real sub-second resolution. REALTIME keeps tv_nsec = 0 on purpose:    */
+/* mixing RTC seconds with PIT milliseconds would let it step backwards.     */
 /* -------------------------------------------------------------------- */
 
 int clock_gettime(clockid_t clk_id, struct timespec *tp) {
-    (void) clk_id;
-    tp->tv_sec = (long) syscall3(14, 0, 0, 0);
-    tp->tv_nsec = 0;
+    if (clk_id == CLOCK_REALTIME) {
+        tp->tv_sec = (long) syscall3(14, 0, 0, 0);
+        tp->tv_nsec = 0;
+    } else {
+        unsigned int ms = (unsigned int) syscall3(15, 0, 0, 0);
+        tp->tv_sec = (long) (ms / 1000u);
+        tp->tv_nsec = (long) (ms % 1000u) * 1000000L;
+    }
     return 0;
 }
 
@@ -589,22 +594,28 @@ int dup2(int oldfd, int newfd) {
     g_errno = ENOSYS;
     return -1;
 }
+extern long simfd_read(int fd, void *buf, unsigned long count);
+extern long simfd_write(int fd, const void *buf, unsigned long count);
+extern int simfd_close(int fd);
+
 ssize_t read(int fd, void *buf, size_t count) {
-    (void) fd;
-    (void) buf;
-    (void) count;
+    long r = simfd_read(fd, buf, count); /* in-process eventfds, libc_ext.c */
+    if (r != -2)
+        return r;
     g_errno = ENOSYS;
     return -1;
 }
 ssize_t write(int fd, const void *buf, size_t count) {
-    (void) fd;
-    (void) buf;
-    (void) count;
+    long r = simfd_write(fd, buf, count);
+    if (r != -2)
+        return r;
     g_errno = ENOSYS;
     return -1;
 }
 int close(int fd) {
-    (void) fd;
+    int r = simfd_close(fd);
+    if (r != -2)
+        return r;
     g_errno = ENOSYS;
     return -1;
 }

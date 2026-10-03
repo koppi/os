@@ -1,0 +1,507 @@
+#include "playback.h"
+#include "project_instruments.h"
+#include "utils.h"
+#include <stdio.h>
+
+namespace chipnomad {
+
+static InstrumentType getInstrumentType(Player* player, int trackIdx) {
+  int instrumentIdx = player->tracks[trackIdx].note.instrument;
+  return player->p->instruments[instrumentIdx].type;
+}
+
+static int isAYInstrument(Player* player, int trackIdx) {
+  InstrumentType type = getInstrumentType(player, trackIdx);
+
+  if (type == InstrumentType::AY1 || type == InstrumentType::AY2 || type == InstrumentType::AYSample) {
+    return 1;
+  }
+  return 0;
+}
+
+// =================
+// AY Common Effects
+// =================
+
+// AYM - AY Mixer
+static void handleFX_AYM(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  if (!isAYInstrument(player, trackIdx)) return;
+
+  uint8_t value = fx->fxValue;
+  value = ~value; // Invert mixer bits to match AY behavior
+  track->note.chip.ay.mixer = (value & 0x1) + ((value & 0x2) << 2);
+  track->note.chip.ay.envShape = (fx->fxValue & 0xf0) >> 4;
+}
+
+// NOA - Absolute noise period value
+static void handleFX_NOA(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  if (!isAYInstrument(player, trackIdx)) return;
+
+  if (fx->fxValue == EMPTY_VALUE_8) {
+    // Bypass setting noise period
+    track->note.chip.ay.noiseBase = EMPTY_VALUE_8;
+  } else {
+    track->note.chip.ay.noiseBase = fx->fxValue & 0x1f;
+  }
+}
+
+// NOI - Relative noise period value
+static void initFX_NOI(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  if (!isAYInstrument(player, trackIdx)) return;
+
+  if (track->note.chip.ay.noiseBase == EMPTY_VALUE_8) track->note.chip.ay.noiseBase = 0;
+  fx->acc += fx->fxValue;
+}
+
+static void restartFX_NOI(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - NOI should keep the accumulated offset
+}
+
+static void handleFX_NOI(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  if (!isAYInstrument(player, trackIdx)) return;
+
+  track->note.chip.ay.noiseOffset += fx->acc;
+}
+
+// ERT - Envelope retrigger
+static void handleFX_ERT(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  if (!isAYInstrument(player, trackIdx)) return;
+
+  player->chips[chipIdx].ay.envShape = 0;
+}
+
+// EAU - Auto-env settings
+static void handleFX_EAU(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  uint8_t n = (fx->fxValue & 0xf0) >> 4;
+  uint8_t d = (fx->fxValue & 0x0f);
+  if (d == 0) d = 1;
+  track->note.chip.ay.envAutoN = n;
+  track->note.chip.ay.envAutoD = d;
+}
+
+
+// ====================
+// AY1 Specific Effects
+// ====================
+
+// ENT - Envelope note
+static void handleFX_ENT(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY1) return;
+
+  struct Project *p = player->p;
+  int note = fx->fxValue + p->pitchTable.octaveSize * 4;  // AY env period is 4 octaves lower
+  if (note >= p->pitchTable.length) note = p->pitchTable.length - 1;
+
+  if (p->linearPitch) {
+    // Linear pitch mode: convert cents to frequency, then to period
+    int cents = p->pitchTable.values[note];
+    float frequency = centsToFrequency(cents);
+    track->note.chip.ay.envPeriodBase = frequencyToAYPeriod(frequency, p->chipSetup.ay.clock);
+  } else {
+    // Traditional period mode
+    track->note.chip.ay.envPeriodBase = p->pitchTable.values[note];
+  }
+}
+
+// EPT - Envelope period offset
+static void initFX_EPT(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY1) {
+    fx->isOn = 0;
+    return;
+  }
+  fx->acc += (int8_t)fx->fxValue;
+}
+
+static void restartFX_EPT(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - EPT should keep the accumulated offset
+}
+
+static void handleFX_EPT(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  track->note.chip.ay.envPeriodOffset += fx->acc;
+}
+
+// EPL - Envelope period Low
+static void handleFX_EPL(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY1) return;
+
+  track->note.chip.ay.envPeriodBase = (track->note.chip.ay.envPeriodBase & 0xff00) + fx->fxValue;
+}
+
+// EPH - Envelope period High
+static void handleFX_EPH(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY1) return;
+
+  track->note.chip.ay.envPeriodBase = (track->note.chip.ay.envPeriodBase & 0x00ff) + (fx->fxValue << 8);
+}
+
+// EBN - Envelope pitch bend
+static void initFX_EBN(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY1) {
+    fx->isOn = 0;
+    return;
+  }
+
+  // Calculate per-frame change
+  int speed = 1;
+  if (tableFXColumn >= 0) {
+    speed = tableState->speed[tableFXColumn];
+  } else {
+    speed = player->p->grooves[track->grooveIdx].speed[track->grooveRow];
+  }
+  if (speed == 0) speed = 1;
+  int value = (int8_t)(fx->fxValue) << 8; // Use 24.8 fixed point math
+  fx->d.bend.speed = value / speed;
+}
+
+static void handleFX_EBN(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->acc += fx->d.bend.speed;
+  track->note.chip.ay.envPeriodOffset += fx->acc >> 8;
+}
+
+// EVB - Envelope vibrato
+static void restartFX_EVB(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - EVB should continue uninterrupted
+}
+
+static void handleFX_EVB(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY1) return;
+
+  track->note.chip.ay.envPeriodOffset += player->vibratoCommonLogic(fx, 1);
+}
+
+// ESL - Pitch slide (portamento
+static void initFX_ESL(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY1) {
+    fx->isOn = 0;
+    return;
+  }
+
+  if (track->note.chip.ay.envPeriodBase != 0) {
+    fx->d.slide.startPeriod = track->note.chip.ay.envPeriodBase;
+  } else {
+    fx->isOn = 0;
+  }
+}
+
+static void handleFX_ESL(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  if (fx->d.slide.startPeriod == 0 || fx->counter >= fx->fxValue) {
+    fx->isOn = 0; // Reached the end or no valid start, turn off FX
+    return;
+  } else if (fx->counter == 0) {
+    fx->d.slide.endPeriod = track->note.chip.ay.envPeriodBase;
+  }
+  int distance = fx->d.slide.endPeriod - fx->d.slide.startPeriod;
+  int offset = (distance * fx->counter) / fx->fxValue;
+  track->note.chip.ay.envPeriodOffset += distance - offset;
+}
+
+
+// ============================================
+// AY2 and AYSample Common Effects
+// ============================================
+
+// TNN - Tone specific note
+static void handleFX_TNN(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  if (!(isAYInstrument(player, trackIdx) && getInstrumentType(player, trackIdx) != InstrumentType::AY1)) return;
+
+  track->note.chip.ay.toneFixedPitch = fx->fxValue;
+}
+
+// TNP - Tone pitch offset
+static void initFX_TNP(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  if (!(isAYInstrument(player, trackIdx) && getInstrumentType(player, trackIdx) != InstrumentType::AY1)) {
+    fx->isOn = 0;
+    return;
+  }
+
+  fx->acc += (int8_t)fx->fxValue;
+}
+
+static void restartFX_TNP(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - TNP should keep the accumulated offset
+}
+
+static void handleFX_TNP(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  track->note.chip.ay.tonePitchOffset += fx->acc;
+}
+
+// TNF - Tone fine offset
+static void initFX_TNF(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  if (!(isAYInstrument(player, trackIdx) && getInstrumentType(player, trackIdx) != InstrumentType::AY1)) {
+    fx->isOn = 0;
+    return;
+  }
+
+  fx->acc += (int8_t)fx->fxValue;
+}
+
+static void restartFX_TNF(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - TNF should keep the accumulated offset
+}
+
+static void handleFX_TNF(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  track->note.chip.ay.toneFineOffset += fx->acc;
+}
+
+// TRT - Tone phase retrigger
+static void handleFX_TRT(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  // TODO: Implement tone oscillator phase retrigger
+}
+
+
+// ====================
+// AY2 Specific Effects
+// ====================
+
+// ENN - Envelope specific note
+static void handleFX_ENN(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY2) return;
+
+  track->note.chip.ay.envFixedPitch = fx->fxValue;
+}
+
+// ENP - Envelope pitch offset
+static void initFX_ENP(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY2) {
+    fx->isOn = 0;
+    return;
+  }
+
+  fx->acc += (int8_t)fx->fxValue;
+}
+
+static void restartFX_ENP(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - ENP should keep the accumulated offset
+}
+
+static void handleFX_ENP(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  track->note.chip.ay.envPitchOffset += fx->acc;
+}
+
+// ENF - Envelope fine offset
+static void initFX_ENF(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY2) {
+    fx->isOn = 0;
+    return;
+  }
+
+  fx->acc += (int8_t)fx->fxValue;
+}
+
+static void restartFX_ENF(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - ENF should keep the accumulated offset
+}
+
+static void handleFX_ENF(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  track->note.chip.ay.envFineOffset += fx->acc;
+}
+
+// SFT - Software oscillator type
+static void handleFX_SFT(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY2) return;
+
+  if (fx->fxValue < static_cast<uint8_t>(AYSoftwareOscType::sample)) {
+    AYSoftwareOscType oldType = track->note.chip.ay.softType;
+    track->note.chip.ay.softType = static_cast<AYSoftwareOscType>(fx->fxValue);
+    // Reset period counter if the oscillator type changed
+    if (oldType != track->note.chip.ay.softType) {
+      track->note.chip.ay.softPeriodCounter = 0;
+    }
+  }
+}
+
+// SFN - Software oscillator specific note
+static void handleFX_SFN(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  InstrumentType type = getInstrumentType(player, trackIdx);
+  if (type != InstrumentType::AY2 && type != InstrumentType::AYSample) return;
+
+  track->note.chip.ay.softFixedPitch = fx->fxValue;
+}
+
+// SFP - Software oscillator pitch offset
+static void initFX_SFP(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  InstrumentType type = getInstrumentType(player, trackIdx);
+  if (type != InstrumentType::AY2 && type != InstrumentType::AYSample) {
+    fx->isOn = 0;
+    return;
+  }
+
+  fx->acc += (int8_t)fx->fxValue;
+}
+
+static void restartFX_SFP(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - SFP should keep the accumulated offset
+}
+
+static void handleFX_SFP(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  track->note.chip.ay.softPitchOffset += fx->acc;
+}
+
+// SFF - Software oscillator fine offset
+static void initFX_SFF(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  InstrumentType type = getInstrumentType(player, trackIdx);
+  if (type != InstrumentType::AY2 && type != InstrumentType::AYSample) {
+    fx->isOn = 0;
+    return;
+  }
+
+  fx->acc += (int8_t)fx->fxValue;
+}
+
+static void restartFX_SFF(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - SFF should keep the accumulated offset
+}
+
+static void handleFX_SFF(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  track->note.chip.ay.softFineOffset += fx->acc;
+}
+
+// SRT - Software oscillator phase retrigger
+static void handleFX_SRT(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  InstrumentType type = getInstrumentType(player, trackIdx);
+  fx->isOn = 0; // Atomic effect
+  if (type != InstrumentType::AY2) return;
+  track->note.chip.ay.softPeriodCounter = 0;
+}
+
+// SFM - FM depth
+static void initFX_SFM(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY2) {
+    fx->isOn = 0;
+    return;
+  }
+
+  fx->acc += (int8_t)fx->fxValue;
+}
+
+static void restartFX_SFM(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - SFM should keep the accumulated offset
+}
+
+static void handleFX_SFM(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  track->note.chip.ay.softFMDepthOffset += fx->acc;
+}
+
+// PWM - Pulse width
+static void initFX_PWM(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY2) {
+    fx->isOn = 0;
+    return;
+  }
+
+  fx->acc += (int8_t)fx->fxValue;
+}
+
+static void restartFX_PWM(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - PWM should keep the accumulated offset
+}
+
+static void handleFX_PWM(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  track->note.chip.ay.pulseWidthOffset += fx->acc;
+}
+
+// SPL - Pulse low level
+static void initFX_SPL(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY2) {
+    fx->isOn = 0;
+    return;
+  }
+
+  fx->acc += (int8_t)fx->fxValue;
+}
+
+static void restartFX_SPL(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - SPL should keep the accumulated offset
+}
+
+static void handleFX_SPL(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  track->note.chip.ay.pulseLowOffset += fx->acc;
+}
+
+// SWT - Wavetable index
+static void initFX_SWT(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx, PlaybackTableState* tableState, int tableFXColumn) {
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AY2) {
+    fx->isOn = 0;
+    return;
+  }
+
+  fx->acc += (int8_t)fx->fxValue;
+}
+
+static void restartFX_SWT(Player* player, PlaybackTrackState* track, int trackIdx, PlaybackFXState* fx) {
+  // Do nothing - SWT should keep the accumulated offset
+}
+
+static void handleFX_SWT(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  track->note.chip.ay.wavetableIndexOffset += fx->acc;
+}
+
+
+// =========================
+// AYSample specific effects
+// =========================
+
+// SMS - Sample start position
+static void handleFX_SMS(Player* player, PlaybackTrackState* track, int trackIdx, int chipIdx, PlaybackFXState* fx) {
+  fx->isOn = 0; // Atomic effect
+  if (getInstrumentType(player, trackIdx) != InstrumentType::AYSample) return;
+  int32_t sampleStart = player->p->instruments[track->note.instrument].chip.aySample.sampleStart;
+  sampleStart += (int32_t)(fx->fxValue * 64);
+  track->note.chip.ay.samplePosition = sampleStart << 16; // Convert to 16.16 fixed point
+}
+
+
+void Player::registerFXHandlers_AY(void) {
+  // Common AY FX
+  fxHandlers[fxAYM] = (PlaybackFXHandler){NULL, handleFX_AYM, NULL};
+  fxHandlers[fxNOA] = (PlaybackFXHandler){NULL, handleFX_NOA, NULL};
+  fxHandlers[fxNOI] = (PlaybackFXHandler){initFX_NOI, handleFX_NOI, restartFX_NOI};
+  fxHandlers[fxERT] = (PlaybackFXHandler){NULL, handleFX_ERT, NULL};
+  fxHandlers[fxEAU] = (PlaybackFXHandler){NULL, handleFX_EAU, NULL};
+
+  // AY2, AYSample and AYWavetable common FX
+  fxHandlers[fxTNN] = (PlaybackFXHandler){NULL, handleFX_TNN, NULL};
+  fxHandlers[fxTNP] = (PlaybackFXHandler){initFX_TNP, handleFX_TNP, restartFX_TNP};
+  fxHandlers[fxTNF] = (PlaybackFXHandler){initFX_TNF, handleFX_TNF, restartFX_TNF};
+  fxHandlers[fxTRT] = (PlaybackFXHandler){NULL, handleFX_TRT, NULL};
+
+  // AY1-specific FX
+  fxHandlers[fxENT] = (PlaybackFXHandler){NULL, handleFX_ENT, NULL};
+  fxHandlers[fxEPT] = (PlaybackFXHandler){initFX_EPT, handleFX_EPT, restartFX_EPT};
+  fxHandlers[fxEPL] = (PlaybackFXHandler){NULL, handleFX_EPL, NULL};
+  fxHandlers[fxEPH] = (PlaybackFXHandler){NULL, handleFX_EPH, NULL};
+  fxHandlers[fxEBN] = (PlaybackFXHandler){initFX_EBN, handleFX_EBN, NULL};
+  fxHandlers[fxEVB] = (PlaybackFXHandler){NULL, handleFX_EVB, restartFX_EVB};
+  fxHandlers[fxESL] = (PlaybackFXHandler){initFX_ESL, handleFX_ESL, NULL};
+
+  // AY2-specific FX (software oscillator)
+  fxHandlers[fxENN] = (PlaybackFXHandler){NULL, handleFX_ENN, NULL};
+  fxHandlers[fxENP] = (PlaybackFXHandler){initFX_ENP, handleFX_ENP, restartFX_ENP};
+  fxHandlers[fxENF] = (PlaybackFXHandler){initFX_ENF, handleFX_ENF, restartFX_ENF};
+  fxHandlers[fxSFT] = (PlaybackFXHandler){NULL, handleFX_SFT, NULL};
+  fxHandlers[fxSFN] = (PlaybackFXHandler){NULL, handleFX_SFN, NULL};
+  fxHandlers[fxSFP] = (PlaybackFXHandler){initFX_SFP, handleFX_SFP, restartFX_SFP};
+  fxHandlers[fxSFF] = (PlaybackFXHandler){initFX_SFF, handleFX_SFF, restartFX_SFF};
+  fxHandlers[fxSRT] = (PlaybackFXHandler){NULL, handleFX_SRT, NULL};
+  fxHandlers[fxSFM] = (PlaybackFXHandler){initFX_SFM, handleFX_SFM, restartFX_SFM};
+  fxHandlers[fxPWM] = (PlaybackFXHandler){initFX_PWM, handleFX_PWM, restartFX_PWM};
+  fxHandlers[fxSPL] = (PlaybackFXHandler){initFX_SPL, handleFX_SPL, restartFX_SPL};
+  fxHandlers[fxSWT] = (PlaybackFXHandler){initFX_SWT, handleFX_SWT, restartFX_SWT};
+
+  // AYSample-specific FX
+  fxHandlers[fxSMS] = (PlaybackFXHandler){NULL, handleFX_SMS, NULL};
+}
+
+}; // namespace chipnomad

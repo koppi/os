@@ -144,27 +144,28 @@ void to_dos_file_name(char *name, char *str) {
 /**
  * @brief Convert a padded 8.3 directory name back to "file.ext", lower case.
  * @param name The @ref NAME_LEN raw bytes from a directory entry.
- * @param str  Destination, at least @ref NAME_LEN + 1 bytes.
+ * @param str  Destination, at least @ref NORMAL_NAME_LEN + 1 bytes.
+ *
+ * The two fields are fixed-width and space-padded, so the dot goes at the
+ * boundary between them. The previous version instead emitted one when it
+ * walked off the end of the base name into its padding, which is not the same
+ * thing: a name whose base fills all eight characters has no padding to find,
+ * and "MICROEGG" + "CNM" came back as "microeggcnm" -- a name that then failed
+ * every lookup, and that `ls`, the shell's completion and any program reading
+ * a directory all showed wrong.
  */
 void to_normal_file_name(char *name, char *str) {
-    int j = 0, flag = 1;
-    
     if((!name) || (!str))
         return;
-    
-    memset(str, ' ', NAME_LEN);
-    for(int i = 0; i < strlen(name) && i < NAME_LEN; i++) {
-        if(name[i] != ' ') {
-            str[j] = tolower(name[i]);
-            j++;
-        } else if((flag == 1) && (name[8] != ' ')) {
-            /* name[8] is the first extension char: test that, not name[9], so a
-             * single-letter extension ("CC      C  " -> "cc.c") still gets its
-             * dot and round-trips through to_dos_file_name(). */
-            flag = 0;
-            str[j] = '.';
-            j++;
-        }
+
+    int j = 0;
+    for(int i = 0; i < 8 && name[i] && name[i] != ' '; i++)
+        str[j++] = tolower(name[i]);
+
+    if(name[8] && name[8] != ' ') {
+        str[j++] = '.';
+        for(int i = 8; i < NAME_LEN && name[i] && name[i] != ' '; i++)
+            str[j++] = tolower(name[i]);
     }
     str[j] = 0;
 }
@@ -818,7 +819,7 @@ file fat_search(char *name) {
  * differ from the shell's completion list for the same directory.
  */
 void fat_ls(char *dir) {
-    char *normal_name = kmalloc(NAME_LEN + 1);
+    char *normal_name = kmalloc(NORMAL_NAME_LEN + 1);
     // TODO nested folder
     device_t *dev = get_dev_by_name(dir);
     for(uint32_t i = 0; i < dev->minfo.root_size; i++) {
@@ -853,7 +854,7 @@ int fat_listdir(char *dir, char *out, uint32_t outsz) {
     if(!dev || outsz < 2)
         return 0;
 
-    char normal[NAME_LEN + 1];
+    char normal[NORMAL_NAME_LEN + 1];
     uint32_t w = 0;
     int count = 0;
     for(uint32_t i = 0; i < dev->minfo.root_size; i++) {

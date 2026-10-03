@@ -30,6 +30,7 @@ apps/cc/cc-asan
 apps/cc/cc.selfhost
 apps/zsh/zsh
 apps/doom/doom
+apps/chipnomad/chipnomad
 os.sublime-workspace
 docs/
 

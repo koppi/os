@@ -51,6 +51,33 @@ mcopy -i "$IMG" -D o apps/lua/test.lua    ::t.lua
 mcopy -i "$IMG" -D o apps/lua/mod.lua     ::mod.lua
 mcopy -i "$IMG" -D o mouse.bmp            ::mouse.bmp
 
+# ChipNomad. The tracker plus the bundled content it is useless without: a
+# colour theme, the AY instrument presets, the pitch tables and two of
+# upstream's demo songs. Names are 8.3 because the FAT driver is (see
+# apps/chipnomad/koppios/file_system_koppios.cpp); the originals' longer
+# names are in apps/chipnomad/README.md.
+CNDATA=third_party/chipnomad/tracker/packaging/common
+mcopy -i "$IMG" -D o apps/chipnomad/chipnomad ::cnomad
+mcopy -i "$IMG" -D o "$CNDATA/themes/Default.cth"            ::default.cth
+mcopy -i "$IMG" -D o "$CNDATA/projects/MICROEGGZ.cnm"         ::microegg.cnm
+mcopy -i "$IMG" -D o "$CNDATA/projects/WB7.cnm"               ::wb7.cnm
+mcopy -i "$IMG" -D o "$CNDATA/projects/ModAndTimerDemos.cnm"  ::modtimer.cnm
+mcopy -i "$IMG" -D o "$CNDATA/pitch-tables/PT3-0.csv"         ::pt3-0.csv
+mcopy -i "$IMG" -D o "$CNDATA/pitch-tables/PT3-1.csv"         ::pt3-1.csv
+mcopy -i "$IMG" -D o "$CNDATA/pitch-tables/PT3-2.csv"         ::pt3-2.csv
+mcopy -i "$IMG" -D o "$CNDATA/pitch-tables/PT3-3.csv"         ::pt3-3.csv
+mcopy -i "$IMG" -D o "$CNDATA/wavetables/FIFTH.aywave"        ::fifth.ayw
+mcopy -i "$IMG" -D o "$CNDATA/wavetables/NESTRI.aywave"       ::nestri.ayw
+mcopy -i "$IMG" -D o "$CNDATA/wavetables/VRC6SAW.aywave"      ::vrc6saw.ayw
+mcopy -i "$IMG" -D o "$CNDATA/instruments/Bass 1.cni"         ::bass1.cni
+mcopy -i "$IMG" -D o "$CNDATA/instruments/Lead 1.cni"         ::lead1.cni
+mcopy -i "$IMG" -D o "$CNDATA/instruments/BD 1.cni"           ::bd1.cni
+mcopy -i "$IMG" -D o "$CNDATA/instruments/Snare 1.cni"        ::snare1.cni
+mcopy -i "$IMG" -D o "$CNDATA/instruments/Hat 1.cni"          ::hat1.cni
+mcopy -i "$IMG" -D o "$CNDATA/instruments/Clap.cni"           ::clap.cni
+mcopy -i "$IMG" -D o "$CNDATA/instruments/Pluck 1.cni"        ::pluck1.cni
+mcopy -i "$IMG" -D o "$CNDATA/instruments/Waves.cni"          ::waves.cni
+
 # Doom. The engine is always staged; the IWAD only if one is present, since
 # it is not ours to redistribute (apps/doom/PORTING.md says where to get one).
 mcopy -i "$IMG" -D o apps/doom/doom       ::doom

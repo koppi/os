@@ -196,6 +196,11 @@ qemu-keys: iso
 qemu-doom: iso
 	@bash test/doom-boot.sh all
 
+# Drive apps/chipnomad the same way: start the tracker over the serial console,
+# walk its screens, load a song, play it into a WAV, screenshot each step.
+qemu-chipnomad: iso
+	@bash test/chipnomad-boot.sh all
+
 # Build a GPT+FAT32 UEFI USB image (os-usb.img) that the UEFI-only laptops
 # (no CSM, e.g. a MacBook) boot from: grub2 x86_64-efi + kernel + initrd.
 usb: $(KERNEL) initrd.img

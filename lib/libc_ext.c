@@ -30,6 +30,17 @@
 #include <stdarg.h>
 #include <time.h>
 
+extern unsigned int syscall3(unsigned int n, unsigned int a, unsigned int b, unsigned int c);
+
+/* Not <string.h>/<sys/mman.h>/<sys/poll.h>: this file already declares a
+ * handful of libc functions above with koppios's own (not always
+ * byte-identical) signatures -- pulling in the real system headers here
+ * conflicts with those rather than matching them. Declared by hand below,
+ * same as memset/memcpy already are. */
+extern int strcmp(const char *a, const char *b);
+extern int memcmp(const void *a, const void *b, unsigned int n);
+extern unsigned int strlen(const char *s);
+
 extern int _write(const void *buf, unsigned int len);
 extern void *malloc(unsigned int len);
 extern void free(void *ptr);
@@ -313,6 +324,8 @@ unsigned long strtoul(const char *nptr, char **endptr, int base) {
 long __isoc23_strtol(const char *nptr, char **endptr, int base) { return strtol(nptr, endptr, base); }
 unsigned long __isoc23_strtoul(const char *nptr, char **endptr, int base) { return strtoul(nptr, endptr, base); }
 
+#ifndef KOPPIOS_APP_STDIO
+
 int sscanf(const char *str, const char *format, ...);
 int __isoc23_sscanf(const char *str, const char *format, ...);
 
@@ -378,6 +391,8 @@ int __isoc23_sscanf(const char *str, const char *format, ...) {
     return n;
 }
 
+#endif /* !KOPPIOS_APP_STDIO */
+
 unsigned int wcslen(const unsigned int *s) {
     unsigned int n = 0;
     while (s[n])
@@ -433,16 +448,29 @@ int strerror_r(int errnum, char *buf, unsigned int buflen) {
  * be overkill here; a plain insertion sort is correct, stable enough,
  * and every call site in this closure sorts tiny arrays (font family
  * lists, a handful of glyph metrics), never anything where O(n^2)
- * matters. */
+ * matters.
+ *
+ * The swap is byte-wise and in place. It used to stage each element
+ * through a `char tmp[256]`, which is a stack buffer overflow for any
+ * element larger than that -- apps/chipnomad's file browser sorts
+ * FileEntry, which is 260 bytes (a 256-byte name plus a flag), and the
+ * four bytes past the end landed on the saved registers of this very
+ * frame: the listing came back with most of its entries lost. Nothing
+ * here needs a temporary at all. */
+static void qsort_swap(char *a, char *b, unsigned int n) {
+    while (n--) {
+        char t = *a;
+        *a++ = *b;
+        *b++ = t;
+    }
+}
+
 void qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(const void *, const void *)) {
     char *arr = (char *) base;
-    char tmp[256];
     for (unsigned int i = 1; i < nmemb; i++) {
         unsigned int j = i;
         while (j > 0 && compar(arr + (j - 1) * size, arr + j * size) > 0) {
-            memcpy(tmp, arr + j * size, size);
-            memcpy(arr + j * size, arr + (j - 1) * size, size);
-            memcpy(arr + (j - 1) * size, tmp, size);
+            qsort_swap(arr + (j - 1) * size, arr + j * size, size);
             j--;
         }
     }
@@ -452,14 +480,28 @@ void qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(cons
  * locale -- same reasoning third_party/qt6/koppios/qt_libc_compat.c's
  * own file comment already documents for its smaller closure. ---- */
 
+/* Only two locales exist: "C" and "C.UTF-8" (everything on this kernel,
+ * Qt's local8bit included, is UTF-8 anyway). Anything else is refused the
+ * way real setlocale() refuses a locale that is not installed. */
+static int locale_is_utf8;
+
 char *setlocale(int category, const char *locale) {
     (void) category;
-    (void) locale;
-    return (char *) "C";
+    if (locale && *locale) {
+        int utf8 = (locale[0] == 'C' && locale[1] == '.');
+        int plain = (strcmp(locale, "C") == 0 || strcmp(locale, "POSIX") == 0);
+        if (!utf8 && !plain)
+            return 0;
+        if (utf8 && strcmp(locale, "C.UTF-8") != 0 && strcmp(locale, "C.utf8") != 0)
+            return 0;
+        locale_is_utf8 = utf8;
+    }
+    return (char *) (locale_is_utf8 ? "C.UTF-8" : "C");
 }
 
 char *nl_langinfo(int item) {
-    (void) item;
+    if (item == 14 /* CODESET */)
+        return (char *) (locale_is_utf8 ? "UTF-8" : "ANSI_X3.4-1968");
     return (char *) "";
 }
 
@@ -568,6 +610,18 @@ int closedir(void *dirp) {
  * needs accurate floating-point text formatting to function correctly,
  * only to not crash if ever exercised. */
 
+/*
+ * KOPPIOS_APP_STDIO: an app that brings its own stdio compiles this file
+ * with -DKOPPIOS_APP_STDIO and supplies the FILE/printf/sscanf surface
+ * itself. apps/chipnomad does, because its project and settings files need
+ * all three of the things the stand-ins here deliberately do without:
+ * seekable FILE streams, width- and precision-correct formatting, and an
+ * sscanf that understands %x, %f, the hh/h length modifiers and %[^\n].
+ * Nothing else in this file depends on them, so every other app that links
+ * libc_ext.o is unaffected.
+ */
+#ifndef KOPPIOS_APP_STDIO
+
 typedef struct {
     int unused;
 } FILE;
@@ -597,6 +651,10 @@ int fputs(const char *s, FILE *f) {
     _write(s, n);
     return 0;
 }
+
+#endif /* !KOPPIOS_APP_STDIO */
+
+#ifndef KOPPIOS_APP_STDIO
 
 static int format_into(char *buf, unsigned int cap, const char *fmt, va_list ap) {
     unsigned int n = 0;
@@ -760,5 +818,400 @@ int snprintf(char *buf, unsigned int cap, const char *fmt, ...) {
     va_start(ap, fmt);
     int n = vsnprintf(buf, cap, fmt, ap);
     va_end(ap);
+    return n;
+}
+
+#endif /* !KOPPIOS_APP_STDIO */
+
+/*
+ * Virtual-memory and misc POSIX surface real Qt6's generic-unix backends
+ * (QFileSystemEngine, the thread pool's ideal-count probing, ...) reach for
+ * -- honest failure, matching this whole file's pattern: this kernel has no
+ * userspace mmap()/mprotect()/prctl() syscalls (or the concepts they
+ * expose, like CPU affinity masks or /dev/urandom) to back these with, so
+ * every caller sees the same "not supported" result a real POSIX system
+ * gives when a request it understands genuinely can't be honored, not a
+ * silently wrong success.
+ */
+void *mmap(void *addr, unsigned int len, int prot, int flags, int fd, long off) {
+    (void) addr; (void) len; (void) prot; (void) flags; (void) fd; (void) off;
+    errno = ENOMEM;
+    return (void *) -1; /* MAP_FAILED */
+}
+
+int munmap(void *addr, unsigned int len) {
+    (void) addr; (void) len;
+    errno = EINVAL;
+    return -1;
+}
+
+void *mremap(void *old_addr, unsigned int old_len, unsigned int new_len, int flags, ...) {
+    (void) old_addr; (void) old_len; (void) new_len; (void) flags;
+    errno = ENOMEM;
+    return (void *) -1;
+}
+
+int mprotect(void *addr, unsigned int len, int prot) {
+    (void) addr; (void) len; (void) prot;
+    errno = ENOMEM;
+    return -1;
+}
+
+int madvise(void *addr, unsigned int len, int advice) {
+    (void) addr; (void) len; (void) advice;
+    return 0; /* a hint the kernel is always free to ignore */
+}
+
+int posix_madvise(void *addr, unsigned int len, int advice) {
+    (void) addr; (void) len; (void) advice;
+    return 0;
+}
+
+int getpagesize(void) {
+    return 4096;
+}
+
+int prctl(int option, unsigned long a2, unsigned long a3, unsigned long a4, unsigned long a5) {
+    (void) option; (void) a2; (void) a3; (void) a4; (void) a5;
+    errno = EINVAL;
+    return -1;
+}
+
+int sched_getaffinity(int pid, unsigned int cpusetsize, void *mask) {
+    (void) pid;
+    /* Real Qt6 (QThread::idealThreadCount()'s generic-unix path) falls back
+     * to this kernel's own real sysconf(_SC_NPROCESSORS_ONLN) (see
+     * include/lib/unistd.h) when this fails -- same "1 CPU, honestly"
+     * answer either way. */
+    (void) cpusetsize; (void) mask;
+    errno = ENOSYS;
+    return -1;
+}
+
+int getentropy(void *buf, unsigned int len) {
+    (void) buf; (void) len;
+    errno = ENOSYS;
+    return -1;
+}
+
+/* Real, not stubbed -- plain byte-buffer scans, cheap and load-bearing. */
+void *memrchr(const void *s, int c, unsigned int n) {
+    const unsigned char *p = (const unsigned char *) s;
+    while (n--) {
+        if (p[n] == (unsigned char) c)
+            return (void *) (p + n);
+    }
+    return 0;
+}
+
+void *memmem(const void *haystack, unsigned int haystacklen,
+             const void *needle, unsigned int needlelen) {
+    if (needlelen == 0)
+        return (void *) haystack;
+    if (needlelen > haystacklen)
+        return 0;
+    const unsigned char *h = (const unsigned char *) haystack;
+    const unsigned char *n = (const unsigned char *) needle;
+    for (unsigned int i = 0; i + needlelen <= haystacklen; i++) {
+        if (h[i] == n[0] && memcmp(h + i, n, needlelen) == 0)
+            return (void *) (h + i);
+    }
+    return 0;
+}
+
+/*
+ * Directory iteration / link / cwd surface real Qt6's generic-unix
+ * QFileSystemEngine and QFileSystemIterator reach for -- same honest-
+ * failure reasoning as the mmap family above. Return types are declared
+ * as plain pointers or ints rather than pulling in <dirent.h>/<sys/stat.h> (which would
+ * conflict with this file's own earlier hand-declared signatures the same
+ * way <string.h> did); the real caller, compiled against the real system
+ * headers, only needs the symbol name and an ABI-compatible (pointer-sized)
+ * return to link correctly -- the linker doesn't check C type signatures
+ * across translation units, only the compiler does.
+ */
+void *opendir(const char *name) {
+    (void) name;
+    errno = ENOENT;
+    return 0;
+}
+
+void *readdir(void *dirp) {
+    (void) dirp;
+    return 0;
+}
+
+int lstat(const char *path, void *statbuf) {
+    (void) path; (void) statbuf;
+    errno = ENOENT;
+    return -1;
+}
+
+int statx(int dirfd, const char *path, int flags, unsigned int mask, void *statxbuf) {
+    (void) dirfd; (void) path; (void) flags; (void) mask; (void) statxbuf;
+    errno = ENOSYS;
+    return -1;
+}
+
+extern char *pwd(void); /* lib/system_calls.c: wraps the real getcwd syscall (#19) */
+
+char *getcwd(char *buf, unsigned int size) {
+    const char *cwd = pwd();
+    unsigned int len = (unsigned int) strlen(cwd);
+    if (!buf) {
+        /* glibc extension: a NULL buffer means "allocate one" */
+        unsigned int cap = size > len ? size : len + 1;
+        buf = (char *) malloc(cap);
+        if (!buf) { errno = ENOMEM; return 0; }
+        size = cap;
+    }
+    if (size < len + 1) { errno = ERANGE; return 0; }
+    memcpy(buf, cwd, len + 1);
+    return buf;
+}
+
+char *realpath(const char *path, char *resolved_path) {
+    (void) path; (void) resolved_path;
+    errno = ENOENT;
+    return 0;
+}
+
+long readlink(const char *path, char *buf, unsigned int bufsiz) {
+    (void) path; (void) buf; (void) bufsiz;
+    errno = EINVAL; /* "not a symlink" -- this filesystem has none */
+    return -1;
+}
+
+void perror(const char *s) {
+    if (s && *s) {
+        _write(s, (unsigned int) strlen(s));
+        _write(": ", 2);
+    }
+    const char *msg = "error\n";
+    _write(msg, (unsigned int) strlen(msg));
+}
+
+/* glibc's <ctype.h> isalpha()/isdigit()/... and tolower()/toupper() compile
+ * to lookups through these three accessors. Contents are the "C" locale:
+ * ASCII classes only, nothing set for bytes >= 128. Class bit values are
+ * glibc's little-endian layout (_ISbit): upper 0x100, lower 0x200, alpha
+ * 0x400, digit 0x800, xdigit 0x1000, space 0x2000, print 0x4000, graph
+ * 0x8000, blank 0x1, cntrl 0x2, punct 0x4, alnum 0x8. */
+static unsigned short ctype_b_table[384];
+static int ctype_lc_table[384];
+static int ctype_uc_table[384];
+static const unsigned short *ctype_b_ptr;
+static const int *ctype_lc_ptr;
+static const int *ctype_uc_ptr;
+static int ctype_ready;
+
+static void ctype_init(void) {
+    if (ctype_ready) return;
+    for (int i = 0; i < 384; i++) {
+        int c = i - 128; /* table index 128 is character 0 */
+        unsigned short f = 0;
+        /* glibc: indices -128..-2 hold c+256 (so tolower((signed char)c)
+         * round-trips), -1 is EOF and stays -1. */
+        ctype_lc_table[i] = (c < -1) ? c + 256 : c;
+        ctype_uc_table[i] = ctype_lc_table[i];
+        if (c >= 0 && c < 128) {
+            if (c >= 'A' && c <= 'Z') { f |= 0x100 | 0x400 | 0x8; ctype_lc_table[i] = c + 32; }
+            if (c >= 'a' && c <= 'z') { f |= 0x200 | 0x400 | 0x8; ctype_uc_table[i] = c - 32; }
+            if (c >= '0' && c <= '9') f |= 0x800 | 0x8;
+            if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')) f |= 0x1000;
+            if (c == ' ' || (c >= '\t' && c <= '\r')) f |= 0x2000;
+            if (c == ' ' || c == '\t') f |= 0x1;
+            if (c < 32 || c == 127) f |= 0x2;
+            if (c >= 32 && c < 127) f |= 0x4000;
+            if (c > 32 && c < 127) f |= 0x8000;
+            if (c > 32 && c < 127 && !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')))
+                f |= 0x4;
+        }
+        ctype_b_table[i] = f;
+    }
+    ctype_b_ptr = ctype_b_table + 128;
+    ctype_lc_ptr = ctype_lc_table + 128;
+    ctype_uc_ptr = ctype_uc_table + 128;
+    ctype_ready = 1;
+}
+
+const unsigned short **__ctype_b_loc(void) { ctype_init(); return &ctype_b_ptr; }
+const int **__ctype_tolower_loc(void) { ctype_init(); return &ctype_lc_ptr; }
+const int **__ctype_toupper_loc(void) { ctype_init(); return &ctype_uc_ptr; }
+
+int dladdr(const void *addr, void *info) {
+    (void) addr; (void) info;
+    return 0; /* "no symbol found" -- there is no dynamic loader */
+}
+
+/* ---- in-process file descriptors ----
+ * This kernel has no fd table (see the comment above pipe() in
+ * pthread_glibc.c). The one thing real Qt needs an fd for in a
+ * single-process app is the event dispatcher's thread wake-up channel, an
+ * eventfd, polled by ppoll(). So: a tiny table of eventfd objects that live
+ * entirely inside this process (fds SIMFD_BASE..), serviced by eventfd_*,
+ * read/write/close (pthread_glibc.c forwards fds it does not own here) and
+ * ppoll(). Any other fd is simply not ours: EBADF / POLLNVAL, as before. */
+#define SIMFD_BASE 64
+#define SIMFD_MAX 16
+#define SIM_O_NONBLOCK 04000
+
+static struct { int used; int nonblock; volatile unsigned int lo, hi; } simfd[SIMFD_MAX];
+static volatile int simfd_lock;
+
+static void simfd_enter(void) { while (__sync_lock_test_and_set(&simfd_lock, 1)) sched_yield(); }
+static void simfd_leave(void) { __sync_lock_release(&simfd_lock); }
+
+static int simfd_index(int fd) {
+    int i = fd - SIMFD_BASE;
+    return (i >= 0 && i < SIMFD_MAX && simfd[i].used) ? i : -1;
+}
+
+static int simfd_nonzero(int i) { return simfd[i].lo || simfd[i].hi; }
+
+int eventfd(unsigned int initval, int flags) {
+    int fd = -1;
+    simfd_enter();
+    for (int i = 0; i < SIMFD_MAX; i++) {
+        if (!simfd[i].used) {
+            simfd[i].used = 1;
+            simfd[i].nonblock = (flags & SIM_O_NONBLOCK) != 0;
+            simfd[i].lo = initval;
+            simfd[i].hi = 0;
+            fd = SIMFD_BASE + i;
+            break;
+        }
+    }
+    simfd_leave();
+    if (fd < 0)
+        errno = EMFILE;
+    return fd;
+}
+
+int eventfd_read(int fd, unsigned long long *value) {
+    for (;;) {
+        simfd_enter();
+        int i = simfd_index(fd);
+        if (i < 0) { simfd_leave(); errno = EBADF; return -1; }
+        if (simfd_nonzero(i)) {
+            *value = ((unsigned long long) simfd[i].hi << 32) | simfd[i].lo;
+            simfd[i].lo = simfd[i].hi = 0;
+            simfd_leave();
+            return 0;
+        }
+        int nb = simfd[i].nonblock;
+        simfd_leave();
+        if (nb) { errno = EAGAIN; return -1; }
+        sched_yield(); /* blocking eventfd: wait for another thread's write */
+    }
+}
+
+int eventfd_write(int fd, unsigned long long value) {
+    simfd_enter();
+    int i = simfd_index(fd);
+    if (i < 0) { simfd_leave(); errno = EBADF; return -1; }
+    unsigned long long cur = ((unsigned long long) simfd[i].hi << 32) | simfd[i].lo;
+    cur += value;
+    simfd[i].lo = (unsigned int) cur;
+    simfd[i].hi = (unsigned int) (cur >> 32);
+    simfd_leave();
+    return 0;
+}
+
+/* Hooks for read()/write()/close() in pthread_glibc.c: return -2 when fd is
+ * not one of ours, so the caller reports its own ENOSYS as before. */
+long simfd_read(int fd, void *buf, unsigned long count) {
+    if (simfd_index(fd) < 0) return -2;
+    if (count < 8) { errno = EINVAL; return -1; }
+    unsigned long long v;
+    if (eventfd_read(fd, &v) < 0) return -1;
+    memcpy(buf, &v, 8);
+    return 8;
+}
+
+long simfd_write(int fd, const void *buf, unsigned long count) {
+    if (simfd_index(fd) < 0) return -2;
+    if (count < 8) { errno = EINVAL; return -1; }
+    unsigned long long v;
+    memcpy(&v, buf, 8);
+    if (eventfd_write(fd, v) < 0) return -1;
+    return 8;
+}
+
+int simfd_close(int fd) {
+    simfd_enter();
+    int i = simfd_index(fd);
+    if (i < 0) { simfd_leave(); return -2; }
+    simfd[i].used = 0;
+    simfd_leave();
+    return 0;
+}
+
+struct sim_pollfd { int fd; short events; short revents; };
+#define SIM_POLLIN 0x001
+#define SIM_POLLOUT 0x004
+#define SIM_POLLNVAL 0x020
+
+static unsigned long long sim_now_ms(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (unsigned long long) ts.tv_sec * 1000ull + (unsigned long long) ts.tv_nsec / 1000000ull;
+}
+
+/* ppoll()/poll() over the in-process fds above. Waits by sleeping 1 ms at a
+ * time (kernel msleep, syscall 27) so a blocked event loop does not burn the
+ * CPU, until an fd is ready or the timeout expires. No signals exist here,
+ * so sigmask is ignored. A timeout of NULL waits forever (until another
+ * thread signals an eventfd), as POSIX specifies. */
+int ppoll(void *fdsp, unsigned long nfds, const struct timespec *timeout, const void *sigmask) {
+    struct sim_pollfd *fds = (struct sim_pollfd *) fdsp;
+    (void) sigmask;
+    unsigned long long deadline = 0;
+    if (timeout)
+        deadline = sim_now_ms() + (unsigned long long) timeout->tv_sec * 1000ull
+                   + ((unsigned long long) timeout->tv_nsec + 999999ull) / 1000000ull;
+    for (;;) {
+        int ready = 0;
+        simfd_enter();
+        for (unsigned long k = 0; k < nfds; k++) {
+            fds[k].revents = 0;
+            if (fds[k].fd < 0)
+                continue;
+            int i = simfd_index(fds[k].fd);
+            if (i < 0) {
+                fds[k].revents = SIM_POLLNVAL;
+            } else {
+                if ((fds[k].events & SIM_POLLIN) && simfd_nonzero(i))
+                    fds[k].revents |= SIM_POLLIN;
+                if (fds[k].events & SIM_POLLOUT)
+                    fds[k].revents |= SIM_POLLOUT;
+            }
+            if (fds[k].revents)
+                ready++;
+        }
+        simfd_leave();
+        if (ready)
+            return ready;
+        if (timeout && sim_now_ms() >= deadline)
+            return 0;
+        syscall3(27, 1, 0, 0); /* msleep(1) */
+    }
+}
+
+int poll(void *fdsp, unsigned long nfds, int timeout_ms) {
+    struct timespec ts;
+    if (timeout_ms < 0)
+        return ppoll(fdsp, nfds, 0, 0);
+    ts.tv_sec = timeout_ms / 1000;
+    ts.tv_nsec = (long) (timeout_ms % 1000) * 1000000L;
+    return ppoll(fdsp, nfds, &ts, 0);
+}
+
+/* Out-of-line helper glibc's CPU_COUNT() macro expands to. */
+int __sched_cpucount(size_t setsize, const cpu_set_t *setp) {
+    const unsigned char *p = (const unsigned char *) setp;
+    int n = 0;
+    for (size_t i = 0; i < setsize; i++)
+        for (unsigned char b = p[i]; b; b >>= 1) n += b & 1;
     return n;
 }

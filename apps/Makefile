@@ -17,6 +17,7 @@ all:
 	$(MAKE) -C cc
 	$(MAKE) -C zsh
 	$(MAKE) -C doom
+	$(MAKE) -C chipnomad
 
 clean:
 	$(MAKE) -C 01 clean
@@ -37,5 +38,6 @@ clean:
 	$(MAKE) -C cc clean
 	$(MAKE) -C zsh clean
 	$(MAKE) -C doom clean
+	$(MAKE) -C chipnomad clean
 
 .phony: all clean

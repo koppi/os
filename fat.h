@@ -81,6 +81,8 @@ typedef struct directory {
 
 /** Length of an 8.3 name packed with no dot (8 + 3). */
 #define NAME_LEN 11
+/** Longest "file.ext" @ref to_normal_file_name can produce: 8 + '.' + 3. */
+#define NORMAL_NAME_LEN 12
 
 /** @brief Read the boot sector and fill @p dev->minfo with the FAT geometry. */
 void fat_mount(device_t *dev);
