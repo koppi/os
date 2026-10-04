@@ -1,0 +1,1 @@
+../../../../qtbase/src/corelib/text/qstringiterator_p.h

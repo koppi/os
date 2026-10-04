@@ -1,0 +1,1 @@
+private/qplatformintegrationfactory_p.h

@@ -1,0 +1,1 @@
+../../../qtbase/src/corelib/kernel/qcoreevent.h
