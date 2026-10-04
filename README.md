@@ -116,6 +116,26 @@ each is on.
   branches on whether the returning thread is the main one — behavior-
   preserving for every existing single-threaded program, and now also
   correct for a worker thread falling off the end of its function.
+  **Where a thread's stacks and heap live.** The main thread's stacks sit just
+  above the image and its heap grows *in place* upward from there (up to
+  64 MiB), so a secondary thread laid out at a fixed offset from the image end
+  ended up underneath a heap that had grown past it — `thread_create` remapped
+  (zeroed) live heap pages and the thread's exit unmapped a 256 KiB run of
+  them (real Qt6 hit it: a 518 KB `QImage`, then a `QThreadPool` worker, then a
+  not-present fault re-reading the image). Secondary threads now get a *slot*
+  in a reserved per-process region, `[100 MiB, 128 MiB)` (`UTHREAD_REGION_*` in
+  [`mm.h`](mm.h)) — above the highest address the main heap can reach (it is
+  clamped to the kernel heap at 96 MiB), below the boot RAM disk. A slot is
+  guard / 256 KiB user stack / guard / 16 KiB kernel stack / guard / a 512 KiB
+  heap window (`PROC_THREAD_*` in [`proc.h`](proc.h)), 36 of them per process.
+  A thread's own malloc arena still grows in place but only to the end of its
+  window (`thread_t::heap_ceiling`, checked by `heap_grow`), so it cannot run
+  into the next slot either. `thread_create` checks the slot is wholly
+  unmapped before building in it, unwinds a half-built slot, and returns `-1`
+  — repeatably, with nothing remapped or leaked — when the slots are used up.
+  Slots are not recycled (an exited thread's kernel stack is deliberately
+  leaked), so 36 is the lifetime thread count per process.
+  [`apps/hello-theap`](apps/hello-theap) is the regression test.
   **Caveat**: `process_t::cpu` claims one CPU per *process*, not per thread
   — sibling threads are preemptively interleaved on whichever core is
   currently running that process, not truly parallel across cores, without
@@ -603,6 +623,17 @@ for anything more (there is no TLS or resolver cache).
     through `pthread_mutex_t` specifically, a 5,000-item producer/consumer
     over a condition variable, and thread-local storage read back correctly
     by 4 separate threads. `PASS`, 5 separate runs.
+  * [`apps/hello-theap`](apps/hello-theap) — regression test for thread
+    placement (staged as `thrheap`; see **Scheduling & processes** above).
+    Grows the main malloc heap past 1.5 MiB (a 640 KB block plus 64 KB ones,
+    each filled with a position-dependent pattern), then creates and joins a
+    thread and re-reads every byte; then three concurrent threads, each
+    growing its own arena; then grows the main heap *while* a thread is alive;
+    then lets a thread malloc until it fails (it must stop at its own heap
+    ceiling, not grow into the next slot, where a sentinel thread is holding a
+    pattern block); then creates threads until `thread_create` refuses and
+    checks it fails with `-1`, repeatably, with everything intact. Before the fix it died with
+    a not-present page fault inside the heap; now `PASS`.
   * [`apps/hello-qt`](apps/hello-qt) — **real Qt6** (staged as `helloqt`):
     genuine, vendored Qt 6.8.4 `QString` source (see
     [`third_party/qt6`](../third_party/qt6)) — not a reimplementation —

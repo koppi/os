@@ -29,14 +29,13 @@
 
 #define SECTOR_SIZE 512
 
-/**
- * Relocation target for the module: 128 MiB. A user process's address space
- * runs from its image at 8 MiB up through a 64 MiB per-process heap ceiling
- * (heap.c PROC_HEAP_MAX) plus thread stacks — comfortably below this. Booting
- * needs a machine with a little over 136 MiB of RAM; a smaller box falls back
- * to a real disk (initrd_phys_start stays 0).
- */
-#define INITRD_RELOC_BASE 0x08000000u
+/* Relocation target for the module: INITRD_RELOC_BASE (mm.h), 128 MiB. A user
+ * process's address space runs from its image at 8 MiB up through a 64 MiB
+ * per-process heap ceiling (proc.h PROC_HEAP_MAX), and its secondary threads'
+ * slots occupy [UTHREAD_REGION_BASE, UTHREAD_REGION_END) -- which ends exactly
+ * here, so all of it sits below this. Booting needs a machine with a little
+ * over 136 MiB of RAM; a smaller box falls back to a real disk (initrd_phys_start
+ * stays 0). */
 
 uint32_t initrd_mod_start = 0, initrd_mod_end = 0;
 uint32_t initrd_phys_start = 0, initrd_phys_end = 0;

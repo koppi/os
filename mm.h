@@ -27,12 +27,37 @@
  * 4 MiB line, which left ~100 KiB that shrank every time the kernel grew (and
  * hit zero once the AHCI/xHCI drivers landed). It now lives in its own
  * identity-mapped window at 96 MiB: above the highest address a user process
- * reaches (image at 7 MiB + a 64 MiB PROC_HEAP_MAX ceiling), below the boot
- * RAM disk at 128 MiB. Reserved in the PMM and shared into every address space
- * (a syscall path does kmalloc on the caller's CR3).
+ * reaches (image at 8 MiB + a 64 MiB PROC_HEAP_MAX ceiling), below the
+ * secondary-thread region and the boot RAM disk at 128 MiB. Reserved in the
+ * PMM and shared into every address space (a syscall path does kmalloc on the
+ * caller's CR3).
  */
 #define KHEAP_BASE 0x06000000u
 #define KHEAP_SIZE 0x00400000u   /* 4 MiB */
+
+/**
+ * Where the boot RAM disk is relocated to (initrd.c): 128 MiB, above everything
+ * a user process maps. Booting needs a machine with a little over 136 MiB of
+ * RAM; a smaller box falls back to a real disk.
+ */
+#define INITRD_RELOC_BASE 0x08000000u
+
+/**
+ * The secondary-thread region: [100 MiB, 128 MiB), in every process's own
+ * address space. The slots in here hold the user stack, kernel stack and
+ * (bounded) heap of each thread a process creates beyond its main one (see
+ * proc.h, @c PROC_THREAD_SLOT_PAGES).
+ *
+ * Why it sits here and not just above the image like the main thread's stacks:
+ * the main thread's heap grows *in place* upward from the image (heap.c) for up
+ * to PROC_HEAP_MAX, so anything laid out in that range at a fixed offset ends
+ * up underneath a heap that has grown past it. This window is above the
+ * highest address that heap may reach (it is clamped to @ref KHEAP_BASE), below
+ * the RAM disk, and the kernel directory maps nothing in it, so thread slots
+ * cannot collide with the heap, the kernel heap or the RAM disk.
+ */
+#define UTHREAD_REGION_BASE (KHEAP_BASE + KHEAP_SIZE)
+#define UTHREAD_REGION_END  INITRD_RELOC_BASE
 
 /**
  * Where the kernel maps its own threads' stacks: one 0x4000 slot per kernel
