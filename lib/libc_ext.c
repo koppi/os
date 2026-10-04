@@ -481,9 +481,10 @@ void qsort(void *base, unsigned int nmemb, unsigned int size, int (*compar)(cons
  * own file comment already documents for its smaller closure. ---- */
 
 /* Only two locales exist: "C" and "C.UTF-8" (everything on this kernel,
- * Qt's local8bit included, is UTF-8 anyway). Anything else is refused the
+ * Qt's local8bit included, is UTF-8 anyway), and the process starts in the
+ * latter. Anything else is refused the
  * way real setlocale() refuses a locale that is not installed. */
-static int locale_is_utf8;
+static int locale_is_utf8 = 1; /* all text on this kernel is UTF-8 already (unifont console, UTF-8 sources) */
 
 char *setlocale(int category, const char *locale) {
     (void) category;
@@ -1214,4 +1215,26 @@ int __sched_cpucount(size_t setsize, const cpu_set_t *setp) {
     for (size_t i = 0; i < setsize; i++)
         for (unsigned char b = p[i]; b; b >>= 1) n += b & 1;
     return n;
+}
+
+/* Wide-string comparison in the only locale that exists here ("C"/"C.UTF-8"
+ * with no collation tables): collation order is code point order, so
+ * wcscoll() is wcscmp() and wcsxfrm() is a bounded copy. */
+int wcscmp(const unsigned int *a, const unsigned int *b) {
+    while (*a && *a == *b) { a++; b++; }
+    return (*a > *b) - (*a < *b);
+}
+
+int wcscoll(const unsigned int *a, const unsigned int *b) {
+    return wcscmp(a, b);
+}
+
+unsigned int wcsxfrm(unsigned int *dst, const unsigned int *src, unsigned int n) {
+    unsigned int len = wcslen(src);
+    if (n) {
+        unsigned int c = len < n - 1 ? len : n - 1;
+        for (unsigned int i = 0; i < c; i++) dst[i] = src[i];
+        dst[c] = 0;
+    }
+    return len;
 }

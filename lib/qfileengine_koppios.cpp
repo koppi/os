@@ -65,13 +65,18 @@ static KoppiosFile *koppios_fopen(const char *filename, const char *mode) {
      * here rather than reused (see file comment on why lib/stdio.h can't
      * be included directly). */
     char path[256];
-    const char *cwd = pwd();
     unsigned i = 0;
-    for (; cwd[i] && i + 1 < sizeof(path); i++) {
-        path[i] = cwd[i];
-    }
-    if (i + 1 < sizeof(path)) {
-        path[i++] = '/';
+    if (filename[0] != '/') {
+        /* Only relative names get the cwd prefix: the VFS wants
+         * device-qualified paths ("/rd/x"), and prefixing an absolute one
+         * would produce "//rd/x" whenever the cwd is "/". */
+        const char *cwd = pwd();
+        for (; cwd[i] && i + 1 < sizeof(path); i++) {
+            path[i] = cwd[i];
+        }
+        if (i > 0 && path[i - 1] != '/' && i + 1 < sizeof(path)) {
+            path[i++] = '/';
+        }
     }
     for (unsigned j = 0; filename[j] && i + 1 < sizeof(path); j++, i++) {
         path[i] = filename[j];
