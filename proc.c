@@ -22,17 +22,25 @@
 
 /*
  * Process in memory
+ *
+ * Main thread (nthreads == 0), laid out just above the image:
  * |-----------image_start---------------|
  * |                                     |
  * |-------image_start + image_size------|
- * |              padding                |
- * |------------user stack---------------| ---|
- * |               4096B                 |    |
- * |-----------kernel stack--------------|    |
- * |               4096B                 |    | x number of threads
- * |-------------user heap---------------|    |
- * |               4096B                 |    |
- * |-------------------------------------| ---|
+ * |            user stack               | 64 pages
+ * |            (guard, unmapped)        |
+ * |           kernel stack              |  4 pages
+ * |-------------user heap---------------| 4 pages, then grown IN PLACE upward
+ * |                 ...                 | (heap.c) up to PROC_HEAP_MAX / KHEAP_BASE
+ * |-------------------------------------|
+ *
+ * Every other thread gets a slot in the secondary-thread region
+ * [UTHREAD_REGION_BASE, UTHREAD_REGION_END) (mm.h), well above anything the
+ * main heap can grow to. Slot n (n >= 1) is PROC_THREAD_SLOT_PAGES pages:
+ * |  guard | user stack | guard | kernel stack | guard | heap window |
+ *    1 pg     64 pages    1 pg      4 pages      1 pg    128 pages
+ * The heap window is the thread's heap's growth room (heap_ceiling); the
+ * guards are never mapped.
  */
 
 /**
@@ -183,31 +191,40 @@ static int map_user_range(page_dir_t *pdir, vmm_addr_t base, int pages, int user
     return 1;
 }
 
+/** @return The first virtual address of secondary-thread slot @p slot (>= 1). */
+static vmm_addr_t thread_slot_base(int slot) {
+    return UTHREAD_REGION_BASE +
+           (vmm_addr_t) (slot - 1) * PROC_THREAD_SLOT_PAGES * PAGE_SIZE;
+}
+
 /**
- * @brief Map a thread's user and kernel stacks above its image.
+ * @brief Map a thread's user and kernel stacks.
  * @param thread   The thread; its stack pointers and limits are filled in.
  * @param pdir     The process's page directory.
- * @param nthreads Index of this thread within the process, 0 for the main one.
- * @return 1 on success, 0 if a mapping failed.
+ * @param nthreads 0 for the main thread, else the thread's slot (1-based).
+ * @return 1 on success, 0 if a mapping failed or @p nthreads is out of range.
  *
- * The main thread is laid out immediately above the image; every later thread
- * is offset by a fixed per-thread span so threads miss the image and each
- * other.
+ * The main thread is laid out immediately above the image. Every other thread
+ * has a slot of its own in the secondary-thread region, at an address that does
+ * not depend on the image or on how far the main heap has grown: the heap grows
+ * in place, so a slot placed in its path (as these used to be, at fixed offsets
+ * from the image end) ends up inside it, and the stack's exit then unmaps a run
+ * of live heap pages.
  *
  * An unmapped guard page separates the two stacks. They used to be adjacent,
  * so a kernel stack that overran its bottom walked into the top of the user
  * stack with nothing faulting — the damage only surfaced later as a return
  * through a wrecked frame. The kernel stack is also mapped ring-0 only, since
- * it holds the saved user context.
+ * it holds the saved user context. A slot has a further guard below the user
+ * stack, so a stack overflow faults rather than running into the thread below.
  */
 int build_stack(thread_t *thread, page_dir_t *pdir, int nthreads) {
-    /* Per-thread footprint: user stack + kernel stack + heap, plus slack. Only
-     * the main thread (nthreads == 0) is laid out exactly; forked threads are
-     * offset by this much so they miss the image and each other. */
-    uint32_t span = (uint32_t) nthreads * PAGE_SIZE *
-                    (PROC_USER_STACK_PAGES + PROC_KERNEL_STACK_PAGES + PROC_HEAP_PAGES + 8);
+    if(nthreads < 0 || nthreads > PROC_THREAD_SLOTS_MAX)
+        return 0;
 
-    uint32_t ustack_base = thread->image_base + thread->image_size + span;
+    uint32_t ustack_base = nthreads == 0
+        ? thread->image_base + thread->image_size
+        : thread_slot_base(nthreads) + PAGE_SIZE;
     if(!map_user_range(pdir, ustack_base, PROC_USER_STACK_PAGES, 1))
         return 0;
     thread->esp = ustack_base;   /* real SP set by stack_fill() */
@@ -229,26 +246,36 @@ int build_stack(thread_t *thread, page_dir_t *pdir, int nthreads) {
 
 /**
  * @brief Map and initialise a thread's user heap.
- * @param thread   The thread; its @c heap and @c heap_limit are filled in.
+ * @param thread   The thread; its @c heap, @c heap_limit and @c heap_ceiling
+ *                 are filled in.
  * @param pdir     The process's page directory.
- * @param nthreads Index of this thread within the process, 0 for the main one.
+ * @param nthreads 0 for the main thread, else the thread's slot (1-based).
  * @return 1 on success, 0 if the mapping failed.
  *
- * Placed just above the thread's kernel stack, offset by the same per-thread
- * span @ref build_stack uses so threads of one process do not overlap. The
- * kernel-side aliases are left in place for @ref heap_fill to seed argv
- * through, and dropped there.
+ * Placed just above the thread's kernel stack (past a guard page, for a slot).
+ * The main heap may grow in place from here up to @ref PROC_HEAP_MAX -- clamped
+ * at @ref KHEAP_BASE, the first address that is not the process's to take --
+ * and a secondary thread's up to the end of its slot's heap window, so neither
+ * can reach another thread's pages. The kernel-side aliases are left in place
+ * for @ref heap_fill to seed argv through, and dropped there.
  */
 int build_heap(thread_t *thread, page_dir_t *pdir, int nthreads) {
-    uint32_t span = (uint32_t) nthreads * PAGE_SIZE *
-                    (PROC_USER_STACK_PAGES + PROC_KERNEL_STACK_PAGES + PROC_HEAP_PAGES + 8);
-    vmm_addr_t heap = thread->stack_kernel_limit + span;
+    if(nthreads < 0 || nthreads > PROC_THREAD_SLOTS_MAX)
+        return 0;
+
+    vmm_addr_t heap = thread->stack_kernel_limit + (nthreads == 0 ? 0 : PAGE_SIZE);
 
     if(!map_user_range(pdir, heap, PROC_HEAP_PAGES, 1))
         return 0;
 
     thread->heap = heap;
     thread->heap_limit = heap + PROC_HEAP_PAGES * PAGE_SIZE;
+    if(nthreads == 0) {
+        uint32_t max = heap + PROC_HEAP_MAX;
+        thread->heap_ceiling = max < KHEAP_BASE ? max : KHEAP_BASE;
+    } else {
+        thread->heap_ceiling = heap + PROC_THREAD_HEAP_PAGES * PAGE_SIZE;
+    }
 
     heap_init((vmm_addr_t *) heap, PROC_HEAP_PAGES * PAGE_SIZE);
 
@@ -301,23 +328,104 @@ static int thread_entry_fill(thread_t *thread, uint32_t arg) {
 }
 
 /**
- * @brief `thread_create` syscall backend.
+ * @return Non-zero if every page of secondary-thread slot @p slot is unmapped in
+ *         both @p pdir and the kernel directory.
+ *
+ * map_user_range() maps blindly -- it would replace a page that is already there
+ * and leak or zero whatever it held -- so thread creation looks first.
+ */
+static int thread_slot_free(page_dir_t *pdir, int slot) {
+    page_dir_t *kdir = get_kern_directory();
+    vmm_addr_t base = thread_slot_base(slot);
+    for(uint32_t i = 0; i < PROC_THREAD_SLOT_PAGES; i++) {
+        vmm_addr_t va = base + i * PAGE_SIZE;
+        if(get_phys_addr(pdir, va) || get_phys_addr(kdir, va))
+            return 0;
+    }
+    return 1;
+}
+
+/**
+ * @brief Undo a half-built thread slot: drop every page of it from @p pdir
+ *        (returning the frames) and any kernel-directory alias left behind.
+ *
+ * Only called on a slot thread_slot_free() accepted, so everything mapped in it
+ * is ours.
+ */
+static void thread_slot_release(page_dir_t *pdir, int slot) {
+    page_dir_t *kdir = get_kern_directory();
+    vmm_addr_t base = thread_slot_base(slot);
+    for(uint32_t i = 0; i < PROC_THREAD_SLOT_PAGES; i++) {
+        vmm_addr_t va = base + i * PAGE_SIZE;
+        void *kframe = get_phys_addr(kdir, va);
+        void *uframe = get_phys_addr(pdir, va);
+        if(kframe)
+            vmm_unmap_phys(kdir, va);
+        if(uframe)
+            vmm_unmap(pdir, va);                 /* frees the frame */
+        else if(kframe)
+            pmm_free((mm_addr_t *) kframe);      /* never reached @p pdir */
+    }
+}
+
+/**
+ * @brief Give back the kernel-directory page tables the thread region needed.
+ *
+ * map_user_range() aliases every page it maps into the kernel directory at the
+ * same address, and creates a page table there when the 4 MiB slot has none.
+ * The aliases are dropped as soon as the thread is built, but the tables stay
+ * -- and the page-table storage window (paging.c) is 64 blocks for the whole
+ * machine, so each of the region's seven slots would be a permanent loss. Free
+ * any that are empty again.
+ *
+ * Caller holds @ref proc_lock, which is what serialises every user of those
+ * kernel-directory addresses.
+ */
+static void thread_region_trim_kdir(void) {
+    page_dir_t *kdir = get_kern_directory();
+    for(vmm_addr_t va = UTHREAD_REGION_BASE; va < UTHREAD_REGION_END; va += 0x400000u) {
+        if(kdir[va >> 22] == 0)
+            continue;
+        const uint32_t *pt = (const uint32_t *) (kdir[va >> 22] & ~0xFFFu);
+        int empty = 1;
+        for(int i = 0; i < PAGEDIR_SIZE && empty; i++)
+            if(pt[i])
+                empty = 0;
+        if(empty)
+            vmm_unmap_page_table(kdir, va);
+    }
+}
+
+/**
+ * @brief `thread_create` syscall backend; caller holds @ref proc_lock.
  *
  * Mirrors start_proc_locked()'s dependency order (stack, then heap, then the
  * entry frame) for a sibling thread instead of a new process: same @c pdir
- * as every other thread of @p proc, offset to its own stack/heap span by
- * @c thread_slots (see proc.h -- monotonic, unlike @c threads, so a thread
- * that already exited and one created afterward never collide on the same
- * virtual-address span).
+ * as every other thread of @p proc, in a slot of its own in the secondary-
+ * thread region. The slot comes from @c thread_slots (see proc.h -- monotonic,
+ * unlike @c threads, so a thread that already exited and one created afterward
+ * never collide on the same virtual-address span); a slot with anything
+ * already mapped in it is skipped rather than built over.
  *
- * Failure is reported but not unwound past freeing the two kmalloc'd blocks:
- * consistent with start_proc_locked()'s "rare and fatal to what asked for
- * it" stance on partial-mapping failures, thread creation is not expected to
- * routinely fail and this is not the one true place worth the complexity of
- * unwinding a partial page-table build.
+ * Fails cleanly: -1, and the address space is left as it was found. The slot
+ * is checked before any thread state is allocated, and a mapping failure part
+ * way through is unwound page by page (thread_slot_release()), so a refused or
+ * failed call neither remaps live pages nor leaks the ones it had mapped.
  */
-int create_user_thread(process_t *proc, uint32_t entry, uint32_t arg) {
+static int create_user_thread_locked(process_t *proc, uint32_t entry, uint32_t arg) {
     thread_t *main_thread = proc->thread_list;
+
+    int slot = proc->thread_slots;
+    for(; slot <= PROC_THREAD_SLOTS_MAX; slot++) {
+        if(thread_slot_free(proc->pdir, slot))
+            break;
+        klogf(LOG_WARNING, "thread_create: slot %d is not empty, skipping it\n", slot);
+    }
+    if(slot > PROC_THREAD_SLOTS_MAX) {
+        klogf(LOG_WARNING, "thread_create: all %d thread slots are in use\n",
+              PROC_THREAD_SLOTS_MAX);
+        return -1;
+    }
 
     thread_t *thread = create_thread();
     if(thread == 0)
@@ -328,9 +436,8 @@ int create_user_thread(process_t *proc, uint32_t entry, uint32_t arg) {
     thread->image_size = main_thread->image_size;
     thread->eip = entry;
 
-    int slot = proc->thread_slots++;
-
     if(!build_stack(thread, proc->pdir, slot) || !build_heap(thread, proc->pdir, slot)) {
+        thread_slot_release(proc->pdir, slot);
         kfree(thread->fpu_state_raw);
         kfree(thread);
         return -1;
@@ -343,12 +450,14 @@ int create_user_thread(process_t *proc, uint32_t entry, uint32_t arg) {
         vmm_unmap_phys(get_kern_directory(), thread->heap + (uint32_t) i * PAGE_SIZE);
 
     if(!thread_entry_fill(thread, arg)) {
+        thread_slot_release(proc->pdir, slot);
         kfree(thread->fpu_state_raw);
         kfree(thread);
         return -1;
     }
 
     thread->state = PROC_ACTIVE;
+    proc->thread_slots = slot + 1;
 
     uint32_t sf = spin_lock(&sched_lock);
     thread->next = proc->thread_list;
@@ -359,6 +468,24 @@ int create_user_thread(process_t *proc, uint32_t entry, uint32_t arg) {
     spin_unlock(&sched_lock, sf);
 
     return thread->pid;
+}
+
+/**
+ * @brief `thread_create` syscall backend.
+ * @return The new thread's pid, or -1 (see create_user_thread_locked()).
+ *
+ * Serialised with @ref proc_lock, like start_proc(): building a thread aliases
+ * its pages into the one kernel directory at the very addresses they have in the
+ * process, and every process's slots use the same addresses -- two threads
+ * being built at once (another CPU, or a preemption in this trap-gate syscall)
+ * would seed each other's frames through a shared alias.
+ */
+int create_user_thread(process_t *proc, uint32_t entry, uint32_t arg) {
+    uint32_t f = spin_lock(&proc_lock);
+    int r = create_user_thread_locked(proc, entry, arg);
+    thread_region_trim_kdir();
+    spin_unlock(&proc_lock, f);
+    return r;
 }
 
 /** Most arguments a process can be given, argv[0] included. */

@@ -25,6 +25,7 @@ typedef struct thread {
     uint32_t stack_kernel_limit;    /**< Top of the kernel stack. */
     uint32_t heap;                  /**< Base of the user heap arena. */
     uint32_t heap_limit;            /**< Top of the user heap arena. */
+    uint32_t heap_ceiling;          /**< Highest address (exclusive) heap_grow() may extend the arena to. */
     uint32_t image_base;            /**< Lowest vaddr of the loaded image. */
     uint32_t image_size;            /**< Image span, page-rounded. */
     uint8_t *fpu_state;            /**< 16-byte-aligned FXSAVE area (@ref FPU_STATE_SIZE). */

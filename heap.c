@@ -180,9 +180,6 @@ void ufree(void *ptr, vmm_addr_t *heap) {
     }
 }
 
-/** Ceiling on one process's heap arena. */
-#define PROC_HEAP_MAX (64u * 1024u * 1024u)
-
 /**
  * @brief Grow the current process's heap by enough (zeroed) pages to satisfy a
  *        @p need byte allocation, at least 16, and splice a free block onto the
@@ -198,7 +195,12 @@ static int heap_grow(thread_t *t, page_dir_t *pdir, size_t need) {
     size_t pages = (want + PAGE_SIZE - 1) / PAGE_SIZE;
     if(pages < 16)
         pages = 16;
-    if((t->heap_limit - t->heap) + pages * PAGE_SIZE > PROC_HEAP_MAX)
+    /* The arena may not grow past t->heap_ceiling: PROC_HEAP_MAX above the base
+     * for the main thread, the thread's own window for a secondary one. Pages
+     * above the ceiling belong to someone else (another thread's slot, the
+     * kernel heap). Compared as a page count so a huge request cannot wrap. */
+    if(t->heap_ceiling <= t->heap_limit ||
+       pages > (t->heap_ceiling - t->heap_limit) / PAGE_SIZE)
         return 0;
 
     vmm_addr_t base = t->heap_limit;
