@@ -8,6 +8,7 @@ iso/
 hda.img
 floppy.img
 initrd.img
+os-usb.img
 apps/01/01
 apps/hello/hello
 apps/hello-cpp/hellocpp
