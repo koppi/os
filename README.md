@@ -632,6 +632,19 @@ for anything more (there is no TLS or resolver cache).
   boot (see **SMP / multi-core**): `cpus`/`ps` show them scheduled onto
   whichever core is free, same as any other process, with no regressions
   from the C++ runtime.
+  * [`apps/hello-qt-gui`](apps/hello-qt-gui) — **graphical real Qt 6.8**
+    (staged as `hqtgui`, opt-in build, needs a framebuffer boot): the full
+    QtCore + QtGui closure vendored in [`third_party/qt6-gui`](third_party/qt6-gui)
+    — `QGuiApplication`, `QRasterWindow`, `QPainter`, the real Unix event
+    dispatcher, FreeType + HarfBuzz text in a Unifont subset, PCRE2 — runs a
+    `QTimer`-animated window on the kernel framebuffer through Doom's
+    full-screen-grab syscalls (adaptive 256-colour palette). Checked by
+    `make qemu-qt-gui`, which judges screenshots from their pixels. Only 11
+    real Qt files are patched (each marked inline). Getting it to run found and fixed real libc gaps (glibc `ctype`
+    tables, a working `ppoll` + in-process `eventfd` so Qt's own dispatcher
+    runs, a millisecond `clock_gettime`, `C.UTF-8`, VFS-aware absolute paths
+    in the Qt file engine) and a kernel bug (a secondary thread's stack can
+    overlap a grown heap; the Qt port avoids spawning GUI worker threads).
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — reads a number, a char and a string with
     `scanf` and echoes them back

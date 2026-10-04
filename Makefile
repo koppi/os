@@ -201,6 +201,12 @@ qemu-doom: iso
 qemu-chipnomad: iso
 	@bash test/chipnomad-boot.sh all
 
+# Drive apps/hello-qt-gui (the real Qt 6.8 window) and judge it from pixels:
+# right shape and gradient, the ball animates, Esc returns the desktop. Needs
+# the app built first: make -C apps/hello-qt-gui -j4
+qemu-qt-gui: iso
+	@bash test/qt-gui-boot.sh all
+
 # Build a GPT+FAT32 UEFI USB image (os-usb.img) that the UEFI-only laptops
 # (no CSM, e.g. a MacBook) boot from: grub2 x86_64-efi + kernel + initrd.
 usb: $(KERNEL) initrd.img
@@ -245,6 +251,6 @@ clean::
 	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin ap_boot.tmp.* *.d lib/*.d *~ os.iso iso initrd.img docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-doom cloc docs clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-doom qemu-chipnomad qemu-qt-gui cloc docs clean
 
 -include $(OBJS:.o=.d)

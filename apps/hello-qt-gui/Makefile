@@ -1,0 +1,149 @@
+# Graphical "Hello, Qt6!" -- real Qt 6.8 (QtCore + QtGui + FreeType + HarfBuzz),
+# vendored in third_party/qt6-gui/, built from source for this kernel.
+#
+#   make -C apps/hello-qt-gui -j4      ->  ./hqtgui   (stripped; 4.7 MB loaded, 7 MB on disk)
+#
+# Deliberately NOT part of `make -C apps`: it is ~560 translation units (about
+# 20 minutes at -j4 on first build, incremental afterwards). hda.sh stages
+# hqtgui + font.ttf on the RAM disk only when the binary exists, the way it
+# treats the Doom IWAD. Run `hqtgui` from the shell on a framebuffer boot.
+#
+# Every compile flag below is a decision that was forced by a real failure;
+# third_party/qt6-gui/README.md explains the non-obvious ones.
+
+.DEFAULT_GOAL := all
+
+Q   := ../../third_party/qt6-gui
+LIB := ../../lib
+B   := build
+
+include $(Q)/koppios/sources.mk
+include $(Q)/koppios/incs.mk
+
+CXX := g++
+CC  := gcc
+AR  := ar
+
+# Legacy QT_NO_<FEATURE> macros: real Qt gates code on these *and* on QT_CONFIG();
+# both must agree with koppios/include/*/qt*-config*.h.
+QT_NO_DEFINES := -DQT_NO_OPENGL -DQT_NO_OPENGLES2 -DQT_NO_EGL -DQT_NO_VULKAN \
+  -DQT_NO_SESSIONMANAGER -DQT_NO_SYSTEMTRAYICON -DQT_NO_ACCESSIBILITY \
+  -DQT_NO_WHATSTHIS -DQT_NO_UNDOCOMMAND -DQT_NO_UNDOSTACK -DQT_NO_UNDOGROUP \
+  -DQT_NO_DRAGANDDROP -DQT_NO_CLIPBOARD -DQT_NO_SHORTCUT -DQT_NO_TABLETEVENT \
+  -DQT_NO_IM -DQT_NO_VALIDATOR -DQT_NO_STANDARDITEMMODEL -DQT_NO_FILESYSTEMMODEL \
+  -DQT_NO_IMAGEFORMATPLUGIN -DQT_NO_MOVIE -DQT_NO_PICTURE -DQT_NO_PDF \
+  -DQT_NO_DESKTOPSERVICES -DQT_NO_CSSPARSER -DQT_NO_SETTINGS -DQT_NO_PROCESS \
+  -DQT_NO_SHAREDMEMORY -DQT_NO_SYSTEMSEMAPHORE -DQT_NO_LIBRARY \
+  -DQT_NO_FILESYSTEMWATCHER -DQT_NO_TEMPORARYFILE -DQT_NO_TRANSLATION \
+  -DQT_NO_ANIMATION -DQT_NO_GESTURES -DQT_NO_COMMANDLINEPARSER \
+  -DQT_NO_IMAGEFORMAT_PNG -DQT_NO_IMAGEFORMAT_BMP -DQT_NO_IMAGEFORMAT_PPM \
+  -DQT_NO_IMAGEFORMAT_XBM -DQT_NO_IMAGEFORMAT_XPM -DQT_NO_IMAGEFORMAT_JPEG \
+  -DQT_NO_GLIB
+
+QT_INC := $(addprefix -I $(Q)/,$(QT_INCDIRS))
+
+# Compiled with the host's real system headers (no -ffreestanding), linked
+# against this kernel's runtime. No -fkeep-inline-functions (it made objects
+# 50x larger and OOM-killed ar/ld). -fno-exceptions/-fno-rtti: no unwinder or
+# typeinfo runtime exists here (lib/cxxabi.cpp).
+QT_CXXFLAGS := -m32 -std=gnu++20 -fno-builtin -fno-exceptions -fno-rtti -fno-strict-aliasing \
+  -ffunction-sections -fdata-sections -Os -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
+  -fno-stack-protector -D__KOPPIOS__ -DQT_USE_QSTRINGBUILDER -DQT_BUILD_GUI_LIB \
+  -DQT_BUILD_CORE_LIB -DQT_DISABLE_DEPRECATED_UP_TO=QT_VERSION \
+  -DQT_QPA_DEFAULT_PLATFORM_NAME='"minimal"' $(QT_NO_DEFINES) \
+  -UQLOGGING_HAVE_BACKTRACE -UQLOGGING_USE_EXECINFO_BACKTRACE \
+  -include $(Q)/koppios/include/QtCore/qglobal.h -include dirent.h -w $(QT_INC)
+
+HB_DIR   := $(Q)/qtbase/src/3rdparty/harfbuzz-ng
+HB_DEFS  := -DHAVE_ATEXIT -DHAVE_CONFIG_H -DHB_EXTERN= -DHB_NDEBUG -DHB_NO_UNICODE_FUNCS \
+  -DQT_NO_VERSION_TAGGING -DHAVE_PTHREAD -DHAVE_SCHED_H -DHAVE_SCHED_YIELD -DHAVE_OT
+HB_FLAGS := $(QT_CXXFLAGS) $(HB_DEFS) -I $(HB_DIR)/src
+
+DC_DIR   := $(Q)/qtbase/src/3rdparty/double-conversion
+DC_FLAGS := -m32 -std=gnu++17 -w -fno-builtin -fno-exceptions -fno-rtti -ffunction-sections \
+  -fdata-sections -Os -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -fno-stack-protector \
+  -I $(DC_DIR) -I $(DC_DIR)/double-conversion
+
+PCRE2_FLAGS := -m32 -Os -w -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -fno-stack-protector \
+  -DHAVE_CONFIG_H -DPCRE2_CODE_UNIT_WIDTH=16 -DPCRE2_STATIC \
+  -I $(Q)/qtbase/src/3rdparty/pcre2/src
+
+FT_DIR   := $(Q)/qtbase/src/3rdparty/freetype
+FT_FLAGS := -m32 -Os -w -fno-builtin -fno-stack-protector -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
+  -ffunction-sections -fdata-sections -DFT2_BUILD_LIBRARY -DTT_CONFIG_OPTION_SUBPIXEL_HINTING \
+  -I $(Q)/koppios/freetype -I $(FT_DIR)/include
+
+QGRAY_FLAGS := -m32 -fno-builtin -fno-strict-aliasing -ffunction-sections -fdata-sections -Os \
+  -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 -fno-stack-protector -D__KOPPIOS__ -DQT_BUILD_GUI_LIB \
+  -DQT_BUILD_CORE_LIB -DQT_DISABLE_DEPRECATED_UP_TO=QT_VERSION \
+  -include $(Q)/koppios/include/QtCore/qglobal.h -include dirent.h -w $(QT_INC)
+
+# object path mirrors the source path ("../../lib/x.cpp" -> build/_/_/lib/x.o), so
+# same-named files (corelib and gui both have removed_api.cpp) can never collide.
+objof = $(B)/$(subst ../,_/,$(basename $(1))).o
+
+# $(1)=group  $(2)=source (relative to $(Q))  $(3)=compiler var  $(4)=flags var  $(5)=extra flags
+define OBJRULE
+$$(call objof,$(2)): $$(Q)/$(2)
+	@mkdir -p $$(@D)
+	@echo "  $(1)  $(2)"
+	@$$($(3)) $$($(4)) $(5) -MMD -MP -c $$< -o $$@
+endef
+
+$(foreach s,$(QT_SRCS) $(MOC_SRCS) $(KOPPIOS_SRCS),$(eval $(call OBJRULE,QT,$(s),CXX,QT_CXXFLAGS)))
+$(foreach s,$(SIMD_SRCS),$(eval $(call OBJRULE,SIMD,$(s),CXX,QT_CXXFLAGS,$(SIMD_FLAGS_$(basename $(notdir $(s)))))))
+$(foreach s,$(HB_SRCS),$(eval $(call OBJRULE,HB,$(s),CXX,HB_FLAGS)))
+$(eval $(call OBJRULE,HB,$(HB_DUMMY_SRC),CXX,HB_FLAGS,-I $(HB_DIR)))
+$(eval $(call OBJRULE,HB,$(HB_VARC_SRC),CXX,HB_FLAGS,-I $(HB_DIR)/src/OT/Var/VARC))
+$(foreach s,$(DC_SRCS),$(eval $(call OBJRULE,DC,$(s),CXX,DC_FLAGS)))
+$(foreach s,$(PCRE2_SRCS),$(eval $(call OBJRULE,PCRE2,$(s),CC,PCRE2_FLAGS)))
+$(foreach s,$(FT_SRCS),$(eval $(call OBJRULE,FT,$(s),CC,FT_FLAGS)))
+$(eval $(call OBJRULE,QGRAY,$(QGRAY_SRC),CC,QGRAY_FLAGS))
+
+QT_OBJS     := $(foreach s,$(QT_SRCS) $(MOC_SRCS) $(SIMD_SRCS) $(QGRAY_SRC) $(DC_SRCS),$(call objof,$(s)))
+KOPPIOS_OBJS := $(foreach s,$(KOPPIOS_SRCS),$(call objof,$(s)))
+HB_OBJS     := $(foreach s,$(HB_SRCS) $(HB_DUMMY_SRC) $(HB_VARC_SRC),$(call objof,$(s)))
+PCRE2_OBJS  := $(foreach s,$(PCRE2_SRCS),$(call objof,$(s)))
+FT_OBJS     := $(foreach s,$(FT_SRCS),$(call objof,$(s)))
+
+# Archives, not a flat object list: the linker then only extracts the members the
+# program actually reaches, which keeps ld well under 600 MB.
+$(B)/libqt.a: $(QT_OBJS)
+	@rm -f $@; $(AR) rcs $@ $^
+$(B)/libhb.a: $(HB_OBJS)
+	@rm -f $@; $(AR) rcs $@ $^
+$(B)/libpcre2.a: $(PCRE2_OBJS)
+	@rm -f $@; $(AR) rcs $@ $^
+$(B)/libft.a: $(FT_OBJS)
+	@rm -f $@; $(AR) rcs $@ $^
+
+$(B)/hello_qt_gui.o: hello_qt_gui.cpp
+	@mkdir -p $(B)
+	@echo "  APP  hello_qt_gui.cpp"
+	@$(CXX) $(QT_CXXFLAGS) -MMD -MP -c $< -o $@
+
+KLIB := $(addprefix $(LIB)/,cxx_start.o mutex.o system_calls.o unistd.o stdlib.o string.o stdio.o \
+  cxxabi.o cxx_string.o cxx_rbtree.o cxx_hashtable.o cxx_chrono.o cxx_pmr.o cxx_condvar.o \
+  cxx_list.o pthread_glibc.o libm.o libc_ext.o emutls.o)
+
+LIBGCC := $(shell $(CXX) -m32 -print-libgcc-file-name)
+
+all: hqtgui
+
+hqtgui: $(B)/hello_qt_gui.o $(KOPPIOS_OBJS) $(B)/libqt.a $(B)/libhb.a $(B)/libpcre2.a $(B)/libft.a hello_qt_gui.lds | klib
+	@echo "  LD   hqtgui"
+	@$(CXX) -m32 -nostdlib -no-pie -Wl,-T,hello_qt_gui.lds -Os -Wl,--gc-sections -Wl,--no-keep-memory \
+	  -o $(B)/hqtgui.unstripped $(B)/hello_qt_gui.o $(KOPPIOS_OBJS) \
+	  -Wl,--start-group $(B)/libqt.a $(B)/libhb.a $(B)/libpcre2.a $(B)/libft.a $(KLIB) $(LIBGCC) -Wl,--end-group
+	@strip -s -o hqtgui $(B)/hqtgui.unstripped
+	@size hqtgui
+
+klib:
+	@$(MAKE) -s -C $(LIB)
+
+clean:
+	rm -rf $(B) hqtgui
+
+-include $(shell find $(B) -name '*.d' 2>/dev/null)
+
+.PHONY: all clean klib

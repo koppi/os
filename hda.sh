@@ -20,7 +20,7 @@ IMG=${IMG:-hda.img}
 if [ -z "${SIZE:-}" ]; then
     # hda.img is the persistent scratch disk and is always 16 MiB; the RAM
     # disk only needs that much when it is carrying a WAD.
-    if [ "$IMG" = "hda.img" ] || [ -f "$WAD" ]; then
+    if [ "$IMG" = "hda.img" ] || [ -f "$WAD" ] || [ -f apps/hello-qt-gui/hqtgui ]; then
         SIZE=16M
     else
         SIZE=8M
@@ -83,6 +83,15 @@ mcopy -i "$IMG" -D o "$CNDATA/instruments/Waves.cni"          ::waves.cni
 mcopy -i "$IMG" -D o apps/doom/doom       ::doom
 if [ -f "$WAD" ]; then
     mcopy -i "$IMG" -D o "$WAD"           ::doom1.wad
+fi
+
+# Graphical Qt6 demo. apps/hello-qt-gui is not part of `make -C apps` (about 560
+# translation units); build it with `make -C apps/hello-qt-gui -j4` and it is
+# staged here: the binary plus the Unifont subset it loads as /rd/font.ttf.
+# Needs a framebuffer boot (the ISO / real hardware), not `-kernel`.
+if [ -f apps/hello-qt-gui/hqtgui ]; then
+    mcopy -i "$IMG" -D o apps/hello-qt-gui/hqtgui              ::hqtgui
+    mcopy -i "$IMG" -D o apps/hello-qt-gui/unifont-subset.ttf  ::font.ttf
 fi
 
 # The C compiler: the binary, its own source, its runtime library, and tests.
