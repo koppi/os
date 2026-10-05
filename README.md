@@ -90,6 +90,17 @@ each is on.
   and its quantum is `WEIGHT_BASE * weight` ticks; it runs the highest-priority
   ready thread, round-robins equal priorities by quantum, and lets a higher
   priority preempt within a tick. SMP-aware — see **SMP / multi-core** above.
+* **A sleeping thread gives its CPU away.** `sleep()` ([`io.c`](io.c); the
+  `msleep` syscall, every kernel service's poll delay and Qt's event loop sit
+  in it) used to halt *while still the running thread*, holding its CPU for the
+  whole quantum. With seven polling kernel processes on four cores, every other
+  runnable process, an interactive Qt app included, then waited for a CPU
+  that was doing nothing: its 8 ms input timer fired every ~19 ms. Now
+  `sched_sleep_begin()` marks the thread asleep until its `pit_ms()` deadline
+  (`thread_t::sleep_until`); `schedule()` skips sleeping threads
+  (`thread_runnable()`, `proc_pick_thread()`), so the CPU goes to someone else or
+  idles, and the thread is picked up again within a tick of the deadline. The
+  timer now fires every 8.1 ms.
 * Processes (flat binaries loaded from the filesystem) — [`proc.c`](proc.c)
 * Threads — [`thread.c`](thread.h)
 * **Userspace threading**: `thread_create`/`thread_join`/`thread_yield`
@@ -555,7 +566,10 @@ for anything more (there is no TLS or resolver cache).
   32-35 back [`apps/hello-thread`](apps/hello-thread) /
   [`apps/hello-pthread`](apps/hello-pthread), 36-37 back
   [`apps/hello-qt-widgets`](apps/hello-qt-widgets) and 38 back
-  [`apps/hello-tls`](apps/hello-tls).
+  [`apps/hello-tls`](apps/hello-tls). The graphics, keyboard and pointer calls
+  (22-27, 36) are the whole interface the microui apps in
+  [`apps/calc`](apps/calc) / [`apps/clock`](apps/clock) need as well — no
+  syscall was added for them.
 * The ELF loader ([`elf.c`](elf.c)) maps every page of a `PT_LOAD` segment to
   its own frame and covers the `.bss` tail, so multi-page ring-3 binaries load.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
@@ -755,7 +769,26 @@ for anything more (there is no TLS or resolver cache).
     console, and `make qemu-qt-widgets` asserts that log plus a few pixel
     checks. The Qt platform glue grew a small compositor for popups, a pointer
     overlay and input translation; the kernel/libc grew `getmouse`, `getrandom`
-    (37) / `getentropy`, `strcoll`, `strtok_r` and x87 `exp`/`log`/`atan`.
+    (37) / `getentropy`, `strcoll`, `strtok_r`, x87 `exp`/`log`/`atan` and a small
+    process-local environment (`getenv`/`setenv`/`putenv`/`unsetenv`: a program
+    starts with an empty one; Qt reads several `QT_*` variables).
+  * [`apps/calc`](apps/calc) — a graphical **calculator** (staged as `calc`)
+    and [`apps/clock`](apps/clock) — an **analog clock** (staged as `clock`):
+    the first ring-3 programs with a real GUI that is not Qt. Both are built on
+    [`apps/microui`](apps/microui), a shared runtime that compiles the kernel's
+    own vendored [`microui.c`](microui.c) a *second* time, for ring 3, and
+    renders its command list into the full-screen grab (syscalls 22-25) as
+    8-bpp indexed frames. Because that renderer sees the drawing calls rather
+    than a finished picture, it **builds** the 256-entry palette as the frame
+    is painted instead of quantizing into a fixed one — a microui frame uses
+    about a dozen colours, so every one lands exactly. Text is the same
+    Unifont the kernel console draws, sliced out of `unifont.sfn` at build time
+    into a 1520-byte 8x16 table (`apps/microui/mkfont.c`) rather than carrying
+    the 1.2 MiB blob into a ring-3 image. The clock face is drawn through a
+    command type of the runtime's own, so it clips and layers inside its window
+    like a widget would, which microui's rect/text/icon command list cannot do
+    by itself. `make qemu-microui` drives both headless — keyboard arithmetic,
+    pointer clicks on the keypad, and Esc handing the desktop back.
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — reads a number, a char and a string with
     `scanf` and echoes them back

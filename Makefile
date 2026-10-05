@@ -208,6 +208,13 @@ qemu-doom: iso
 qemu-chipnomad: iso
 	@bash test/chipnomad-boot.sh all
 
+# Drive the ring-3 microui apps (apps/calc, apps/clock): start each over the
+# serial console, type at the calculator, click its keypad and the clock's
+# options with the monitor's mouse, check Esc gives the desktop back.
+# Screenshots and the apps' own log lines per step in /tmp/microui-boot.
+qemu-microui: iso
+	@bash test/microui-boot.sh all
+
 # Drive apps/hello-qt-gui (the real Qt 6.8 window) and judge it from pixels:
 # right shape and gradient, the ball animates, Esc returns the desktop. Needs
 # the app built first: make -C apps/hello-qt-gui -j4
@@ -265,6 +272,6 @@ clean::
 	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin ap_boot.tmp.* *.d lib/*.d *~ os.iso iso initrd.img docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-doom qemu-chipnomad qemu-qt-gui qemu-qt-widgets cloc docs clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets cloc docs clean
 
 -include $(OBJS:.o=.d)

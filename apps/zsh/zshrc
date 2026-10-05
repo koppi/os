@@ -8,4 +8,4 @@ alias c='clear'
 alias reload='source /rd/zshrc'
 alias shutdown='poweroff'
 
-echo welcome to os zsh - try: ls, cat cc.c, pci, date, hello, lua t.lua
+echo welcome to os zsh - try: ls, cat cc.c, pci, date, hello, lua t.lua, calc, clock

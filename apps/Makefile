@@ -18,6 +18,8 @@ all:
 	$(MAKE) -C fault
 	$(MAKE) -C cc
 	$(MAKE) -C zsh
+	$(MAKE) -C calc
+	$(MAKE) -C clock
 	$(MAKE) -C doom
 	$(MAKE) -C chipnomad
 
@@ -41,6 +43,8 @@ clean:
 	$(MAKE) -C fault clean
 	$(MAKE) -C cc clean
 	$(MAKE) -C zsh clean
+	$(MAKE) -C calc clean
+	$(MAKE) -C clock clean
 	$(MAKE) -C doom clean
 	$(MAKE) -C chipnomad clean
 

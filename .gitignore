@@ -32,6 +32,10 @@ apps/cc/cc-dbg
 apps/cc/cc-asan
 apps/cc/cc.selfhost
 apps/zsh/zsh
+apps/calc/calc
+apps/clock/clock
+apps/microui/mkfont
+apps/microui/mui_font.h
 apps/doom/doom
 apps/chipnomad/chipnomad
 apps/hello-qt-gui/hqtgui

@@ -66,6 +66,10 @@ mcopy -i "$IMG" -D o apps/lua/test.lua    ::t.lua
 mcopy -i "$IMG" -D o apps/lua/mod.lua     ::mod.lua
 mcopy -i "$IMG" -D o mouse.bmp            ::mouse.bmp
 
+# The microui apps (apps/microui is the shared ring-3 runtime, not a program).
+mcopy -i "$IMG" -D o apps/calc/calc       ::calc
+mcopy -i "$IMG" -D o apps/clock/clock     ::clock
+
 # ChipNomad. The tracker plus the bundled content it is useless without: a
 # colour theme, the AY instrument presets, the pitch tables and two of
 # upstream's demo songs. Names are 8.3 because the FAT driver is (see
