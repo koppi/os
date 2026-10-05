@@ -8,6 +8,7 @@
 #include <log.h>
 #include <pci_acpi.h>
 #include <percpu.h>
+#include <sched.h>
 
 /** @brief Execute one @c hlt instruction. */
 void halt() {
@@ -62,10 +63,14 @@ void disable_int() {
  * scheduler's per-CPU tick counter.
  */
 void sleep(int s) {
-    //for (int i = 0; i < s * 1000000; i++) { } return;
-    // TODO better solution
     uint32_t target = pit_ms() + (uint32_t) s;
+    /* Tell the scheduler this thread is asleep until @c target, so the CPU it halts on goes to
+     * whoever else is runnable (or idles) instead of being held for the rest of the quantum. Every
+     * kernel thread and the msleep syscall that Qt's event loop sleeps in used to hold a CPU while
+     * halted, which left runnable processes waiting for CPUs that were doing nothing. */
+    struct thread *t = sched_sleep_begin(target);
     while ((int32_t) (pit_ms() - target) < 0) {
         halt();
     }
+    sched_sleep_end(t);
 }

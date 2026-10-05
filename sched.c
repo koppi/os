@@ -447,10 +447,57 @@ void sched_init() {
 }
 
 
-/** @return Non-zero if @p proc's current head thread can run right now. */
+/** @return Non-zero while @p t is inside sleep() with its deadline still ahead. */
+static inline int thread_asleep(const thread_t *t) {
+    return t->sleep_until && (int32_t) (pit_ms() - t->sleep_until) < 0;
+}
+
+/** @return Non-zero if @p t can run right now. */
+static inline int thread_runnable(const thread_t *t) {
+    return t->state == PROC_ACTIVE && !thread_asleep(t);
+}
+
+/** @return Non-zero if some thread of @p proc can run right now. */
 static inline int proc_runnable(process_t *proc) {
-    return proc->state == PROC_ACTIVE &&
-           proc->thread_list->state == PROC_ACTIVE;
+    if (proc->state != PROC_ACTIVE)
+        return 0;
+    thread_t *t = proc->thread_list;
+    do {
+        if (thread_runnable(t))
+            return 1;
+        t = t->next;
+    } while (t && t != proc->thread_list);
+    return 0;
+}
+
+/** Point @p proc's current-thread pointer at its first runnable thread, starting from the
+ *  present one, so a process that was switched away while its thread slept resumes one that is
+ *  awake. The caller has already established that proc_runnable(@p proc) holds. */
+static inline void proc_pick_thread(process_t *proc) {
+    thread_t *t = proc->thread_list;
+    do {
+        if (thread_runnable(t)) {
+            proc->thread_list = t;
+            return;
+        }
+        t = t->next;
+    } while (t && t != proc->thread_list);
+}
+
+thread_t *sched_sleep_begin(uint32_t deadline) {
+    if (!sched_on)
+        return 0;
+    cpu_t *c = this_cpu();
+    thread_t *t = c->current;
+    if (c->preempt_disable || !t || t == c->idle)
+        return 0;
+    t->sleep_until = deadline ? deadline : 1;       /* 0 means "awake" */
+    return t;
+}
+
+void sched_sleep_end(thread_t *t) {
+    if (t)
+        t->sleep_until = 0;
 }
 
 /** @brief Pack a resume-ESP + a CR3-to-load (0 = keep current) for the stub. */
@@ -526,7 +573,7 @@ uint64_t schedule(uint32_t esp) {
     }
 
     /* Fast path: keep running the current (real) process. */
-    if (!idle_now && proc_runnable(out_p) && !yielding &&
+    if (!idle_now && proc_runnable(out_p) && !yielding && !(out_t && thread_asleep(out_t)) &&
         out_p->thread_list->priority >= top && !quantum_expired) {
         spin_unlock(&sched_lock, f);
         return esp;
@@ -553,7 +600,7 @@ uint64_t schedule(uint32_t esp) {
         thread_t *t = start;
         do {
             t = t->next;
-        } while (t != start && t->state != PROC_ACTIVE);
+        } while (t != start && !thread_runnable(t));
         if ((process_t *) t->parent == out_p)   /* never rotate out of the ring */
             out_p->thread_list = t;
     }
@@ -578,6 +625,7 @@ uint64_t schedule(uint32_t esp) {
     if (nxt_p) {
         nxt_p->cpu = (int) c->index;
         nxt_p->last_ran = pit_ms();
+        proc_pick_thread(nxt_p);        /* a process picked back up resumes an awake thread */
         nxt_t = nxt_p->thread_list;
         c->current_proc = nxt_p;
         c->current = nxt_t;

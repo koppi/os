@@ -43,6 +43,20 @@
 /** @return Non-zero if priority @p p lies in the real-time band. */
 #define SCHED_IS_RT(p)  ((p) >= SCHED_PRIO_RT_MIN)
 
+/**
+ * @brief Let the calling thread sleep without holding its CPU.
+ *
+ * Marks the thread asleep until @p deadline (a @c pit_ms() value); from then on the scheduler
+ * skips it, so the CPU it is halted on goes to another thread instead of idling out the rest of
+ * the quantum, and picks it up again within a tick of the deadline. The thread is never woken
+ * early by anything else: the caller still loops until the deadline has passed.
+ * @return The thread to hand to sched_sleep_end(), or NULL if it cannot be put to sleep (the
+ *         scheduler is not live yet, or preemption is gated) -- then the caller just halts.
+ */
+struct thread *sched_sleep_begin(uint32_t deadline);
+/** @brief The sleep started by sched_sleep_begin() is over. */
+void sched_sleep_end(struct thread *t);
+
 /** @return The currently running process. */
 process_t *get_cur_proc();
 /** @return The process owning thread id @p id, or NULL. */
