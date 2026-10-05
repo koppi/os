@@ -11,6 +11,8 @@
  * the exit status says the same.
  */
 #include <pthread.h>
+#include <time.h>
+#include <errno.h>
 
 extern "C" {
 int printf(const char *fmt, ...);
@@ -31,6 +33,14 @@ static thread_local int tl_init = 7;
 /* .tbss: must read zero in every new thread. */
 static thread_local int tl_zero;
 static thread_local char tl_pattern[64];
+
+static unsigned read_canary()
+{
+    unsigned c;
+    asm volatile("movl %%gs:0x14, %0" : "=r"(c));
+    return c;
+}
+static unsigned g_canary[4];
 
 static int g_ctor, g_dtor;
 
@@ -69,6 +79,8 @@ static void *worker(void *arg)
     ok = ok && tl_obj.v == 42;
 
     g_addr[id] = &tl_init;
+    g_canary[id] = read_canary();
+    ok = ok && g_canary[id] != 0 && g_canary[id] == read_canary();
     pthread_setspecific(g_key, (void *) (long) (id + 1));
 
     /* Interleave with every other thread (yields, plus whatever the timer preempts): each
@@ -89,6 +101,38 @@ static void *worker(void *arg)
     ok = ok && tp == __builtin_thread_pointer();
 
     g_bad[id] = !ok;
+    return 0;
+}
+
+/* ---- timed condition waits: the deadline is on the condition variable's clock ------------- */
+static pthread_mutex_t g_tmu = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t g_tcv;
+
+static long now_ms()
+{
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return ts.tv_sec * 1000L + ts.tv_nsec / 1000000L;
+}
+
+static timespec deadline_in(long ms)
+{
+    timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    long ns = ts.tv_nsec + (ms % 1000) * 1000000L;
+    ts.tv_sec += ms / 1000 + ns / 1000000000L;
+    ts.tv_nsec = ns % 1000000000L;
+    return ts;
+}
+
+static void *signaller(void *)
+{
+    const long until = now_ms() + 40;
+    while (now_ms() < until)
+        thread_yield();
+    pthread_mutex_lock(&g_tmu);
+    pthread_cond_broadcast(&g_tcv);
+    pthread_mutex_unlock(&g_tmu);
     return 0;
 }
 
@@ -130,6 +174,15 @@ int main()
     }
     check(distinct, "every thread's copy lives at its own address");
     check(tl_init == 1000 && tl_zero == -5, "the main thread's copy is untouched by the others");
+    {
+        bool canaries = read_canary() != 0;
+        for (int i = 0; i < NTHREADS; i++) {
+            canaries = canaries && g_canary[i] != 0 && g_canary[i] != read_canary();
+            for (int j = i + 1; j < NTHREADS; j++)
+                canaries = canaries && g_canary[i] != g_canary[j];
+        }
+        check(canaries, "gs:0x14 holds a stable, per-thread stack-protector canary");
+    }
     printf("tls: constructors run: %d, destructors run: %d\n", g_ctor, g_dtor);
     check(g_ctor == 1 + NTHREADS, "one constructor per thread");
     check(g_dtor == NTHREADS, "destructors ran at each thread's exit (main's is still pending)");
@@ -138,6 +191,35 @@ int main()
     check(g_key_dtor_calls == NTHREADS && g_key_dtor_sum == 1 + 2 + 3 + 4,
           "each thread's pthread key destructor ran once with that thread's value");
     check(g_key_dtor_tls_ok == NTHREADS, "...while the thread's thread_local block was still alive");
+
+    /* A CLOCK_MONOTONIC condition variable must really wait until its deadline (Qt's thread pool
+     * keeps an idle worker alive this way), and a broadcast must wake it before then. */
+    pthread_condattr_t ca;
+    pthread_condattr_init(&ca);
+    pthread_condattr_setclock(&ca, CLOCK_MONOTONIC);
+    pthread_cond_init(&g_tcv, &ca);
+    {
+        timespec dl = deadline_in(150);
+        const long t0 = now_ms();
+        pthread_mutex_lock(&g_tmu);
+        int rc = pthread_cond_timedwait(&g_tcv, &g_tmu, &dl);
+        pthread_mutex_unlock(&g_tmu);
+        const long waited = now_ms() - t0;
+        printf("tls: timed wait: rc %d after %d ms\n", rc, (int) waited);
+        check(rc == ETIMEDOUT && waited >= 140 && waited < 1000, "pthread_cond_timedwait waits for its monotonic deadline");
+
+        pthread_t sg;
+        pthread_create(&sg, 0, signaller, 0);
+        dl = deadline_in(3000);
+        const long t1 = now_ms();
+        pthread_mutex_lock(&g_tmu);
+        rc = pthread_cond_timedwait(&g_tcv, &g_tmu, &dl);
+        pthread_mutex_unlock(&g_tmu);
+        const long woke = now_ms() - t1;
+        pthread_join(sg, 0);
+        printf("tls: signalled wait: rc %d after %d ms\n", rc, (int) woke);
+        check(rc == 0 && woke < 1500, "a broadcast wakes a timed wait before its deadline");
+    }
 
     /* 24 threads one after another: GDT slots, TLS blocks and thread slots all get recycled. */
     int fresh_ok = 0, runs = 0;

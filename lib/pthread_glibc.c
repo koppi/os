@@ -64,6 +64,7 @@ typedef struct {
 
 typedef struct {
     volatile unsigned int seq;
+    int clock;     /**< Clock the absolute deadline of a timed wait is on (CLOCK_REALTIME / CLOCK_MONOTONIC). */
 } km_cond_t;
 
 typedef struct {
@@ -77,6 +78,7 @@ _Static_assert(sizeof(km_mutex_t) <= sizeof(pthread_mutex_t), "km_mutex_t overfl
 _Static_assert(sizeof(km_cond_t) <= sizeof(pthread_cond_t), "km_cond_t overflows real pthread_cond_t");
 _Static_assert(sizeof(km_attr_t) <= sizeof(pthread_attr_t), "km_attr_t overflows real pthread_attr_t");
 _Static_assert(sizeof(int) <= sizeof(pthread_mutexattr_t), "int overflows real pthread_mutexattr_t");
+_Static_assert(sizeof(int) <= sizeof(pthread_condattr_t), "int overflows real pthread_condattr_t");
 
 #define KM(mutex) ((km_mutex_t *) (void *) (mutex))
 #define KC(cond) ((km_cond_t *) (void *) (cond))
@@ -370,8 +372,9 @@ int pthread_mutex_unlock(pthread_mutex_t *mutex) {
 /* own predicate after waking regardless.                                */
 /* -------------------------------------------------------------------- */
 
+/* The condattr holds just the clock id (set by pthread_condattr_setclock). */
 int pthread_condattr_init(pthread_condattr_t *attr) {
-    (void) attr;
+    *(int *) (void *) attr = CLOCK_REALTIME;
     return 0;
 }
 int pthread_condattr_destroy(pthread_condattr_t *attr) {
@@ -379,14 +382,13 @@ int pthread_condattr_destroy(pthread_condattr_t *attr) {
     return 0;
 }
 int pthread_condattr_setclock(pthread_condattr_t *attr, clockid_t clock_id) {
-    (void) attr;
-    (void) clock_id;
+    *(int *) (void *) attr = (int) clock_id;
     return 0;
 }
 
 int pthread_cond_init(pthread_cond_t *cond, const pthread_condattr_t *attr) {
-    (void) attr;
     KC(cond)->seq = 0;
+    KC(cond)->clock = attr ? *(const int *) (const void *) attr : CLOCK_REALTIME;
     return 0;
 }
 int pthread_cond_destroy(pthread_cond_t *cond) {
@@ -402,13 +404,23 @@ int pthread_cond_wait(pthread_cond_t *cond, pthread_mutex_t *mutex) {
     pthread_mutex_lock(mutex);
     return 0;
 }
-static int km_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const struct timespec *abstime) {
+/* @p abstime is an absolute time on @p clock: whole RTC seconds for CLOCK_REALTIME, millisecond
+ * uptime for everything else (see clock_gettime below). It has to be compared against that same
+ * clock: Qt asks for CLOCK_MONOTONIC, and against the RTC's seconds a monotonic deadline is always
+ * in the past, which made every timed wait "time out" at once -- a thread pool worker expired the
+ * moment it finished a job and had to be restarted (a new kernel thread each time) for the next. */
+static int km_deadline_passed(int clock, const struct timespec *abstime) {
+    struct timespec now;
+    clock_gettime((clockid_t) clock, &now);
+    return now.tv_sec > abstime->tv_sec || (now.tv_sec == abstime->tv_sec && now.tv_nsec >= abstime->tv_nsec);
+}
+
+static int km_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, int clock, const struct timespec *abstime) {
     unsigned int start = KC(cond)->seq;
     pthread_mutex_unlock(mutex);
     int timed_out = 0;
     while (KC(cond)->seq == start) {
-        long now = (long) syscall3(14, 0, 0, 0);
-        if (now >= abstime->tv_sec) {
+        if (km_deadline_passed(clock, abstime)) {
             timed_out = 1;
             break;
         }
@@ -418,11 +430,10 @@ static int km_cond_timedwait(pthread_cond_t *cond, pthread_mutex_t *mutex, const
     return timed_out ? ETIMEDOUT : 0;
 }
 int pthread_cond_timedwait(pthread_cond_t *__restrict cond, pthread_mutex_t *__restrict mutex, const struct timespec *__restrict abstime) {
-    return km_cond_timedwait(cond, mutex, abstime);
+    return km_cond_timedwait(cond, mutex, KC(cond)->clock, abstime);
 }
 int pthread_cond_clockwait(pthread_cond_t *__restrict cond, pthread_mutex_t *__restrict mutex, clockid_t clock_id, const struct timespec *__restrict abstime) {
-    (void) clock_id;
-    return km_cond_timedwait(cond, mutex, abstime);
+    return km_cond_timedwait(cond, mutex, (int) clock_id, abstime);
 }
 int pthread_cond_signal(pthread_cond_t *cond) {
     __sync_fetch_and_add(&KC(cond)->seq, 1);
@@ -623,6 +634,24 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp) {
         unsigned int ms = (unsigned int) syscall3(15, 0, 0, 0);
         tp->tv_sec = (long) (ms / 1000u);
         tp->tv_nsec = (long) (ms % 1000u) * 1000000L;
+    }
+    return 0;
+}
+
+/* nanosleep(): sleeps in kernel msleep (syscall 27) slices -- the call is capped at one second
+ * each -- rounding the request up to whole milliseconds. No signals exist, so it never returns
+ * early and *rem is left alone (QThread::msleep/sleep, usleep-style waits). */
+int nanosleep(const struct timespec *req, struct timespec *rem) {
+    (void) rem;
+    if (req->tv_sec < 0 || req->tv_nsec < 0 || req->tv_nsec >= 1000000000L) {
+        errno = EINVAL;
+        return -1;
+    }
+    unsigned long long ms = (unsigned long long) req->tv_sec * 1000ull + ((unsigned long long) req->tv_nsec + 999999ull) / 1000000ull;
+    while (ms > 0) {
+        unsigned int chunk = ms > 1000ull ? 1000u : (unsigned int) ms;
+        syscall3(27, chunk, 0, 0);
+        ms -= chunk;
     }
     return 0;
 }

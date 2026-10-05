@@ -43,11 +43,16 @@ struct tls_dtor {
 
 /** Thread control block: `%gs:0` is its own address (the ABI's thread pointer). */
 struct tcb {
-    struct tcb *self;
-    void *raw;               /**< What malloc returned, for free(). */
-    struct tls_dtor *dtors;  /**< Pending thread_local destructors, newest first. */
-    unsigned pad;
+    struct tcb *self;        /**< 0x00: what `%gs:0` reads. */
+    void *raw;               /**< 0x04: what malloc returned, for free(). */
+    struct tls_dtor *dtors;  /**< 0x08: pending thread_local destructors, newest first. */
+    unsigned pad0, pad1;     /**< 0x0c, 0x10 */
+    unsigned canary;         /**< 0x14: where -fstack-protector code (i386 glibc ABI) reads its canary. */
+    unsigned pad2[2];        /**< up to 0x20 */
 };
+
+_Static_assert(sizeof(struct tcb) == 0x20, "the TCB is 32 bytes");
+_Static_assert(__builtin_offsetof(struct tcb, canary) == 0x14, "the stack-protector canary lives at %gs:0x14");
 
 /** @return This thread's TCB, or 0 if it has not set one up (%gs still flat). */
 static struct tcb *tcb_self(void) {
@@ -80,6 +85,12 @@ int __tls_thread_init(void) {
     t->self = t;
     t->raw = raw;
     t->dtors = 0;
+    /* A per-thread value for the stack protector: random from the kernel, low byte zero like
+     * glibc's (so a string overflow cannot reproduce it). Libraries built with -fstack-protector
+     * (the distribution's libsupc++, for one) read it from %gs:0x14 at entry and exit. */
+    unsigned canary = 0;
+    syscall3(37, (unsigned) &canary, sizeof(canary), 0);
+    t->canary = (canary ? canary : 0x5a17c0deu) & ~0xFFu;
 
     int sel = (int) syscall3(38, (unsigned) t, 0, 0);
     if(sel < 0) {
