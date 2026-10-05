@@ -18,6 +18,7 @@
 #include <log.h>
 #include <video.h>
 #include <keyboard.h>
+#include <mouse.h>
 #include <snd.h>
 #include <gdt.h>
 
@@ -662,16 +663,19 @@ void remove_proc(int pid) {
         return;
 
     /*
-     * Drop any full-screen grab the process was holding. A program that
-     * exits through gfx_close (syscall 23) has already released it, but one
-     * that faults -- or is killed between taking the screen and giving it
-     * back -- would otherwise leave the compositor parked and the display
-     * frozen on its last frame, with no way back short of a reboot. Only one
-     * grab exists at a time and only a user process can take it, so reaping
-     * is the right place to be sure it is gone.
+     * Drop any full-screen grab the process was holding, along with the raw
+     * keyboard and pointer modes gfx_open (syscall 22) turned on with it. A
+     * program that exits through gfx_close (syscall 23) has already released
+     * all three, but one that faults -- or is killed between taking the screen
+     * and giving it back -- would otherwise leave the compositor parked and
+     * the display frozen on its last frame, with no way back short of a
+     * reboot, and leave mouse.c recording every report into a ring nobody
+     * drains. Only one grab exists at a time and only a user process can take
+     * it, so reaping is the right place to be sure it is gone.
      */
     if(video_grabbed()) {
         keyboard_raw_mode(0);
+        mouse_raw_mode(0);
         video_ungrab();
     }
     /* Same for the PCM output (snd.c): left open, it would keep the module
