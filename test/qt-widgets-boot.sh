@@ -308,12 +308,19 @@ SLIDER_HANDLE_28="219,96"; SLIDER_TO_50="300,96"; SPIN_UP="156,221"
 EDIT="300,60"; STYLE="300,112"; FRUIT="300,142"
 FRUIT_CHERRY="300,191"; STYLE_WINDOWS="300,89"; STYLE_FUSION_BELOW="300,136"
 
-# The window comes up: right shape, light background, text drawn, the app says it is ready.
+# The window comes up: right shape, light background, text drawn, the app says it is ready, and Qt's
+# threads (QThread, QThreadPool, thread_local, queued cross-thread signals) work.
 do_start() {
     run start $'5:shot:up'
     local rc=0 d="$OUT/start"
     analyse window "$d/up.ppm" || rc=1
     expect start "app reports ready with the Fusion style and 4 tabs" "ready style=fusion tabs=4" || rc=1
+    has start "QThread ran on its own thread with its own thread_local" \
+        "threads: QThread done=1 sum=4950 own_thread=1 its_tl=100 main_tl=1000" || rc=1
+    has start "QThreadPool ran 8 jobs on at least two threads" "threads: QThreadPool jobs=8 sum=36 parallel=1" || rc=1
+    has start "Qt's own GUI thread pool started its worker while painting" "threads: GUI pool workers=1" || rc=1
+    has start "a queued signal from the worker reached the main thread" \
+        "threads: finished signal reached the main thread" || rc=1
     verdict "start" $rc
 }
 

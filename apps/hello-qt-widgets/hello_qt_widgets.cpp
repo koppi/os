@@ -36,6 +36,15 @@
 #include <QKeyEvent>
 #include <QFont>
 #include <QAbstractButton>
+#include <QThread>
+#include <QMutex>
+#include <QMutexLocker>
+#include <QAtomicInt>
+#include <QList>
+#include <QtCore/qthreadpool.h>
+#include <QtCore/qrunnable.h>
+#include <QtCore/private/qthreadpool_p.h>
+#include <QTimer>
 
 extern "C" unsigned _write(const void *buf, unsigned len);
 void qt_koppios_install_file_engine_handler();
@@ -45,6 +54,83 @@ static void say(const QString &text)
 {
     const QByteArray line = "widgets: " + text.toUtf8() + "\n";
     _write(line.constData(), unsigned(line.size()));
+}
+
+// ---- Qt threads: real thread_local storage, QThread, QThreadPool, cross-thread signals ------------
+
+static thread_local int tl_marker;               // every thread has its own copy
+
+class Worker : public QThread
+{
+public:
+    int sum = 0;
+    bool ownThread = false;
+    int tlAtEnd = -1;
+
+protected:
+    void run() override
+    {
+        ownThread = QThread::currentThread() == this;
+        tl_marker = 0;
+        for (int i = 0; i < 100; i++) {
+            sum += i;
+            ++tl_marker;
+            if (i % 25 == 0)
+                QThread::yieldCurrentThread();
+        }
+        tlAtEnd = tl_marker;
+    }
+};
+
+struct Job : QRunnable
+{
+    QMutex *mutex = nullptr;
+    QList<QThread *> *seen = nullptr;
+    QAtomicInt *sum = nullptr;
+    int n = 0;
+
+    void run() override
+    {
+        QThread::msleep(20);                       // long enough for the pool to bring up a second worker
+        sum->fetchAndAddRelaxed(n);
+        QMutexLocker locker(mutex);
+        if (!seen->contains(QThread::currentThread()))
+            seen->append(QThread::currentThread());
+    }
+};
+
+// Runs before the event loop starts and logs what it saw, so test/qt-widgets-boot.sh can check that
+// Qt's threads really work and not only that nothing crashed. The queued `finished` connection is
+// delivered once the main thread is in exec().
+static void threadSelfTest(QObject *context)
+{
+    tl_marker = 1000;
+
+    Worker w;
+    QObject::connect(&w, &QThread::finished, context,
+                     [] { say(QStringLiteral("threads: finished signal reached the main thread")); },
+                     Qt::QueuedConnection);
+    w.start();
+    const bool done = w.wait(5000);
+    say(QStringLiteral("threads: QThread done=%1 sum=%2 own_thread=%3 its_tl=%4 main_tl=%5")
+            .arg(int(done)).arg(w.sum).arg(int(w.ownThread)).arg(w.tlAtEnd).arg(tl_marker));
+
+    QThreadPool pool;
+    pool.setMaxThreadCount(4);
+    QMutex mutex;
+    QList<QThread *> seen;
+    QAtomicInt sum(0);
+    for (int n = 1; n <= 8; n++) {
+        auto *job = new Job;
+        job->mutex = &mutex;
+        job->seen = &seen;
+        job->sum = &sum;
+        job->n = n;
+        pool.start(job);
+    }
+    pool.waitForDone();
+    say(QStringLiteral("threads: QThreadPool jobs=8 sum=%1 parallel=%2")
+            .arg(sum.loadRelaxed()).arg(int(seen.size() >= 2)));
 }
 
 class MainWindow : public QWidget
@@ -238,6 +324,8 @@ int main()
     font.setPixelSize(16);                         // one cell of Unifont's 16-px grid
     app.setFont(font);
 
+    threadSelfTest(&app);
+
     MainWindow window;
     window.setWindowTitle(QStringLiteral("Qt widgets on koppios"));
     auto *root = new QVBoxLayout(&window);
@@ -272,6 +360,20 @@ int main()
 
     window.setGeometry(QRect(QPoint(0, 0), QGuiApplication::primaryScreen()->size()));
     window.show();
+
+    // Qt hands big image fills and conversions to its own GUI thread pool; once the first frames are
+    // painted it must have started a worker (this machine reports one ideal thread, so exactly one).
+    QTimer::singleShot(300, &window, [] {
+        QThreadPool *gui = QThreadPoolPrivate::qtGuiInstance();
+        int workers = -1;
+        if (gui) {
+            auto *d = static_cast<QThreadPoolPrivate *>(QObjectPrivate::get(gui));
+            const QMutexLocker locker(&d->mutex);
+            workers = int(d->allThreads.size());
+        }
+        say(QStringLiteral("threads: GUI pool workers=%1").arg(workers));
+    });
+
     say(QStringLiteral("ready style=%1 tabs=%2").arg(QApplication::style()->objectName()).arg(tabs->count()));
 
     const int rc = app.exec();

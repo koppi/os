@@ -9,7 +9,7 @@
 # every screenshot is analysed (pure Python, no imaging library) and the run
 # exits non-zero if a check fails.
 #
-#   test/qt-gui-boot.sh [start|animate|quit|all]               (default: all)
+#   test/qt-gui-boot.sh [start|animate|soak|quit|all]          (default: all)
 #
 # Needs apps/hello-qt-gui built and staged:
 #   make -C apps/hello-qt-gui -j4 && make iso
@@ -197,6 +197,23 @@ do_animate() {
     analyse moved "$OUT/animate/a.ppm" "$OUT/animate/b.ppm"; verdict "animate" $?
 }
 
+# A minute of animation: every frame hands big fills to Qt's GUI thread pool, and the kernel hands
+# out a limited number of thread slots per process and never recycles them, so a pool that
+# churned through threads (or hung waiting for one) would freeze the ball partway through.
+do_soak() {
+    run soak $'5:shot:early\n30:shot:mid\n30:shot:late\n1:key:esc\n3:shot:after'
+    local rc=0 d="$OUT/soak"
+    analyse moved "$d/early.ppm" "$d/mid.ppm" || rc=1
+    analyse moved "$d/mid.ppm" "$d/late.ppm" || rc=1
+    analyse desktop "$d/after.ppm" || rc=1
+    if grep -q "Process returned with exit code 0" "$d/serial.log"; then
+        echo "    program exited with status 0 after a minute: ok"
+    else
+        echo "    program exited with status 0 after a minute: FAIL"; rc=1
+    fi
+    verdict "soak" $rc
+}
+
 # Esc through the raw-scancode path ends the program with status 0, the screen
 # is handed back to the desktop, and the shell works again.
 do_quit() {
@@ -220,9 +237,10 @@ do_quit() {
 case "${1:-all}" in
     start)   do_start ;;
     animate) do_animate ;;
+    soak)    do_soak ;;
     quit)    do_quit ;;
-    all)     do_start; do_animate; do_quit ;;
-    *)       echo "usage: $0 [start|animate|quit|all]"; exit 1 ;;
+    all)     do_start; do_animate; do_soak; do_quit ;;
+    *)       echo "usage: $0 [start|animate|soak|quit|all]"; exit 1 ;;
 esac
 echo "output in $OUT"
 exit $FAILED

@@ -31,6 +31,8 @@
 #include <QtCore/qbytearray.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qtimer.h>
+#include <QtCore/qthreadpool.h>
+#include <QtCore/private/qthreadpool_p.h>
 #include <algorithm>
 
 #ifndef KOPPIOS_SCREEN_WIDTH
@@ -458,6 +460,16 @@ public:
     {
         static QKoppiosInput *input = new QKoppiosInput;   // needs the event dispatcher, so not in the ctor
         Q_UNUSED(input);
+        // The GUI thread pool (parallel image fills and conversions) keeps its worker for good. An
+        // expired worker is restarted as a brand-new kernel thread, and the kernel hands out a limited
+        // number of thread slots per process and never recycles them, so letting an idle worker
+        // expire every 30 s would slowly use them all up.
+        static bool poolConfigured = [] {
+            if (QThreadPool *pool = QThreadPoolPrivate::qtGuiInstance())
+                pool->setExpiryTimeout(-1);
+            return true;
+        }();
+        Q_UNUSED(poolConfigured);
         QPlatformWindow *w = new QKoppiosPlatformWindow(window);
         w->requestActivateWindow();
         return w;

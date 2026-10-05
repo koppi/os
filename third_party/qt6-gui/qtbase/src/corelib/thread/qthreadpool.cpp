@@ -482,12 +482,7 @@ QThreadPool *QThreadPoolPrivate::qtGuiInstance()
 {
     Q_CONSTINIT static QPointer<QThreadPool> guiInstance;
     Q_CONSTINIT static QBasicMutex theMutex;
-#if defined(__KOPPIOS__)
-    // koppios addition, not upstream Qt: serial image paths only (see patch_gui.py)
-    const static bool runtime_disable = true;
-#else
     const static bool runtime_disable = qEnvironmentVariableIsSet("QT_NO_GUI_THREADPOOL");
-#endif
     if (runtime_disable)
         return nullptr;
     const QMutexLocker locker(&theMutex);
