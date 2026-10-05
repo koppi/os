@@ -356,6 +356,7 @@ void sched_init() {
     thread_t *main_thread = (thread_t *) kmalloc(sizeof(thread_t));
     thread_alloc_fpu_state(main_thread);
     proc->thread_list = main_thread;
+    proc->main_thread = main_thread;
     proc->threads = 1;
     proc->cpu = -1;
     proc->last_ran = 0;

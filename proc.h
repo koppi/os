@@ -24,29 +24,23 @@
 #define PROC_KERNEL_STACK_PAGES 4
 /** Initial userspace heap arena, in pages. Grows on demand (see heap.c). */
 #define PROC_HEAP_PAGES         4
-/** Ceiling on the main thread's heap arena (it grows in place; see heap.c). */
+/** Ceiling on the process's heap arena (it grows in place; see heap.c). */
 #define PROC_HEAP_MAX           (64u * 1024u * 1024u)
 
 /**
- * A secondary thread's heap window, in pages (512 KiB): its arena starts at
- * @ref PROC_HEAP_PAGES and grows in place, but never past this. The window is
- * what keeps one thread's malloc from running up into the next thread's slot.
- */
-#define PROC_THREAD_HEAP_PAGES  128
-/**
  * Pages in one secondary-thread slot in the @ref UTHREAD_REGION_BASE region,
- * low to high: guard, user stack, guard, kernel stack, guard, heap window.
- * The guards are never mapped, so an overrun of the user stack, the kernel
- * stack or the heap window faults instead of landing in the neighbouring part.
+ * low to high: guard, user stack, guard, kernel stack. The guards are never
+ * mapped, so an overrun of either stack faults instead of landing in the
+ * neighbouring part. A slot has no heap: every thread of a process allocates
+ * from the process's one arena (see @ref process_t::main_thread).
  */
-#define PROC_THREAD_SLOT_PAGES  (1 + PROC_USER_STACK_PAGES + 1 + \
-                                 PROC_KERNEL_STACK_PAGES + 1 + PROC_THREAD_HEAP_PAGES)
+#define PROC_THREAD_SLOT_PAGES  (1 + PROC_USER_STACK_PAGES + 1 + PROC_KERNEL_STACK_PAGES)
 /** Secondary-thread slots one process can ever use (slots are not recycled:
  *  an exited thread's kernel stack is deliberately leaked, see stop_thread()). */
 #define PROC_THREAD_SLOTS_MAX   ((int) ((UTHREAD_REGION_END - UTHREAD_REGION_BASE) / \
                                  (PROC_THREAD_SLOT_PAGES * PAGE_SIZE)))
 
-_Static_assert(PROC_THREAD_SLOTS_MAX >= 16,
+_Static_assert(PROC_THREAD_SLOTS_MAX >= 64,
                "the thread region must hold a useful number of slots");
 
 /** Register frame pushed by an interrupt stub with no error code. */
@@ -99,6 +93,12 @@ typedef struct proc {
                                     thread that exits and one created after it
                                     never share a virtual-address span. */
     thread_t *thread_list;    /**< Current thread (head of the ring). */
+    thread_t *main_thread;    /**< The process's first thread. It owns the heap arena
+                                    every thread of the process allocates from: they
+                                    share one address space, so a block malloc'd by one
+                                    thread must stay valid for the others and after
+                                    the allocating thread exits. It lives as long as
+                                    the process (its exit ends the process). */
     int cpu;                  /**< CPU index running this process now, -1 if none (SMP). */
     uint32_t last_ran;        /**< pit_ms() when last scheduled (round-robin tiebreak). */
     struct proc *next;        /**< Next process in the scheduler ring. */
@@ -117,9 +117,9 @@ int build_stack(thread_t *thread, page_dir_t *pdir, int nthreads);
 int heap_fill(thread_t *thread, char *name, char *arguments, uint32_t *argc, uint32_t *argv1);
 /** @brief Push argv/argc/return-address and the initial iret frame. */
 int stack_fill(thread_t *thread, uint32_t argc, uint32_t argv);
-/** @brief Map @p thread's 4-page user heap, initialise it and set its
- *  @c heap_ceiling. */
-int build_heap(thread_t *thread, page_dir_t *pdir, int nthreads);
+/** @brief Map the process's 4-page user heap above @p thread's kernel stack,
+ *  initialise it and set @c heap_ceiling. Main thread only. */
+int build_heap(thread_t *thread, page_dir_t *pdir);
 /** @brief `thread_create` syscall backend: start a new thread inside @p proc,
  *  sharing its address space, at @p entry with one argument @p arg.
  *  @return The new thread's pid, or -1 on failure (no free slot, out of

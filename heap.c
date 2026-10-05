@@ -1,7 +1,14 @@
 /**
  * @file heap.c
  * @brief Per-process userspace heap (first-fit) backing the `malloc`/`free`
- *        system calls; each process gets a 4-page arena.
+ *        system calls; each process gets a 4-page arena that grows on demand.
+ *
+ * The arena belongs to the process, not to a thread: it hangs off
+ * @c process_t::main_thread, and every thread of the process allocates from it.
+ * Threads share one address space, so a block one thread allocates is valid in
+ * all the others and outlives the thread that made it (a QImage built by a pool
+ * worker, handed to the GUI thread). An arena per running thread, torn down
+ * with the thread, made that block vanish when the worker exited.
  */
 #include <heap.h>
 #include <mm.h>
@@ -326,7 +333,7 @@ void ufree_locked(void *ptr, struct thread *t) {
  *
  * A syscall enters through a trap gate (interrupts stay on) and can be re-picked
  * on another CPU mid-flight; there is a narrow window in the SMP scheduler where
- * the per-CPU @c current_proc still points at a foreign (kernel/idle) thread,
+ * the per-CPU @c current_proc still points at a foreign (kernel/idle) process,
  * whose heap is 0. Trusting that would make heap_grow() map pages over virtual
  * address 0, or hand back a pointer that is not mapped in the address space the
  * caller will return to.
@@ -343,8 +350,8 @@ process_t *current_user_proc(void) {
     if (!(cur && cur->pdir && (uint32_t) (uintptr_t) cur->pdir == cr3))
         cur = proc_by_cr3(cr3);
 
-    if (cur && cur->thread_list && cur->pdir != get_kern_directory() &&
-        cur->thread_list->heap >= 0x400000)
+    if (cur && cur->main_thread && cur->pdir != get_kern_directory() &&
+        cur->main_thread->heap >= 0x400000)
         return cur;
     return 0;
 }
@@ -353,13 +360,13 @@ void *umalloc_sys(size_t len) {
     process_t *cur = current_user_proc();
     if(!cur)
         return 0;
-    return umalloc_locked(len, cur->thread_list, cur->pdir);
+    return umalloc_locked(len, cur->main_thread, cur->pdir);
 }
 
 void ufree_sys(void *ptr) {
     process_t *cur = current_user_proc();
     if(cur)
-        ufree_locked(ptr, cur->thread_list);
+        ufree_locked(ptr, cur->main_thread);
 }
 
 void *urealloc_sys(void *ptr, size_t nsize) {
@@ -378,7 +385,7 @@ void *urealloc_sys(void *ptr, size_t nsize) {
         return 0;
 
     uint32_t f = spin_lock(&uheap_lock);
-    int grown = urealloc_inplace((heap_info_t *) cur->thread_list->heap, h, nsize);
+    int grown = urealloc_inplace((heap_info_t *) cur->main_thread->heap, h, nsize);
     spin_unlock(&uheap_lock, f);
     if(grown)
         return ptr;

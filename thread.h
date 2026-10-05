@@ -23,7 +23,7 @@ typedef struct thread {
     uint32_t stack_limit;           /**< Top of the user stack. */
     uint32_t esp_kernel;            /**< Kernel stack pointer (saved on switch). */
     uint32_t stack_kernel_limit;    /**< Top of the kernel stack. */
-    uint32_t heap;                  /**< Base of the user heap arena. */
+    uint32_t heap;                  /**< Base of the process's user heap arena (main thread only; 0 for the rest). */
     uint32_t heap_limit;            /**< Top of the user heap arena. */
     uint32_t heap_ceiling;          /**< Highest address (exclusive) heap_grow() may extend the arena to. */
     uint32_t image_base;            /**< Lowest vaddr of the loaded image. */

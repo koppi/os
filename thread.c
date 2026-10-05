@@ -106,8 +106,13 @@ int start_thread() {
  * @brief `exit` syscall — terminate the calling thread.
  *
  * Stopping a process's main thread stops the whole process (@ref end_proc);
- * otherwise the thread is unlinked, its stack/heap unmapped and its control
- * block freed. Spins until the scheduler switches away.
+ * otherwise the thread is unlinked and its user stack unmapped. The kernel stack
+ * and control block are leaked (see below). Spins until the scheduler switches
+ * away.
+ *
+ * The thread has no heap to unmap: malloc'd memory belongs to the process
+ * (@c process_t::main_thread), so what this thread allocated stays valid for the
+ * threads that remain.
  *
  * @param code Exit status (passed to @ref end_proc for the main thread).
  */
@@ -139,8 +144,6 @@ void stop_thread(int code) {
 
     for(int p = 0; p < PROC_USER_STACK_PAGES; p++)
         vmm_unmap(cur->pdir, thread->stack_limit - (p + 1) * PAGE_SIZE);
-    for(vmm_addr_t va = thread->heap; va < thread->heap_limit; va += PAGE_SIZE)
-        vmm_unmap(cur->pdir, va);
 
     /* The kernel-stack frames and the thread control block are intentionally
      * leaked: this CPU is still executing on this thread's stack and

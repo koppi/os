@@ -34,13 +34,13 @@
  * |                 ...                 | (heap.c) up to PROC_HEAP_MAX / KHEAP_BASE
  * |-------------------------------------|
  *
- * Every other thread gets a slot in the secondary-thread region
+ * The heap is the whole process's: every thread allocates from it. Every other
+ * thread gets a slot in the secondary-thread region
  * [UTHREAD_REGION_BASE, UTHREAD_REGION_END) (mm.h), well above anything the
- * main heap can grow to. Slot n (n >= 1) is PROC_THREAD_SLOT_PAGES pages:
- * |  guard | user stack | guard | kernel stack | guard | heap window |
- *    1 pg     64 pages    1 pg      4 pages      1 pg    128 pages
- * The heap window is the thread's heap's growth room (heap_ceiling); the
- * guards are never mapped.
+ * heap can grow to. Slot n (n >= 1) is PROC_THREAD_SLOT_PAGES pages:
+ * |  guard | user stack | guard | kernel stack |
+ *    1 pg     64 pages    1 pg      4 pages
+ * The guards are never mapped.
  */
 
 /**
@@ -95,6 +95,7 @@ static int start_proc_locked(char *name, char *arguments) {
     }
     proc->thread_list->main = 1;
     proc->thread_list->parent = (void *) proc;
+    proc->main_thread = proc->thread_list;
 
     if(!load_elf(name, proc->thread_list, proc->pdir)) {
         // load_elf refuses plenty of attacker-controlled input (oversized or
@@ -115,7 +116,7 @@ static int start_proc_locked(char *name, char *arguments) {
         return PROC_STOPPED;
     }
     
-    if(!build_heap(proc->thread_list, proc->pdir, 0)) {
+    if(!build_heap(proc->thread_list, proc->pdir)) {
         printf("Failed allocating memory, error 2\n");
         return PROC_STOPPED;
     }
@@ -245,37 +246,31 @@ int build_stack(thread_t *thread, page_dir_t *pdir, int nthreads) {
 }
 
 /**
- * @brief Map and initialise a thread's user heap.
- * @param thread   The thread; its @c heap, @c heap_limit and @c heap_ceiling
- *                 are filled in.
- * @param pdir     The process's page directory.
- * @param nthreads 0 for the main thread, else the thread's slot (1-based).
+ * @brief Map and initialise the process's user heap.
+ * @param thread The main thread; its @c heap, @c heap_limit and @c heap_ceiling
+ *               are filled in.
+ * @param pdir   The process's page directory.
  * @return 1 on success, 0 if the mapping failed.
  *
- * Placed just above the thread's kernel stack (past a guard page, for a slot).
- * The main heap may grow in place from here up to @ref PROC_HEAP_MAX -- clamped
- * at @ref KHEAP_BASE, the first address that is not the process's to take --
- * and a secondary thread's up to the end of its slot's heap window, so neither
- * can reach another thread's pages. The kernel-side aliases are left in place
- * for @ref heap_fill to seed argv through, and dropped there.
+ * Placed just above the main thread's kernel stack. The arena may grow in place
+ * from here up to @ref PROC_HEAP_MAX -- clamped at @ref KHEAP_BASE, the first
+ * address that is not the process's to take -- and the secondary-thread slots
+ * are above that, so the heap cannot reach one. Only the main thread has a
+ * heap: threads share an address space, so they share an arena, and a block one
+ * allocates stays valid for the others and after it exits. The kernel-side
+ * aliases are left in place for @ref heap_fill to seed argv through, and
+ * dropped there.
  */
-int build_heap(thread_t *thread, page_dir_t *pdir, int nthreads) {
-    if(nthreads < 0 || nthreads > PROC_THREAD_SLOTS_MAX)
-        return 0;
-
-    vmm_addr_t heap = thread->stack_kernel_limit + (nthreads == 0 ? 0 : PAGE_SIZE);
+int build_heap(thread_t *thread, page_dir_t *pdir) {
+    vmm_addr_t heap = thread->stack_kernel_limit;
 
     if(!map_user_range(pdir, heap, PROC_HEAP_PAGES, 1))
         return 0;
 
     thread->heap = heap;
     thread->heap_limit = heap + PROC_HEAP_PAGES * PAGE_SIZE;
-    if(nthreads == 0) {
-        uint32_t max = heap + PROC_HEAP_MAX;
-        thread->heap_ceiling = max < KHEAP_BASE ? max : KHEAP_BASE;
-    } else {
-        thread->heap_ceiling = heap + PROC_THREAD_HEAP_PAGES * PAGE_SIZE;
-    }
+    uint32_t max = heap + PROC_HEAP_MAX;
+    thread->heap_ceiling = max < KHEAP_BASE ? max : KHEAP_BASE;
 
     heap_init((vmm_addr_t *) heap, PROC_HEAP_PAGES * PAGE_SIZE);
 
@@ -399,8 +394,9 @@ static void thread_region_trim_kdir(void) {
 /**
  * @brief `thread_create` syscall backend; caller holds @ref proc_lock.
  *
- * Mirrors start_proc_locked()'s dependency order (stack, then heap, then the
- * entry frame) for a sibling thread instead of a new process: same @c pdir
+ * Mirrors start_proc_locked()'s dependency order (stack, then the entry frame)
+ * for a sibling thread instead of a new process -- minus the heap, which the
+ * thread shares with the rest of the process: same @c pdir
  * as every other thread of @p proc, in a slot of its own in the secondary-
  * thread region. The slot comes from @c thread_slots (see proc.h -- monotonic,
  * unlike @c threads, so a thread that already exited and one created afterward
@@ -436,18 +432,13 @@ static int create_user_thread_locked(process_t *proc, uint32_t entry, uint32_t a
     thread->image_size = main_thread->image_size;
     thread->eip = entry;
 
-    if(!build_stack(thread, proc->pdir, slot) || !build_heap(thread, proc->pdir, slot)) {
+    /* No build_heap(): the thread allocates from the process's arena. */
+    if(!build_stack(thread, proc->pdir, slot)) {
         thread_slot_release(proc->pdir, slot);
         kfree(thread->fpu_state_raw);
         kfree(thread);
         return -1;
     }
-
-    /* build_heap() seeds the heap allocator through a kernel-directory alias,
-     * same as the main thread's; drop it the way heap_fill() does there. This
-     * thread has no argv to seed, so that is the only cleanup left. */
-    for(int i = 0; i < PROC_HEAP_PAGES; i++)
-        vmm_unmap_phys(get_kern_directory(), thread->heap + (uint32_t) i * PAGE_SIZE);
 
     if(!thread_entry_fill(thread, arg)) {
         thread_slot_release(proc->pdir, slot);
@@ -784,6 +775,7 @@ int start_kernel_proc(char *name, void (*thread)(void)) {
     }
     proc->thread_list->main = 1;
     proc->thread_list->parent = (void *) proc;
+    proc->main_thread = proc->thread_list;
     proc->thread_list->eip = (uint32_t) (uintptr_t) thread;
 
     uint32_t stack = kproc_stack_base;

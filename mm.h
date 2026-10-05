@@ -44,9 +44,9 @@
 
 /**
  * The secondary-thread region: [100 MiB, 128 MiB), in every process's own
- * address space. The slots in here hold the user stack, kernel stack and
- * (bounded) heap of each thread a process creates beyond its main one (see
- * proc.h, @c PROC_THREAD_SLOT_PAGES).
+ * address space. The slots in here hold the user stack and kernel stack of
+ * each thread a process creates beyond its main one (see proc.h,
+ * @c PROC_THREAD_SLOT_PAGES); they share the process's heap.
  *
  * Why it sits here and not just above the image like the main thread's stacks:
  * the main thread's heap grows *in place* upward from the image (heap.c) for up
