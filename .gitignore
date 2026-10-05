@@ -34,7 +34,8 @@ apps/zsh/zsh
 apps/doom/doom
 apps/chipnomad/chipnomad
 apps/hello-qt-gui/hqtgui
-apps/hello-qt-gui/build/
+third_party/qt6-gui/build/
+apps/hello-qt-widgets/hqtwid
 os.sublime-workspace
 docs/
 

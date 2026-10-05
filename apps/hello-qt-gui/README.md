@@ -13,7 +13,7 @@ Everything Qt-side lives in [`third_party/qt6-gui`](../../third_party/qt6-gui)
 ## Build and run
 
 ```
-make -C apps/hello-qt-gui -j4      # ~20 min the first time, incremental after
+make -C apps/hello-qt-gui -j4      # ~20 min the first time (shared with hello-qt-widgets), incremental after
 make initrd.img                    # hda.sh stages hqtgui + /rd/font.ttf if the binary exists
 make qemu-iso                      # needs the GRUB framebuffer boot; then type: hqtgui
 ```
@@ -40,6 +40,8 @@ MON_SCRIPT="28:screendump a.ppm;31:sendkey esc;36:screendump c.ppm" \
 * `hello_qt_gui.cpp` — the app. `argv[0]` is the absolute `/rd/hqtgui` on
   purpose: with no `PATH` search, a bare name makes `applicationDirPath()`
   empty and `QLibraryInfo` asserts.
-* `hello_qt_gui.lds` — same layout as `apps/hello-qt` (image at 8 MiB).
 * `unifont-subset.ttf` — see [`FONT-LICENSE.md`](FONT-LICENSE.md).
-* `Makefile` — builds the vendored tree with the exact flags the port needs.
+* `Makefile` — three lines of real content: it includes
+  [`qt.mk`](../../third_party/qt6-gui/koppios/qt.mk) (the shared build rules and
+  linker script, which also build [`apps/hello-qt-widgets`](../hello-qt-widgets))
+  and declares the app. The Qt objects land in `third_party/qt6-gui/build/`.

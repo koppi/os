@@ -18,12 +18,25 @@ WAD=${WAD:-doom1.wad}
 
 IMG=${IMG:-hda.img}
 if [ -z "${SIZE:-}" ]; then
-    # hda.img is the persistent scratch disk and is always 16 MiB; the RAM
-    # disk only needs that much when it is carrying a WAD.
-    if [ "$IMG" = "hda.img" ] || [ -f "$WAD" ] || [ -f apps/hello-qt-gui/hqtgui ]; then
+    # hda.img is the persistent scratch disk and is always 16 MiB. The RAM disk
+    # is 8 MiB for the base userland and grows to carry what is optional and big
+    # (a Doom WAD, the Qt demos), plus 1 MiB of FAT slack, never below 16 MiB
+    # then. One-sector clusters cap FAT16 at ~32 MiB, which is the ceiling.
+    if [ "$IMG" = "hda.img" ]; then
         SIZE=16M
     else
-        SIZE=8M
+        extra=0
+        for f in "$WAD" apps/hello-qt-gui/hqtgui apps/hello-qt-widgets/hqtwid; do
+            [ -f "$f" ] && extra=$((extra + $(stat -c %s "$f")))
+        done
+        if [ "$extra" -eq 0 ]; then
+            SIZE=8M
+        else
+            mib=$((8 + (extra + 1048575) / 1048576 + 1))
+            [ "$mib" -lt 16 ] && mib=16
+            [ "$mib" -gt 32 ] && { echo "hda.sh: optional files need ${mib} MiB; FAT16 with 512-byte clusters stops at 32" >&2; mib=32; }
+            SIZE=${mib}M
+        fi
     fi
 fi
 
@@ -86,21 +99,17 @@ if [ -f "$WAD" ]; then
     mcopy -i "$IMG" -D o "$WAD"           ::doom1.wad
 fi
 
-# Graphical Qt6 demo. apps/hello-qt-gui is not part of `make -C apps` (about 560
-# translation units); build it with `make -C apps/hello-qt-gui -j4` and it is
-# staged here: the binary plus the Unifont subset it loads as /rd/font.ttf.
+# Graphical Qt6 demos. apps/hello-qt-gui and apps/hello-qt-widgets are not part of
+# `make -C apps` (about 560 translation units, shared); build them with
+# `make -C apps/hello-qt-gui -j4` / `make -C apps/hello-qt-widgets -j4` and they are staged
+# here, together with the Unifont subset they load as /rd/font.ttf.
 # Needs a framebuffer boot (the ISO / real hardware), not `-kernel`.
-if [ -f apps/hello-qt-gui/hqtgui ]; then
-    mcopy -i "$IMG" -D o apps/hello-qt-gui/hqtgui              ::hqtgui
+if [ -f apps/hello-qt-gui/hqtgui ] || [ -f apps/hello-qt-widgets/hqtwid ]; then
     mcopy -i "$IMG" -D o apps/hello-qt-gui/unifont-subset.ttf  ::font.ttf
 fi
-
-# The C compiler: the binary, its own source, its runtime library, and tests.
-mcopy -i "$IMG" -D o apps/cc/cc           ::cc
-mcopy -i "$IMG" -D o apps/cc/cc.c         ::cc.c
-mcopy -i "$IMG" -D o apps/cc/prelude.c    ::prelude.c
-for t in apps/cc/tests/*.c; do
-    mcopy -i "$IMG" -D o "$t" "::$(basename "$t")"
-done
-
-mdir -i "$IMG" ::/
+if [ -f apps/hello-qt-gui/hqtgui ]; then
+    mcopy -i "$IMG" -D o apps/hello-qt-gui/hqtgui              ::hqtgui
+fi
+if [ -f apps/hello-qt-widgets/hqtwid ]; then
+    mcopy -i "$IMG" -D o apps/hello-qt-widgets/hqtwid          ::hqtwid
+fi

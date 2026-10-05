@@ -73,8 +73,8 @@ def window_checks(img):
     x0, y0, x1, y1 = bbox_nonblack(img)
     w, h = x1 - x0 + 1, y1 - y0 + 1
     ratio = w / h if h else 0
-    good = 1.70 < ratio < 1.85            # 480x270 = 16:9
-    print(f"    frame bbox {w}x{h} at ({x0},{y0}), aspect {ratio:.2f} (want ~1.78): {'ok' if good else 'FAIL'}")
+    good = 1.55 < ratio < 1.65            # the window fills the 640x400 screen: 8:5
+    print(f"    frame bbox {w}x{h} at ({x0},{y0}), aspect {ratio:.2f} (want ~1.60): {'ok' if good else 'FAIL'}")
     ok &= good
     # vertical gradient: bottom rows bluer/brighter than top rows
     def band(yy):
@@ -90,8 +90,8 @@ def window_checks(img):
     # text/outline: near-white pixels inside the frame
     white = sum(1 for y in range(y0, y1, 2) for x in range(x0, x1, 2) if min(px(img, x, y)) > 200)
     frac = white * 4 / (w * h)
-    good = 0.01 < frac < 0.30
-    print(f"    near-white (text, panel outline) {frac*100:.1f}% of frame (want 1-30%): {'ok' if good else 'FAIL'}")
+    good = 0.003 < frac < 0.30
+    print(f"    near-white (text, panel outline) {frac*100:.1f}% of frame (want 0.3-30%): {'ok' if good else 'FAIL'}")
     ok &= good
     return ok, (x0, y0, x1, y1)
 

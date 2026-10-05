@@ -207,6 +207,13 @@ qemu-chipnomad: iso
 qemu-qt-gui: iso
 	@bash test/qt-gui-boot.sh all
 
+# Drive apps/hello-qt-widgets (real QtWidgets) with the keyboard and the mouse and
+# judge it from the app's own serial log: focus chain, buttons, sliders, typing,
+# the combo-box popup, a run-time style switch, Quit. Needs the app built first:
+# make -C apps/hello-qt-widgets -j4
+qemu-qt-widgets: iso
+	@bash test/qt-widgets-boot.sh all
+
 # Build a GPT+FAT32 UEFI USB image (os-usb.img) that the UEFI-only laptops
 # (no CSM, e.g. a MacBook) boot from: grub2 x86_64-efi + kernel + initrd.
 usb: $(KERNEL) initrd.img
@@ -251,6 +258,6 @@ clean::
 	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin ap_boot.tmp.* *.d lib/*.d *~ os.iso iso initrd.img docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-doom qemu-chipnomad qemu-qt-gui cloc docs clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-doom qemu-chipnomad qemu-qt-gui qemu-qt-widgets cloc docs clean
 
 -include $(OBJS:.o=.d)

@@ -16,7 +16,7 @@
 #include <QTimer>
 #include <QFont>
 #include <QKeyEvent>
-#include <qpa/qwindowsysteminterface.h>
+#include <QScreen>
 #include <cmath>
 
 extern "C" unsigned syscall3(int n, unsigned a, unsigned b, unsigned c);
@@ -29,7 +29,6 @@ public:
     HelloWindow()
     {
         setTitle(QStringLiteral("Hello, Qt6!"));
-        resize(480, 270);
     }
 
 protected:
@@ -94,24 +93,13 @@ int main()
     QGuiApplication app(argc, fake_argv);
 
     HelloWindow window;
+    window.setGeometry(QRect(QPoint(0, 0), QGuiApplication::primaryScreen()->size()));
     window.show();
 
+    // Input (keyboard, pointer) arrives through the platform glue as ordinary Qt events;
+    // the timer only drives the animation.
     QTimer frame;
-    QObject::connect(&frame, &QTimer::timeout, &window, [&window] {
-        window.update();
-        // Raw scancode ring (syscall 26), same layout as keyboard.h: bit 16 =
-        // valid event, bit 8 = E0-prefixed, bit 7 = release, low 7 bits = code.
-        // Set-1 make codes: 0x01 = Esc, 0x1C = Enter.
-        for (unsigned ev; ((ev = syscall3(26, 0, 0, 0)) & 0x10000) != 0;) {
-            if (ev & 0x80)
-                continue;                       // key release
-            const unsigned code = ev & 0x7F;
-            if (!(ev & 0x100) && code == 0x01)
-                QWindowSystemInterface::handleKeyEvent(&window, QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
-            else if (!(ev & 0x100) && code == 0x1C)
-                QWindowSystemInterface::handleKeyEvent(&window, QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
-        }
-    });
+    QObject::connect(&frame, &QTimer::timeout, &window, [&window] { window.update(); });
     frame.start(50);
 
     const int rc = app.exec();

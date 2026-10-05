@@ -495,11 +495,16 @@ for anything more (there is no TLS or resolver cache).
   `snd_open`(28)/`snd_close`(29)/`snd_write`(30)/`snd_avail`(31) (stream PCM
   to the sound card — see **Audio**), and `thread_create`(32)/`thread_join`(33)/
   `thread_yield`(34)/`thread_self`(35) (a second, third, ... thread inside the
-  calling process, sharing its address space — see **Userspace threading**) —
+  calling process, sharing its address space — see **Userspace threading**),
+  `getmouse`(36, one raw pointer event — relative motion + buttons — while the
+  program holds the full-screen grab; non-blocking, like `getscan`) and
+  `getrandom`(37, up to 256 bytes from the kernel CSPRNG; libc's `getentropy`
+  is built on it) —
   see [`syscall.c`](syscall.c). `write_file()` in [`lib/`](lib) wraps #16;
   17-21 back [`apps/zsh`](apps/zsh), 22-31 back [`apps/doom`](apps/doom), and
   32-35 back [`apps/hello-thread`](apps/hello-thread) /
-  [`apps/hello-pthread`](apps/hello-pthread).
+  [`apps/hello-pthread`](apps/hello-pthread), and 36-37 back
+  [`apps/hello-qt-widgets`](apps/hello-qt-widgets).
 * The ELF loader ([`elf.c`](elf.c)) maps every page of a `PT_LOAD` segment to
   its own frame and covers the `.bss` tail, so multi-page ring-3 binaries load.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
@@ -676,6 +681,17 @@ for anything more (there is no TLS or resolver cache).
     runs, a millisecond `clock_gettime`, `C.UTF-8`, VFS-aware absolute paths
     in the Qt file engine) and a kernel bug (a secondary thread's stack can
     overlap a grown heap; the Qt port avoids spawning GUI worker threads).
+  * [`apps/hello-qt-widgets`](apps/hello-qt-widgets) — **real QtWidgets** on
+    the same vendored tree (staged as `hqtwid`, opt-in, needs a framebuffer
+    boot): a `QApplication` with tabs, push/tool/check/radio buttons, sliders,
+    a dial, scroll bar, spin box, progress bar, a line edit and combo boxes
+    (one switches the application style, Fusion ⇄ Windows, at run time). Driven
+    by the keyboard (Tab focus chain, arrows, Space, typing) and the mouse
+    (new `getmouse` syscall, 36); each state change is logged to the serial
+    console, and `make qemu-qt-widgets` asserts that log plus a few pixel
+    checks. The Qt platform glue grew a small compositor for popups, a pointer
+    overlay and input translation; the kernel/libc grew `getmouse`, `getrandom`
+    (37) / `getentropy`, `strcoll`, `strtok_r` and x87 `exp`/`log`/`atan`.
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — reads a number, a char and a string with
     `scanf` and echoes them back
