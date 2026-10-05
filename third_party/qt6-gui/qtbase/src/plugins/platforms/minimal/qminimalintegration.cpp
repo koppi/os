@@ -72,7 +72,18 @@ QMinimalIntegration::QMinimalIntegration(const QStringList &parameters)
 
     m_primaryScreen = new QMinimalScreen();
 
+#if defined(__KOPPIOS__)
+    // koppios addition, not upstream Qt: the screen is the frame the platform glue presents
+#  ifndef KOPPIOS_SCREEN_WIDTH
+#    define KOPPIOS_SCREEN_WIDTH 640
+#  endif
+#  ifndef KOPPIOS_SCREEN_HEIGHT
+#    define KOPPIOS_SCREEN_HEIGHT 400
+#  endif
+    m_primaryScreen->mGeometry = QRect(0, 0, KOPPIOS_SCREEN_WIDTH, KOPPIOS_SCREEN_HEIGHT);
+#else
     m_primaryScreen->mGeometry = QRect(0, 0, 240, 320);
+#endif
     m_primaryScreen->mDepth = 32;
     m_primaryScreen->mFormat = QImage::Format_ARGB32_Premultiplied;
 

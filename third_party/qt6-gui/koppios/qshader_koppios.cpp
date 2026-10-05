@@ -1,4 +1,4 @@
-/* koppios addition, not upstream Qt: the five QShader members that
+/* koppios addition, not upstream Qt: the six QShader members that
  * QBackingStoreDefaultCompositor / QRhi reference, taken verbatim from
  * src/gui/rhi/qshader.cpp except fromSerialized(). Real qshader.cpp is not
  * compiled: it calls qCompress()/qUncompress(), and this port has no zlib
@@ -43,6 +43,11 @@ QShader::~QShader()
 {
     if (d && !d->ref.deref())
         delete d;
+}
+
+bool QShader::isValid() const
+{
+    return d ? !d->shaders.isEmpty() : false;
 }
 
 QShader QShader::fromSerialized(const QByteArray &data)

@@ -24,7 +24,7 @@
 #define QT_FEATURE_system_textmarkdownreader -1
 #define QT_FEATURE_textmarkdownwriter -1
 #define QT_FEATURE_textodfwriter -1
-#define QT_FEATURE_cssparser -1
+#define QT_FEATURE_cssparser 1
 #define QT_FEATURE_draganddrop -1
 #define QT_FEATURE_action 1
 #define QT_FEATURE_cursor 1
@@ -33,8 +33,8 @@
 #define QT_FEATURE_tabletevent -1
 #define QT_FEATURE_im -1
 #define QT_FEATURE_highdpiscaling 1
-#define QT_FEATURE_validator -1
-#define QT_FEATURE_standarditemmodel -1
+#define QT_FEATURE_validator 1
+#define QT_FEATURE_standarditemmodel 1
 #define QT_FEATURE_filesystemmodel -1
 #define QT_FEATURE_imageformatplugin -1
 #define QT_FEATURE_movie -1

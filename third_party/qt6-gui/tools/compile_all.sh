@@ -55,7 +55,7 @@ export -f compile_one
 export SCRATCH QTBASE OBJDIR CXXCOMMON
 
 echo "=== corelib+gui candidates ==="
-cat "$SCRATCH/qtguitest/all_candidate_files.txt" | xargs -P 3 -I{} bash -c 'compile_one "$@"' _ {}
+cat "$SCRATCH/qtguitest/all_candidate_files.txt" | xargs -P 11 -I{} bash -c 'compile_one "$@"' _ {}
 OK=$(ls "$OBJDIR" | wc -l)
 FAIL=$(grep -c "^=== FAIL" "$SCRATCH/qtguitest/compile_fail_log.txt")
 echo "OK=$OK FAIL=$FAIL"
@@ -69,6 +69,7 @@ export LC_ALL=C
   { cat "$SCRATCH/qtguitest/all_candidate_files.txt"
     echo src/plugins/platforms/minimal/qminimalintegration.cpp
     echo src/plugins/platforms/minimal/qminimalbackingstore.cpp
+    find src/widgets -iname "*.cpp"
   } | while read -r f; do grep -ohE '#[[:space:]]*include[[:space:]]*"moc_[A-Za-z0-9_]+\.cpp"' "$f" 2>/dev/null; done \
     | sed -E 's/.*"(moc_[^"]+)".*/\1/' | sort -u > "$SCRATCH/qtguitest/moc_included.txt"
   ls "$SCRATCH/qtguitest/mocgen" | grep -E '^moc_.*\.cpp$' | sort -u > "$SCRATCH/qtguitest/moc_all.txt"
@@ -80,7 +81,7 @@ compile_moc() {
   g++ $CXXCOMMON -c "$src" -o "$out" >/dev/null 2>&1 || rm -f "$out"
 }
 export -f compile_moc
-xargs -P 3 -I{} bash -c 'compile_moc "$@"' _ {} < "$SCRATCH/qtguitest/moc_orphans.txt"
+xargs -P 11 -I{} bash -c 'compile_moc "$@"' _ {} < "$SCRATCH/qtguitest/moc_orphans.txt"
 echo "orphan mocs: $(wc -l < "$SCRATCH/qtguitest/moc_orphans.txt") listed, $(ls "$OBJDIR"/moc_*.o 2>/dev/null | wc -l) moc objects now present"
 
 echo "=== qgrayraster.c (real Qt's own FreeType-derived rasterizer -- a .c file, the *.cpp candidate scan above never finds it; easy to accidentally recompile ftgrays.c from 3rdparty/freetype instead, which defines DIFFERENT symbol names and silently doesn't satisfy the real qt_ft_grays_raster/q_gray_rendered_spans references) ==="
@@ -179,6 +180,25 @@ g++ $CXXCOMMON $HBDEFS -I "$HBDIR" -I "$QTBASE/src/3rdparty/harfbuzz-ng" \
 HBOK=$(ls "$HBOBJDIR"/*.o 2>/dev/null | wc -l)
 echo "harfbuzz: $HBOK objects"
 
+echo "=== QtWidgets (kernel/ styles/ widgets/ util/ itemviews/ minus exclude_widgets.txt) -> wobj/ ==="
+WOBJDIR="$SCRATCH/qtguitest/wobj"; mkdir -p "$WOBJDIR"
+( cd "$QTBASE" && for d in kernel styles widgets util itemviews; do find src/widgets/$d -iname "*.cpp"; done \
+    | grep -vFxf "$BOOT/exclude_widgets.txt" ) > "$SCRATCH/qtguitest/widgets_candidates.txt"
+: > "$SCRATCH/qtguitest/compile_fail_log_w.txt"
+compile_one_w() {
+  rel="$1"; base=$(basename "$rel" .cpp); obj="$WOBJDIR/$base.o"; src="$QTBASE/$rel"
+  [ "$obj" -nt "$src" ] 2>/dev/null && return 0
+  err=$(g++ $CXXCOMMON -c "$src" -o "$obj" 2>&1)
+  if [ $? -ne 0 ]; then
+    rm -f "$obj"
+    { echo "=== FAIL: $rel ==="; echo "$err" | head -15; echo ""; } >> "$SCRATCH/qtguitest/compile_fail_log_w.txt"
+  fi
+}
+export -f compile_one_w
+export WOBJDIR
+xargs -P 11 -I{} bash -c 'compile_one_w "$@"' _ {} < "$SCRATCH/qtguitest/widgets_candidates.txt"
+echo "widgets: $(ls "$WOBJDIR"/*.o 2>/dev/null | wc -l) objects, $(grep -c '^=== FAIL' "$SCRATCH/qtguitest/compile_fail_log_w.txt") failed of $(wc -l < "$SCRATCH/qtguitest/widgets_candidates.txt")"
+
 echo "=== Qt's real 'minimal' QPA platform integration (src/plugins/platforms/minimal; qt_koppios_platform.cpp constructs it directly, no plugin loader) ==="
 for f in qminimalintegration qminimalbackingstore; do
   src="$QTBASE/src/plugins/platforms/minimal/$f.cpp"
@@ -211,6 +231,7 @@ g++ $CXXCOMMON -c "$REPO/lib/qfileengine_koppios.cpp" -o "$OBJDIR/qfileengine_ko
 g++ $CXXCOMMON -c "$REPO/lib/qfsfileengine_koppios_stub.cpp" -o "$OBJDIR/qfsfileengine_koppios_stub.o" 2>&1 | tail -10
 g++ $CXXCOMMON -c "$Q6G/koppios/qshader_koppios.cpp" -o "$OBJDIR/qshader_koppios.o" 2>&1 | tail -10
 g++ $CXXCOMMON -c "$Q6G/koppios/qkoppiosfontdatabase.cpp" -o "$OBJDIR/qkoppiosfontdatabase.o" 2>&1 | tail -10
+g++ $CXXCOMMON -c "$Q6G/koppios/qresources_koppios.cpp" -o "$OBJDIR/qresources_koppios.o" 2>&1 | tail -10
 
 echo "=== pcre2 (16-bit, real QRegularExpression backend -- no 32-bit system lib available) ==="
 ( cd "$QTBASE/src/3rdparty/pcre2/src"

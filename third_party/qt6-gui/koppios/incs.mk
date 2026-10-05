@@ -21,7 +21,6 @@ QT_INCDIRS := koppios/include \
   qtbase/src/corelib/ipc \
   qtbase/src/corelib/io \
   qtbase/src/corelib/global \
-  qtbase/src/corelib/doc \
   qtbase/src/corelib/compat \
   qtbase/src/gui/util \
   qtbase/src/gui/text \
@@ -31,15 +30,21 @@ QT_INCDIRS := koppios/include \
   qtbase/src/gui/opengl \
   qtbase/src/gui/math3d \
   qtbase/src/gui/kernel \
+  qtbase/src/gui/itemmodels \
   qtbase/src/gui/image \
-  qtbase/src/gui/doc \
   qtbase/src/gui/compat \
   qtbase/src/gui/accessible \
   qtbase/src/gui/text/freetype \
   qtbase/src/gui/platform/unix \
   qtbase/src/gui/opengl/platform \
-  qtbase/src/gui/doc/snippets \
   qtbase/src/corelib \
   qtbase/src/gui \
   qtbase/src/plugins/platforms/minimal \
-  qtbase/mkspecs/common/posix
+  qtbase/mkspecs/common/posix \
+  koppios/include/QtWidgets \
+  qtbase/src/widgets/widgets \
+  qtbase/src/widgets/util \
+  qtbase/src/widgets/styles \
+  qtbase/src/widgets/kernel \
+  qtbase/src/widgets/itemviews \
+  qtbase/src/widgets

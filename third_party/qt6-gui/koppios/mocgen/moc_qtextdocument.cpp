@@ -77,6 +77,7 @@ static constexpr auto qt_meta_stringdata_ZN13QTextDocumentE = QtMocHelpers::stri
     "textWidth",
     "blockCount",
     "indentWidth",
+    "defaultStyleSheet",
     "maximumBlockCount",
     "documentMargin",
     "baseUrl",
@@ -99,33 +100,33 @@ Q_CONSTINIT static const uint qt_meta_data_ZN13QTextDocumentE[] = {
        0,       // classname
        0,    0, // classinfo
       16,   14, // methods
-      13,  152, // properties
-       1,  217, // enums/sets
+      14,  152, // properties
+       1,  222, // enums/sets
        0,    0, // constructors
        0,       // flags
       10,       // signalCount
 
  // signals: name, argc, parameters, tag, flags, initial metatype offsets
-       1,    3,  110,    2, 0x06,   15 /* Public */,
-       6,    0,  117,    2, 0x06,   19 /* Public */,
-       7,    1,  118,    2, 0x06,   20 /* Public */,
-       8,    1,  121,    2, 0x06,   22 /* Public */,
-       9,    0,  124,    2, 0x06,   24 /* Public */,
-      10,    1,  125,    2, 0x06,   25 /* Public */,
-      12,    1,  128,    2, 0x06,   27 /* Public */,
-      15,    1,  131,    2, 0x06,   29 /* Public */,
-      17,    1,  134,    2, 0x06,   31 /* Public */,
-      19,    0,  137,    2, 0x06,   33 /* Public */,
+       1,    3,  110,    2, 0x06,   16 /* Public */,
+       6,    0,  117,    2, 0x06,   20 /* Public */,
+       7,    1,  118,    2, 0x06,   21 /* Public */,
+       8,    1,  121,    2, 0x06,   23 /* Public */,
+       9,    0,  124,    2, 0x06,   25 /* Public */,
+      10,    1,  125,    2, 0x06,   26 /* Public */,
+      12,    1,  128,    2, 0x06,   28 /* Public */,
+      15,    1,  131,    2, 0x06,   30 /* Public */,
+      17,    1,  134,    2, 0x06,   32 /* Public */,
+      19,    0,  137,    2, 0x06,   34 /* Public */,
 
  // slots: name, argc, parameters, tag, flags, initial metatype offsets
-      20,    0,  138,    2, 0x0a,   34 /* Public */,
-      21,    0,  139,    2, 0x0a,   35 /* Public */,
-      22,    1,  140,    2, 0x0a,   36 /* Public */,
-      24,    1,  143,    2, 0x0a,   38 /* Public */,
-      24,    0,  146,    2, 0x2a,   40 /* Public | MethodCloned */,
+      20,    0,  138,    2, 0x0a,   35 /* Public */,
+      21,    0,  139,    2, 0x0a,   36 /* Public */,
+      22,    1,  140,    2, 0x0a,   37 /* Public */,
+      24,    1,  143,    2, 0x0a,   39 /* Public */,
+      24,    0,  146,    2, 0x2a,   41 /* Public | MethodCloned */,
 
  // methods: name, argc, parameters, tag, flags, initial metatype offsets
-      25,    2,  147,    2, 0x01,   41 /* Protected */,
+      25,    2,  147,    2, 0x01,   42 /* Protected */,
 
  // signals: parameters
     QMetaType::Void, QMetaType::Int, QMetaType::Int, QMetaType::Int,    3,    4,    5,
@@ -160,20 +161,21 @@ Q_CONSTINIT static const uint qt_meta_data_ZN13QTextDocumentE[] = {
       36, QMetaType::QReal, 0x00015103, uint(-1), 0,
       37, QMetaType::Int, 0x00015001, uint(-1), 0,
       38, QMetaType::QReal, 0x00015103, uint(-1), 0,
-      39, QMetaType::Int, 0x00015103, uint(-1), 0,
-      40, QMetaType::QReal, 0x00015103, uint(-1), 0,
-      41, QMetaType::QUrl, 0x00015103, uint(8), 0,
+      39, QMetaType::QString, 0x00015103, uint(-1), 0,
+      40, QMetaType::Int, 0x00015103, uint(-1), 0,
+      41, QMetaType::QReal, 0x00015103, uint(-1), 0,
+      42, QMetaType::QUrl, 0x00015103, uint(8), 0,
 
  // enums: name, alias, flags, count, data
-      42,   42, 0x0,    6,  222,
+      43,   43, 0x0,    6,  227,
 
  // enum data: key, value
-      43, uint(QTextDocument::UnknownResource),
-      44, uint(QTextDocument::HtmlResource),
-      45, uint(QTextDocument::ImageResource),
-      46, uint(QTextDocument::StyleSheetResource),
-      47, uint(QTextDocument::MarkdownResource),
-      48, uint(QTextDocument::UserResource),
+      44, uint(QTextDocument::UnknownResource),
+      45, uint(QTextDocument::HtmlResource),
+      46, uint(QTextDocument::ImageResource),
+      47, uint(QTextDocument::StyleSheetResource),
+      48, uint(QTextDocument::MarkdownResource),
+      49, uint(QTextDocument::UserResource),
 
        0        // eod
 };
@@ -205,6 +207,8 @@ Q_CONSTINIT const QMetaObject QTextDocument::staticMetaObject = { {
         QtPrivate::TypeAndForceComplete<int, std::true_type>,
         // property 'indentWidth'
         QtPrivate::TypeAndForceComplete<qreal, std::true_type>,
+        // property 'defaultStyleSheet'
+        QtPrivate::TypeAndForceComplete<QString, std::true_type>,
         // property 'maximumBlockCount'
         QtPrivate::TypeAndForceComplete<int, std::true_type>,
         // property 'documentMargin'
@@ -376,9 +380,10 @@ void QTextDocument::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _i
         case 7: *reinterpret_cast< qreal*>(_v) = _t->textWidth(); break;
         case 8: *reinterpret_cast< int*>(_v) = _t->blockCount(); break;
         case 9: *reinterpret_cast< qreal*>(_v) = _t->indentWidth(); break;
-        case 10: *reinterpret_cast< int*>(_v) = _t->maximumBlockCount(); break;
-        case 11: *reinterpret_cast< qreal*>(_v) = _t->documentMargin(); break;
-        case 12: *reinterpret_cast< QUrl*>(_v) = _t->baseUrl(); break;
+        case 10: *reinterpret_cast< QString*>(_v) = _t->defaultStyleSheet(); break;
+        case 11: *reinterpret_cast< int*>(_v) = _t->maximumBlockCount(); break;
+        case 12: *reinterpret_cast< qreal*>(_v) = _t->documentMargin(); break;
+        case 13: *reinterpret_cast< QUrl*>(_v) = _t->baseUrl(); break;
         default: break;
         }
     }
@@ -393,9 +398,10 @@ void QTextDocument::qt_static_metacall(QObject *_o, QMetaObject::Call _c, int _i
         case 5: _t->setLayoutEnabled(*reinterpret_cast< bool*>(_v)); break;
         case 7: _t->setTextWidth(*reinterpret_cast< qreal*>(_v)); break;
         case 9: _t->setIndentWidth(*reinterpret_cast< qreal*>(_v)); break;
-        case 10: _t->setMaximumBlockCount(*reinterpret_cast< int*>(_v)); break;
-        case 11: _t->setDocumentMargin(*reinterpret_cast< qreal*>(_v)); break;
-        case 12: _t->setBaseUrl(*reinterpret_cast< QUrl*>(_v)); break;
+        case 10: _t->setDefaultStyleSheet(*reinterpret_cast< QString*>(_v)); break;
+        case 11: _t->setMaximumBlockCount(*reinterpret_cast< int*>(_v)); break;
+        case 12: _t->setDocumentMargin(*reinterpret_cast< qreal*>(_v)); break;
+        case 13: _t->setBaseUrl(*reinterpret_cast< QUrl*>(_v)); break;
         default: break;
         }
     }
@@ -433,7 +439,7 @@ int QTextDocument::qt_metacall(QMetaObject::Call _c, int _id, void **_a)
             || _c == QMetaObject::ResetProperty || _c == QMetaObject::BindableProperty
             || _c == QMetaObject::RegisterPropertyMetaType) {
         qt_static_metacall(this, _c, _id, _a);
-        _id -= 13;
+        _id -= 14;
     }
     return _id;
 }

@@ -299,6 +299,7 @@ QT_SRCS := \
   qtbase/src/gui/kernel/qsurface.cpp \
   qtbase/src/gui/kernel/qstylehints.cpp \
   qtbase/src/gui/kernel/qshortcutmap.cpp \
+  qtbase/src/gui/kernel/qshortcut.cpp \
   qtbase/src/gui/kernel/qsessionmanager.cpp \
   qtbase/src/gui/kernel/qscreen.cpp \
   qtbase/src/gui/kernel/qrasterwindow.cpp \
@@ -346,6 +347,7 @@ QT_SRCS := \
   qtbase/src/gui/kernel/qclipboard.cpp \
   qtbase/src/gui/kernel/qactiongroup.cpp \
   qtbase/src/gui/kernel/qaction.cpp \
+  qtbase/src/gui/itemmodels/qstandarditemmodel.cpp \
   qtbase/src/gui/image/qxpmhandler.cpp \
   qtbase/src/gui/image/qxbmhandler.cpp \
   qtbase/src/gui/image/qppmhandler.cpp \
@@ -386,11 +388,95 @@ QT_SRCS := \
   qtbase/src/gui/platform/unix/qgenericunixeventdispatcher.cpp \
   qtbase/src/gui/platform/unix/qunixeventdispatcher.cpp
 
+WIDGETS_SRCS := \
+  qtbase/src/widgets/kernel/qwindowcontainer.cpp \
+  qtbase/src/widgets/kernel/qwidgetwindow.cpp \
+  qtbase/src/widgets/kernel/qwidgetsvariant.cpp \
+  qtbase/src/widgets/kernel/qwidgetrepaintmanager.cpp \
+  qtbase/src/widgets/kernel/qwidgetaction.cpp \
+  qtbase/src/widgets/kernel/qwidget.cpp \
+  qtbase/src/widgets/kernel/qtestsupport_widgets.cpp \
+  qtbase/src/widgets/kernel/qstandardgestures.cpp \
+  qtbase/src/widgets/kernel/qstackedlayout.cpp \
+  qtbase/src/widgets/kernel/qsizepolicy.cpp \
+  qtbase/src/widgets/kernel/qshortcut_widgets.cpp \
+  qtbase/src/widgets/kernel/qrhiwidget.cpp \
+  qtbase/src/widgets/kernel/qmacgesturerecognizer.cpp \
+  qtbase/src/widgets/kernel/qlayoutitem.cpp \
+  qtbase/src/widgets/kernel/qlayoutengine.cpp \
+  qtbase/src/widgets/kernel/qlayout.cpp \
+  qtbase/src/widgets/kernel/qgridlayout.cpp \
+  qtbase/src/widgets/kernel/qgesturerecognizer.cpp \
+  qtbase/src/widgets/kernel/qgesturemanager.cpp \
+  qtbase/src/widgets/kernel/qgesture.cpp \
+  qtbase/src/widgets/kernel/qformlayout.cpp \
+  qtbase/src/widgets/kernel/qboxlayout.cpp \
+  qtbase/src/widgets/kernel/qapplication.cpp \
+  qtbase/src/widgets/kernel/qaction_widgets.cpp \
+  qtbase/src/widgets/styles/qwindowsstyle.cpp \
+  qtbase/src/widgets/styles/qstylesheetstyle_default.cpp \
+  qtbase/src/widgets/styles/qstylesheetstyle.cpp \
+  qtbase/src/widgets/styles/qstyleplugin.cpp \
+  qtbase/src/widgets/styles/qstylepainter.cpp \
+  qtbase/src/widgets/styles/qstyleoption.cpp \
+  qtbase/src/widgets/styles/qstylehelper.cpp \
+  qtbase/src/widgets/styles/qstylefactory.cpp \
+  qtbase/src/widgets/styles/qstyle.cpp \
+  qtbase/src/widgets/styles/qproxystyle.cpp \
+  qtbase/src/widgets/styles/qfusionstyle.cpp \
+  qtbase/src/widgets/styles/qdrawutil.cpp \
+  qtbase/src/widgets/styles/qcommonstyle.cpp \
+  qtbase/src/widgets/widgets/qwidgettextcontrol.cpp \
+  qtbase/src/widgets/widgets/qwidgetlinecontrol.cpp \
+  qtbase/src/widgets/widgets/qwidgetanimator.cpp \
+  qtbase/src/widgets/widgets/qtoolbutton.cpp \
+  qtbase/src/widgets/widgets/qtoolbarextension.cpp \
+  qtbase/src/widgets/widgets/qtabwidget.cpp \
+  qtbase/src/widgets/widgets/qtabbar.cpp \
+  qtbase/src/widgets/widgets/qstackedwidget.cpp \
+  qtbase/src/widgets/widgets/qsplitter.cpp \
+  qtbase/src/widgets/widgets/qspinbox.cpp \
+  qtbase/src/widgets/widgets/qslider.cpp \
+  qtbase/src/widgets/widgets/qscrollbar.cpp \
+  qtbase/src/widgets/widgets/qscrollarea.cpp \
+  qtbase/src/widgets/widgets/qradiobutton.cpp \
+  qtbase/src/widgets/widgets/qpushbutton.cpp \
+  qtbase/src/widgets/widgets/qprogressbar.cpp \
+  qtbase/src/widgets/widgets/qmenu.cpp \
+  qtbase/src/widgets/widgets/qlineedit_p.cpp \
+  qtbase/src/widgets/widgets/qlineedit.cpp \
+  qtbase/src/widgets/widgets/qlcdnumber.cpp \
+  qtbase/src/widgets/widgets/qlabel.cpp \
+  qtbase/src/widgets/widgets/qgroupbox.cpp \
+  qtbase/src/widgets/widgets/qframe.cpp \
+  qtbase/src/widgets/widgets/qfocusframe.cpp \
+  qtbase/src/widgets/widgets/qdial.cpp \
+  qtbase/src/widgets/widgets/qcombobox.cpp \
+  qtbase/src/widgets/widgets/qcheckbox.cpp \
+  qtbase/src/widgets/widgets/qbuttongroup.cpp \
+  qtbase/src/widgets/widgets/qabstractspinbox.cpp \
+  qtbase/src/widgets/widgets/qabstractslider.cpp \
+  qtbase/src/widgets/widgets/qabstractscrollarea.cpp \
+  qtbase/src/widgets/widgets/qabstractbutton.cpp \
+  qtbase/src/widgets/util/qsystemtrayicon_x11.cpp \
+  qtbase/src/widgets/util/qsystemtrayicon.cpp \
+  qtbase/src/widgets/util/qcolormap.cpp \
+  qtbase/src/widgets/itemviews/qstyleditemdelegate.cpp \
+  qtbase/src/widgets/itemviews/qlistwidget.cpp \
+  qtbase/src/widgets/itemviews/qlistview.cpp \
+  qtbase/src/widgets/itemviews/qitemeditorfactory.cpp \
+  qtbase/src/widgets/itemviews/qitemdelegate.cpp \
+  qtbase/src/widgets/itemviews/qheaderview.cpp \
+  qtbase/src/widgets/itemviews/qfileiconprovider.cpp \
+  qtbase/src/widgets/itemviews/qbsptree.cpp \
+  qtbase/src/widgets/itemviews/qabstractitemview.cpp \
+  qtbase/src/widgets/itemviews/qabstractitemdelegate.cpp
+
 MOC_SRCS := \
-  koppios/mocgen/moc_filterobject.cpp \
   koppios/mocgen/moc_qabstractproxymodel_p.cpp \
   koppios/mocgen/moc_qcryptographichash.cpp \
   koppios/mocgen/moc_qeventdispatcher_glib_p.cpp \
+  koppios/mocgen/moc_qgesture.cpp \
   koppios/mocgen/moc_qitemselectionmodel_p.cpp \
   koppios/mocgen/moc_qmetaobject.cpp \
   koppios/mocgen/moc_qmetaobject_p.cpp \
@@ -406,9 +492,9 @@ MOC_SRCS := \
   koppios/mocgen/moc_qproperty.cpp \
   koppios/mocgen/moc_qproperty_p.cpp \
   koppios/mocgen/moc_qpropertyanimation_p.cpp \
+  koppios/mocgen/moc_qrhiwidget.cpp \
   koppios/mocgen/moc_qsavefile.cpp \
   koppios/mocgen/moc_qsequentialanimationgroup_p.cpp \
-  koppios/mocgen/moc_qshortcut.cpp \
   koppios/mocgen/moc_qstandarditemmodel_p.cpp \
   koppios/mocgen/moc_qtemporaryfile.cpp \
   koppios/mocgen/moc_qtimer_p.cpp \
@@ -418,14 +504,13 @@ MOC_SRCS := \
   koppios/mocgen/moc_qunixeventdispatcher_qpa_p.cpp \
   koppios/mocgen/moc_qvariantanimation_p.cpp \
   koppios/mocgen/moc_qvulkanwindow.cpp \
-  koppios/mocgen/moc_qwineventnotifier.cpp \
-  koppios/mocgen/moc_signalsandslots.cpp \
-  koppios/mocgen/moc_textobjectinterface.cpp
+  koppios/mocgen/moc_qwineventnotifier.cpp
 
 KOPPIOS_SRCS := \
   koppios/qstandardpaths_koppios.cpp \
   koppios/qshader_koppios.cpp \
   koppios/qkoppiosfontdatabase.cpp \
+  koppios/qresources_koppios.cpp \
   koppios/qt_koppios_platform.cpp \
   ../../lib/qfileengine_koppios.cpp \
   ../../lib/qfsfileengine_koppios_stub.cpp

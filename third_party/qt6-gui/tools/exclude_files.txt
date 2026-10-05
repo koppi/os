@@ -1,3 +1,4 @@
+src/corelib/Qt6CoreResourceInit.in.cpp
 src/corelib/animation/qabstractanimation.cpp
 src/corelib/animation/qanimationgroup.cpp
 src/corelib/animation/qparallelanimationgroup.cpp
@@ -44,7 +45,6 @@ src/corelib/plugin/qlibrary.cpp
 src/corelib/plugin/qlibrary_unix.cpp
 src/corelib/plugin/qmachparser.cpp
 src/corelib/plugin/qsystemlibrary.cpp
-src/corelib/Qt6CoreResourceInit.in.cpp
 src/corelib/serialization/qcborarray.cpp
 src/corelib/serialization/qcbormap.cpp
 src/corelib/text/qchar.cpp
@@ -63,18 +63,17 @@ src/corelib/tools/qeasingcurve.cpp
 src/corelib/tools/qtimeline.cpp
 src/gui/accessible/linux/atspiadaptor.cpp
 src/gui/accessible/linux/dbusconnection.cpp
+src/gui/accessible/linux/qspi_constant_mappings.cpp
+src/gui/accessible/linux/qspi_struct_marshallers.cpp
 src/gui/accessible/linux/qspiaccessiblebridge.cpp
 src/gui/accessible/linux/qspiapplicationadaptor.cpp
-src/gui/accessible/linux/qspi_constant_mappings.cpp
 src/gui/accessible/linux/qspidbuscache.cpp
-src/gui/accessible/linux/qspi_struct_marshallers.cpp
 src/gui/accessible/qaccessiblebridgeutils.cpp
 src/gui/animation/qguivariantanimation.cpp
 src/gui/image/qimage_ssse3.cpp
 src/gui/image/qmovie.cpp
 src/gui/itemmodels/qfileinfogatherer.cpp
 src/gui/itemmodels/qfilesystemmodel.cpp
-src/gui/itemmodels/qstandarditemmodel.cpp
 src/gui/kernel/qdnd.cpp
 src/gui/kernel/qdrag.cpp
 src/gui/kernel/qopenglcontext.cpp
@@ -84,7 +83,6 @@ src/gui/kernel/qplatformgraphicsbufferhelper.cpp
 src/gui/kernel/qplatformopenglcontext.cpp
 src/gui/kernel/qplatformsystemtrayicon.cpp
 src/gui/kernel/qshapedpixmapdndwindow.cpp
-src/gui/kernel/qshortcut.cpp
 src/gui/kernel/qsimpledrag.cpp
 src/gui/opengl/platform/egl/qeglpbuffer.cpp
 src/gui/opengl/platform/egl/qeglplatformcontext.cpp

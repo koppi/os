@@ -14,6 +14,13 @@ done
 INCS="$INCS -I $QTBASE/src/corelib -I $QTBASE/src/gui"
 INCS="$INCS -I $QTBASE/src/plugins/platforms/minimal"
 INCS="$INCS -I $QTBASE/mkspecs/common/posix"
+# QtWidgets: appended LAST so header resolution for corelib/gui is unchanged.
+INCS="$INCS -I $QTGEN/QtWidgets"
+for d in $(find "$QTBASE/src/widgets" -maxdepth 1 -mindepth 1 -type d 2>/dev/null | grep -v "/doc$") \
+         $(find "$QTBASE/src/widgets" -maxdepth 2 -mindepth 2 -type d 2>/dev/null | grep -v "/doc"); do
+  INCS="$INCS -I $d"
+done
+INCS="$INCS -I $QTBASE/src/widgets"
 
 # Real Qt source guards a lot of code with the OLDER QT_NO_<FEATURE> style
 # macros (predating the QT_CONFIG()/QT_FEATURE_* system), independently of
@@ -24,16 +31,16 @@ INCS="$INCS -I $QTBASE/mkspecs/common/posix"
 QT_NO_DEFINES="-DQT_NO_OPENGL -DQT_NO_OPENGLES2 -DQT_NO_EGL -DQT_NO_VULKAN \
     -DQT_NO_SESSIONMANAGER -DQT_NO_SYSTEMTRAYICON -DQT_NO_ACCESSIBILITY \
     -DQT_NO_WHATSTHIS -DQT_NO_UNDOCOMMAND -DQT_NO_UNDOSTACK -DQT_NO_UNDOGROUP \
-    -DQT_NO_DRAGANDDROP -DQT_NO_CLIPBOARD -DQT_NO_SHORTCUT -DQT_NO_TABLETEVENT \
-    -DQT_NO_IM -DQT_NO_VALIDATOR -DQT_NO_STANDARDITEMMODEL -DQT_NO_FILESYSTEMMODEL \
+    -DQT_NO_DRAGANDDROP -DQT_NO_CLIPBOARD -DQT_NO_TABLETEVENT \
+    -DQT_NO_IM -DQT_NO_FILESYSTEMMODEL \
     -DQT_NO_IMAGEFORMATPLUGIN -DQT_NO_MOVIE -DQT_NO_PICTURE -DQT_NO_PDF \
-    -DQT_NO_DESKTOPSERVICES -DQT_NO_CSSPARSER -DQT_NO_SETTINGS -DQT_NO_PROCESS \
+    -DQT_NO_DESKTOPSERVICES -DQT_NO_SETTINGS -DQT_NO_PROCESS \
     -DQT_NO_SHAREDMEMORY -DQT_NO_SYSTEMSEMAPHORE -DQT_NO_LIBRARY \
     -DQT_NO_FILESYSTEMWATCHER -DQT_NO_TEMPORARYFILE -DQT_NO_TRANSLATION \
     -DQT_NO_ANIMATION -DQT_NO_GESTURES -DQT_NO_COMMANDLINEPARSER \
     -DQT_NO_IMAGEFORMAT_PNG -DQT_NO_IMAGEFORMAT_BMP -DQT_NO_IMAGEFORMAT_PPM \
     -DQT_NO_IMAGEFORMAT_XBM -DQT_NO_IMAGEFORMAT_XPM -DQT_NO_IMAGEFORMAT_JPEG \
-    -DQT_NO_GLIB"
+    -DQT_NO_GLIB -DQT_NO_CONTEXTMENU -DQT_NO_TEXTHTMLPARSER -DQT_NO_TEXTODFWRITER"
 
 # NOTE: -fkeep-inline-functions used to be global here, to recover a handful
 # of inline member functions (QDataStream::status(), ...) that -Os leaves

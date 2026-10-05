@@ -18,7 +18,7 @@ if [ ! -d "$QTBASE/.git" ]; then
 fi
 
 echo "=== 2/6: flattened symlink trees (QtCore/, QtGui/, qpa/, */private/) ==="
-mkdir -p "$QTGEN/QtCore/private" "$QTGEN/QtGui/private" "$QTGEN/qpa/private" "$QTGEN/ft_koppios_override"
+mkdir -p "$QTGEN/QtCore/private" "$QTGEN/QtGui/private" "$QTGEN/QtWidgets/private" "$QTGEN/qpa/private" "$QTGEN/ft_koppios_override"
 
 relsym() {  # relsym <target-file> <dest-dir>
     local base; base=$(basename "$1")
@@ -32,6 +32,8 @@ find "$QTBASE/src/gui" \( -iname "qplatform*.h" -o -iname "qwindowsysteminterfac
     base=$(basename "$f")
     case "$base" in *_p.h) relsym "$f" "$QTGEN/qpa/private";; *) relsym "$f" "$QTGEN/qpa";; esac
 done
+find "$QTBASE/src/widgets" -iname "*.h" | grep -v "/doc/" | while read -r f; do relsym "$f" "$QTGEN/QtWidgets"; done
+find "$QTBASE/src/widgets" -iname "*_p.h" | grep -v "/doc/" | while read -r f; do relsym "$f" "$QTGEN/QtWidgets/private"; done
 find "$QTBASE/src/corelib" -iname "*_p.h" | while read -r f; do relsym "$f" "$QTGEN/QtCore/private"; done
 find "$QTBASE/src/gui" -iname "*_p.h" | grep -v "/3rdparty/" | while read -r f; do relsym "$f" "$QTGEN/QtGui/private"; done
 
@@ -73,6 +75,37 @@ if [ -d "$Q" ]; then
     done
 else
     echo "WARNING: reference SDK at $Q not found -- qtcore-config_p.h/qtgui-config_p.h/exports/Qt* aggregate headers must be sourced another way"
+fi
+
+# ---- QtWidgets config: the SDK's desktop build, trimmed to what this port can back ----
+if [ -d "$Q" ]; then
+    cp "$Q/QtWidgets/qtwidgets-config.h" "$QTGEN/QtWidgets/qtwidgets-config.h"
+    cp "$Q/QtWidgets/6.10.2/QtWidgets/private/qtwidgets-config_p.h" "$QTGEN/QtWidgets/private/qtwidgets-config_p.h"
+    cp "$Q/QtWidgets/qtwidgetsexports.h" "$QTGEN/QtWidgets/"
+    for f in "$Q"/QtWidgets/Qt*; do
+        [ -f "$f" ] || continue
+        base=$(basename "$f")
+        [ -e "$QTGEN/QtWidgets/$base" ] || cp "$f" "$QTGEN/QtWidgets/$base"
+    done
+    # style_stylesheet and style_windows stay ON: QWidget (6.8) includes QStyleSheetStyle
+    # unconditionally and that derives from QWindowsStyle.
+    # menu stays ON: QCommonStyle's menu-item sizing/drawing is #if QT_CONFIG(menu), and a
+    # combo box popup is a menu-item list (with it off every popup item is as big as the view).
+    # Off: menu *bars*/toolbars/main-window machinery, all dialogs, graphics view, item views beyond
+    # list view (combo box), rich-text editors, tooltips, style sheets, and the other native
+    # styles. On: every simple control (buttons, sliders, tabs, spin boxes, line edit, label...).
+    for f in datetimeedit textbrowser splashscreen fontcombobox toolbar toolbox \
+             mainwindow dockwidget mdiarea resizehandler statusbar menubar contextmenu scroller \
+             graphicsview graphicseffect textedit syntaxhighlighter rubberband tooltip statustip \
+             sizegrip calendarwidget keysequenceedit dialog dialogbuttonbox messagebox colordialog \
+             filedialog fontdialog progressdialog inputdialog errormessage wizard tableview \
+             tablewidget treeview treewidget columnview datawidgetmapper completer fscompleter \
+             undoview commandlinkbutton; do
+        sed -i "s/^#define QT_FEATURE_$f 1\$/#define QT_FEATURE_$f -1/" "$QTGEN/QtWidgets/qtwidgets-config.h"
+    done
+    for f in gtk3 effects; do
+        sed -i "s/^#define QT_FEATURE_$f 1\$/#define QT_FEATURE_$f -1/" "$QTGEN/QtWidgets/private/qtwidgets-config_p.h"
+    done
 fi
 
 cat > "$QTGEN/QtCore/qtcore-config.h" << 'COREEOF'
@@ -153,7 +186,7 @@ cat > "$QTGEN/QtGui/qtgui-config.h" << 'GUIEOF'
 #define QT_FEATURE_system_textmarkdownreader -1
 #define QT_FEATURE_textmarkdownwriter -1
 #define QT_FEATURE_textodfwriter -1
-#define QT_FEATURE_cssparser -1
+#define QT_FEATURE_cssparser 1
 #define QT_FEATURE_draganddrop -1
 #define QT_FEATURE_action 1
 #define QT_FEATURE_cursor 1
@@ -162,8 +195,8 @@ cat > "$QTGEN/QtGui/qtgui-config.h" << 'GUIEOF'
 #define QT_FEATURE_tabletevent -1
 #define QT_FEATURE_im -1
 #define QT_FEATURE_highdpiscaling 1
-#define QT_FEATURE_validator -1
-#define QT_FEATURE_standarditemmodel -1
+#define QT_FEATURE_validator 1
+#define QT_FEATURE_standarditemmodel 1
 #define QT_FEATURE_filesystemmodel -1
 #define QT_FEATURE_imageformatplugin -1
 #define QT_FEATURE_movie -1
@@ -197,6 +230,9 @@ cp "$REPO/third_party/qt6/koppios/qtdeprecationdefinitions.h" "$QTGEN/QtCore/"
 cp "$BOOT/qconfig.cpp" "$QTGEN/QtCore/qconfig.cpp"
 echo '#include "qtrace_p.h"' > "$QTGEN/QtGui/qtgui_tracepoints_p.h"
 echo '#include "qtrace_p.h"' > "$QTGEN/QtCore/qtcore_tracepoints_p.h"
+echo '#include "qtrace_p.h"' > "$QTGEN/QtWidgets/qtwidgets_tracepoints_p.h"
+# real sources also say <QtGui/qpa/foo.h>: the same files as qpa/foo.h
+ln -sfn ../qpa "$QTGEN/QtGui/qpa"
 
 echo "=== 4/6: CamelCase forwarding headers (gen_camel.py) ==="
 python3 "$BOOT/gen_camel.py" "$SCRATCH"
@@ -234,40 +270,14 @@ for f in icu glib inotify renameat2 forkfd_pidfd; do
     sed -i "s/^#define QT_FEATURE_$f 1\$/#define QT_FEATURE_$f -1/" "$QTGEN/QtCore/private/qtcore-config_p.h"
 done
 
-echo "=== 5/6: redirect any forward whose target is a _p.h/_impl.h file to the real public header ==="
-# CRITICAL: only touch files gen_camel.py itself generated (its forwards are
-# named after the CLASS, e.g. "QString" -- no .h suffix). $QTGEN/QtCore/*.h
-# and $QTGEN/QtGui/*.h are SYMLINKS into the real qtbase clone from step 2 --
-# writing through one of those with `echo ... > "$f"` overwrites the real
-# Qt source file it points at, corrupting the clone itself. Learned this the
-# hard way: an earlier version of this loop with no such guard silently
-# replaced qlocale_tools_p.h (and probably others) with a 1-line stub.
-count=0
-for dir in "$QTGEN/QtCore" "$QTGEN/QtGui"; do
-    for f in "$dir"/*; do
-        [ -f "$f" ] || continue
-        case "$(basename "$f")" in *.h) continue;; esac
-        [ -L "$f" ] && continue
-        target=$(grep -o '"[^"]*"' "$f" 2>/dev/null | tr -d '"' | head -1)
-        case "$target" in
-            *_p.h|*_impl.h)
-                base="${target%_p.h}"; base="${base%_impl.h}"
-                pub=$(find "$QTBASE/src/corelib" "$QTBASE/src/gui" -maxdepth 3 -name "${base}.h" 2>/dev/null | grep -v "/3rdparty/" | head -1)
-                if [ -n "$pub" ]; then
-                    echo "#include \"$(basename "$pub")\"" > "$f"
-                    count=$((count+1))
-                fi
-                ;;
-        esac
-    done
-done
-echo "redirected: $count"
+bash "$BOOT/redirect_forwards.sh" "$SCRATCH"
 
 echo "=== thread_local -> static patches (no %gs TLS on this kernel) ==="
 python3 "$BOOT/patch_osdetect.py" "$QTBASE"
 python3 "$BOOT/patch_tls.py" "$QTBASE"
 python3 "$BOOT/patch_gui.py" "$QTBASE"
 python3 "$BOOT/patch_minimal.py" "$QTBASE"
+python3 "$BOOT/patch_widgets.py" "$QTBASE"
 
 echo "=== 6/6: moc output for every Q_OBJECT/Q_GADGET header, using the real moc6.8.4 ==="
 bash "$BOOT/genmoc.sh" "$SCRATCH"

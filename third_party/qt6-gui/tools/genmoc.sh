@@ -20,7 +20,7 @@ MOCDEFS="-D__KOPPIOS__ -DQT_USE_QSTRINGBUILDER -DQT_BUILD_GUI_LIB -DQT_BUILD_COR
 
 count=0
 fail=0
-for f in $(grep -lrE "Q_OBJECT|Q_GADGET|Q_NAMESPACE" "$QTBASE/src/corelib" "$QTBASE/src/gui" --include="*.h" 2>/dev/null | grep -v "/3rdparty/"); do
+for f in $(grep -lrE "Q_OBJECT|Q_GADGET|Q_NAMESPACE" "$QTBASE/src/corelib" "$QTBASE/src/gui" "$QTBASE/src/widgets" --include="*.h" 2>/dev/null | grep -vE "/(3rdparty|doc)/"); do
   base=$(basename "$f" .h)
   out="$MOCDIR/moc_$base.cpp"
   $MOC $MOCDEFS $INCS "$f" -o "$out" 2>>"$SCRATCH/moc_errors.log"
@@ -37,7 +37,7 @@ echo "moc generated: $count, empty/failed: $fail"
 # ...) instead of using a moc_*.cpp companion. Different output name
 # convention (<base>.moc, not moc_<base>.cpp), same moc binary.
 count2=0
-for f in $(grep -lrE "Q_OBJECT|Q_GADGET|Q_NAMESPACE" "$QTBASE/src/corelib" "$QTBASE/src/gui" --include="*.cpp" 2>/dev/null | grep -v "/3rdparty/"); do
+for f in $(grep -lrE "Q_OBJECT|Q_GADGET|Q_NAMESPACE" "$QTBASE/src/corelib" "$QTBASE/src/gui" "$QTBASE/src/widgets" --include="*.cpp" 2>/dev/null | grep -vE "/(3rdparty|doc)/"); do
   base=$(basename "$f" .cpp)
   out="$MOCDIR/$base.moc"
   $MOC $MOCDEFS $INCS "$f" -o "$out" 2>>"$SCRATCH/moc_errors.log"

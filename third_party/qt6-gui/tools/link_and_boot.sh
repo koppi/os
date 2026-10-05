@@ -10,15 +10,18 @@ BOOT="$TOOLS"; OS="$REPO"
 QT=$SCRATCH/qtguitest; LIB=$OS/lib
 source "$BOOT/compile_flags.sh" "$SCRATCH"
 cd "$QT"
-if [ -f "$BOOT/probes/$APP.cpp" ]; then SRC="$BOOT/probes/$APP.cpp"; else SRC="$REPO/apps/hello-qt-gui/$APP.cpp"; fi
+if [ -f "$BOOT/probes/$APP.cpp" ]; then SRC="$BOOT/probes/$APP.cpp"
+elif [ -f "$REPO/apps/hello-qt-gui/$APP.cpp" ]; then SRC="$REPO/apps/hello-qt-gui/$APP.cpp"
+else SRC="$REPO/apps/hello-qt-widgets/$APP.cpp"; fi
 g++ $CXXCOMMON -c "$SRC" -o $APP.o || exit 1
 g++ $CXXCOMMON -c "$Q6G/koppios/qt_koppios_platform.cpp" -o qt_koppios_platform.o || exit 1
-rm -f qtcore_gui.a harfbuzz.a pcre2.a freetype.a
+rm -f qtcore_gui.a harfbuzz.a pcre2.a freetype.a qtwidgets.a
 ar rcs qtcore_gui.a obj/*.o; ar rcs harfbuzz.a hbobj/*.o; ar rcs pcre2.a pcre2obj/*.o; ar rcs freetype.a ftobj/*.o
+[ -d wobj ] && ar rcs qtwidgets.a wobj/*.o
 ( cd $LIB && make >/dev/null 2>&1 )
-g++ -m32 -nostdlib -no-pie -Wl,-T,"$REPO/apps/hello-qt-gui/hello_qt_gui.lds" -Os -Wl,--gc-sections -Wl,--no-keep-memory \
+g++ -m32 -nostdlib -no-pie -Wl,-T,"$Q6G/koppios/qt_app.lds" -Os -Wl,--gc-sections -Wl,--no-keep-memory \
   -o hqtgui_$APP $APP.o qt_koppios_platform.o \
-  -Wl,--start-group qtcore_gui.a harfbuzz.a pcre2.a freetype.a \
+  -Wl,--start-group qtwidgets.a qtcore_gui.a harfbuzz.a pcre2.a freetype.a \
   $LIB/cxx_start.o $LIB/mutex.o $LIB/system_calls.o $LIB/unistd.o $LIB/stdlib.o $LIB/string.o $LIB/stdio.o \
   $LIB/cxxabi.o $LIB/cxx_string.o $LIB/cxx_rbtree.o $LIB/cxx_hashtable.o $LIB/cxx_chrono.o $LIB/cxx_pmr.o \
   $LIB/cxx_condvar.o $LIB/cxx_list.o $LIB/pthread_glibc.o $LIB/libm.o $LIB/libc_ext.o $LIB/emutls.o \
@@ -30,7 +33,7 @@ strip -s -o hqtgui_$APP.stripped hqtgui_$APP 2>/dev/null
 cp "$OS/initrd.img" "$SCRATCH/test_initrd.img"
 mcopy -i "$SCRATCH/test_initrd.img" -D o hqtgui_$APP.stripped ::hqtgui
 # optional test font (scratch-only: font choice/licensing for shipping is the user's call)
-FONT="${FONT:-/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf}"
+FONT="${FONT:-$REPO/apps/hello-qt-gui/unifont-subset.ttf}"
 [ -f "$FONT" ] && mcopy -i "$SCRATCH/test_initrd.img" -D o "$FONT" ::font.ttf
 cd "$OS"
 # MON_SCRIPT="34:screendump a.ppm;37:screendump b.ppm;40:sendkey esc": timed QEMU monitor commands
