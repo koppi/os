@@ -146,7 +146,54 @@ int mouse_right_button_down() { return (mouse_info.prev_button != RIGHT_CLICK) &
 int mouse_left_button_up()    { return (mouse_info.prev_button == LEFT_CLICK)  && (mouse_info.curr_button != LEFT_CLICK); }
 int mouse_right_button_up()   { return (mouse_info.prev_button == RIGHT_CLICK) && (mouse_info.curr_button != RIGHT_CLICK); }
 
+/* ------------------------------------------------------------------ *
+ *  Raw event ring for ring-3 programs (see mouse.h)                    *
+ * ------------------------------------------------------------------ */
+#define MOUSE_RAW_SIZE 64
+#define MOUSE_RAW_MASK (MOUSE_RAW_SIZE - 1)
+typedef struct { int16_t dx, dy; uint8_t buttons; } raw_ev_t;
+static raw_ev_t raw_buf[MOUSE_RAW_SIZE];
+static volatile uint32_t raw_head = 0;   /* next write slot (IRQ only) */
+static volatile uint32_t raw_tail = 0;   /* next read slot  (consumer only) */
+static volatile uint8_t  raw_on = 0;
+
+void mouse_raw_mode(int on) {
+    raw_head = raw_tail = 0;
+    raw_on = on ? 1 : 0;
+}
+
+static int16_t clamp_i16(int v) { return (int16_t) (v > 2047 ? 2047 : v < -2047 ? -2047 : v); }
+
+void mouse_raw_push(int dx, int dy, uint32_t buttons) {
+    if(!raw_on)
+        return;
+    uint32_t next = (raw_head + 1) & MOUSE_RAW_MASK;
+    if(next == raw_tail) {
+        /* Full: fold into the newest event rather than drop motion or lose the
+         * latest button state. */
+        raw_ev_t *last = &raw_buf[(raw_head - 1) & MOUSE_RAW_MASK];
+        last->dx = clamp_i16(last->dx + dx);
+        last->dy = clamp_i16(last->dy + dy);
+        last->buttons = (uint8_t) (buttons & 7);
+        return;
+    }
+    raw_buf[raw_head].dx = clamp_i16(dx);
+    raw_buf[raw_head].dy = clamp_i16(dy);
+    raw_buf[raw_head].buttons = (uint8_t) (buttons & 7);
+    raw_head = next;
+}
+
+uint32_t mouse_raw_get(void) {
+    if(raw_head == raw_tail)
+        return 0;
+    raw_ev_t e = raw_buf[raw_tail];
+    raw_tail = (raw_tail + 1) & MOUSE_RAW_MASK;
+    return MOUSE_RAW_VALID | ((uint32_t) e.buttons << 24) |
+           (((uint32_t) e.dy & 0xFFF) << 12) | ((uint32_t) e.dx & 0xFFF);
+}
+
 static void apply_rel(int dx, int dy, uint32_t buttons) {
+    mouse_raw_push(dx, dy, buttons);
     mouse_info.x += dx;
     mouse_info.y += dy;
     mouse_check_bounds();

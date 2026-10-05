@@ -277,6 +277,7 @@ void usb_hid_report_mouse(const uint8_t *rpt, int len) {
     else if(b & 0x02) mouse_info.curr_button = RIGHT_CLICK;
     else if(b & 0x04) mouse_info.curr_button = MIDDLE_CLICK;
     else              mouse_info.curr_button = 0;
+    mouse_raw_push(dx, dy, b & 7);
 }
 
 static void handle_keyboard(hid_dev_t *h, uint8_t *rpt, int len) {

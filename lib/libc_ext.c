@@ -38,6 +38,7 @@ extern unsigned int syscall3(unsigned int n, unsigned int a, unsigned int b, uns
  * conflicts with those rather than matching them. Declared by hand below,
  * same as memset/memcpy already are. */
 extern int strcmp(const char *a, const char *b);
+extern char *strchr(const char *s, int c);
 extern int memcmp(const void *a, const void *b, unsigned int n);
 extern unsigned int strlen(const char *s);
 
@@ -890,9 +891,17 @@ int sched_getaffinity(int pid, unsigned int cpusetsize, void *mask) {
 }
 
 int getentropy(void *buf, unsigned int len) {
-    (void) buf; (void) len;
-    errno = ENOSYS;
-    return -1;
+    if (len > 256) {
+        errno = EIO;                      /* POSIX: at most 256 bytes per call */
+        return -1;
+    }
+    if (len == 0)
+        return 0;
+    if (syscall3(37, (unsigned int) buf, len, 0) != 0) {   /* kernel getrandom */
+        errno = ENOSYS;                   /* a kernel without syscall 37, or a bad buffer */
+        return -1;
+    }
+    return 0;
 }
 
 /* Real, not stubbed -- plain byte-buffer scans, cheap and load-bearing. */
@@ -1237,4 +1246,31 @@ unsigned int wcsxfrm(unsigned int *dst, const unsigned int *src, unsigned int n)
         dst[c] = 0;
     }
     return len;
+}
+
+/* "C" locale collation is byte order, so strcoll() is strcmp(). */
+int strcoll(const char *a, const char *b) {
+    return strcmp(a, b);
+}
+
+char *strtok_r(char *str, const char *delim, char **saveptr) {
+    char *s = str ? str : *saveptr;
+    if (!s)
+        return 0;
+    while (*s && strchr(delim, *s))          /* skip leading delimiters */
+        s++;
+    if (!*s) {
+        *saveptr = 0;
+        return 0;
+    }
+    char *tok = s;
+    while (*s && !strchr(delim, *s))         /* find the end of the token */
+        s++;
+    if (*s) {
+        *s++ = 0;
+        *saveptr = s;
+    } else {
+        *saveptr = 0;
+    }
+    return tok;
 }

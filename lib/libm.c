@@ -135,6 +135,14 @@ float hypotf(float x, float y) { return (float) hypot((double) x, (double) y); }
 float expf(float x) { return (float) x87_exp2((double) x * LOG2E); }
 float logf(float x) { return (float) (x87_log2((double) x) * LN2); }
 
+/* The double-precision siblings of expf()/logf(): same x87 sequences, no float round trip. */
+double atan(double x) { return x87_atan2(x, 1.0); }
+double exp2(double x) { return x87_exp2(x); }
+double exp(double x) { return x87_exp2(x * LOG2E); }
+double log2(double x) { return x87_log2(x); }
+double log(double x) { return x87_log2(x) * LN2; }
+double log10(double x) { return x87_log2(x) * 0.30102999566398120; }   /* log10(2) */
+
 double pow(double x, double y) {
     if (y == 0.0)
         return 1.0;

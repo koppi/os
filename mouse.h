@@ -49,6 +49,22 @@ void mouse_check_bounds();
 /** @brief Enable the PS/2 mouse and install its IRQ handler. */
 void mouse_init();
 
+/** @name Ring-3 pointer events (syscall 36)
+ *
+ * A full-screen program (the one that holds the gfx grab) wants relative
+ * motion plus the button state, not the kernel's clamped screen position. The
+ * driver records each report into a small ring while @ref mouse_raw_mode is on
+ * and the program drains it with @ref mouse_raw_get. One event is packed into
+ * a 32-bit word: bit 31 valid, bits 24..26 buttons (the @c *_CLICK masks),
+ * bits 12..23 signed dy (+down), bits 0..11 signed dx.
+ */
+///@{
+#define MOUSE_RAW_VALID 0x80000000u
+void mouse_raw_mode(int on);                              /**< Start/stop recording; empties the ring. */
+void mouse_raw_push(int dx, int dy, uint32_t buttons);    /**< Record one report (IRQ context). */
+uint32_t mouse_raw_get(void);                             /**< Pop one packed event, or 0 if none. */
+///@}
+
 int mouse_left_button_down();   /**< @return true on a left-button press edge. */
 int mouse_left_button_up();     /**< @return true on a left-button release edge. */
 int mouse_right_button_down();  /**< @return true on a right-button press edge. */

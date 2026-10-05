@@ -15,6 +15,8 @@
 #include <printf.h>
 #include <kconsole.h>
 #include <keyboard.h>
+#include <mouse.h>
+#include <csprng.h>
 #include <vfs.h>
 #include <heap.h>
 #include <rtc.h>
@@ -25,7 +27,7 @@
 #include <io.h>
 
 /** One past the highest valid call number. */
-#define MAX_SYSCALL 36
+#define MAX_SYSCALL 38
 
 /** Set to 1 to log every syscall on the console (default 0: off). */
 #define SYSCALL_TRACE 0
@@ -152,12 +154,14 @@ static uint32_t sys_gfx_open(uint32_t w, uint32_t h) {
     if(!video_grab(w, h))
         return 0;
     keyboard_raw_mode(1);
+    mouse_raw_mode(1);
     return 1;
 }
 
 /** @brief `gfx_close` (#23): hand the screen back to the desktop. */
 static uint32_t sys_gfx_close(void) {
     keyboard_raw_mode(0);
+    mouse_raw_mode(0);
     video_ungrab();
     return 0;
 }
@@ -187,6 +191,33 @@ static uint32_t sys_gfx_blit(const uint8_t *pix) {
  */
 static uint32_t sys_getscan(void) {
     return (uint32_t) keyboard_raw_get();
+}
+
+/**
+ * @brief `getmouse` (#36): pop one pointer event, or 0 if none are queued.
+ *
+ * Non-blocking, like `getscan`. Events are recorded only while the program
+ * holds the gfx grab. Packed as described in mouse.h: bit 31 valid, bits 24..26
+ * buttons, bits 12..23 signed dy (+down), bits 0..11 signed dx.
+ */
+static uint32_t sys_getmouse(void) {
+    return mouse_raw_get();
+}
+
+/**
+ * @brief `getrandom` (#37): fill a user buffer with random bytes from the kernel CSPRNG.
+ *
+ * At most 256 bytes per call (what getentropy() allows), and the buffer must lie wholly
+ * above the kernel's identity-mapped low memory: the pointer comes straight from ring 3 and
+ * the kernel would otherwise write wherever it points. @return 0 on success, -1 on a bad
+ * argument. The generator is the one the SSH server uses -- timing-jitter seeded, best effort,
+ * not audited cryptographic randomness (see csprng.h).
+ */
+static uint32_t sys_getrandom(uint32_t buf, uint32_t len) {
+    if(len == 0 || len > 256 || buf < KERNEL_SPACE_END || buf + len < buf)
+        return (uint32_t) -1;
+    csprng_bytes((uint8_t *) buf, (int) len);
+    return 0;
 }
 
 /**
@@ -325,7 +356,9 @@ static uintptr_t syscalls[] = {
     (uintptr_t) sys_thread_create,   // thread_create 32
     (uintptr_t) sys_thread_join,     // thread_join   33
     (uintptr_t) sys_thread_yield,    // thread_yield  34
-    (uintptr_t) sys_thread_self      // thread_self   35
+    (uintptr_t) sys_thread_self,     // thread_self   35
+    (uintptr_t) sys_getmouse,        // getmouse      36  (relative motion + buttons, gfx grab only)
+    (uintptr_t) sys_getrandom        // getrandom     37  (kernel CSPRNG into a user buffer, <= 256 bytes)
 };
 
 /**
