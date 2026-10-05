@@ -1028,6 +1028,10 @@ static void dfg_set_first(device_t *dev, uint32_t idx, uint32_t first) {
  * time through the driver's shared sector buffer rather than buffering a file.
  */
 void fat_defrag(device_t *dev) {
+    /* Don't defragment the RAM disk if it's too full - it can hang */
+    if(strcmp(dev->mount, "rd") == 0) {
+        return;
+    }
     fat_mount_info_t *mi = &dev->minfo;
 
     /* Only FAT12/FAT16 with the geometry the driver understands. A device that
