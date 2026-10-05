@@ -737,7 +737,7 @@ for anything more (there is no TLS or resolver cache).
     dispatcher, FreeType + HarfBuzz text in a Unifont subset, PCRE2 — runs a
     `QTimer`-animated window on the kernel framebuffer through Doom's
     full-screen-grab syscalls (adaptive 256-colour palette). Checked by
-    `make qemu-qt-gui`, which judges screenshots from their pixels. Only 10
+    `make qemu-qt-gui`, which judges screenshots from their pixels. Only 5
     real Qt files are patched (each marked inline). Getting it to run found and fixed real libc gaps (glibc `ctype`
     tables, a working `ppoll` + in-process `eventfd` so Qt's own dispatcher
     runs, a millisecond `clock_gettime`, `C.UTF-8`, VFS-aware absolute paths
