@@ -33,6 +33,12 @@ SRCS := $(filter-out lib/pthread_glibc.c,$(SRCS))
 # lib/pthread_glibc.c's own clock_gettime()/__errno_location() -- same
 # reasoning and same exclusion as lib/pthread_glibc.c above.
 SRCS := $(filter-out lib/libc_ext.c,$(SRCS))
+# lib/emutls.c, lib/libm.c and lib/pthread.c are userspace-only too (emulated TLS on
+# top of the pthread shim, the x87 libm, and the pthread-shaped shim over the thread
+# syscalls); lib/Makefile builds them with the user flags. Left in SRCS they only
+# "worked" while a stale lib/*.o from that build sat there for the kernel link to
+# pick up, and broke every clean kernel build (host <string.h>, -pedantic-errors).
+SRCS := $(filter-out lib/emutls.c lib/libm.c lib/pthread.c,$(SRCS))
 AP_BOOT_BIN = ap_boot_bin.o
 OBJS = $(addsuffix .o,$(basename $(SRCS))) font.o $(AP_BOOT_BIN)
 KERNEL = kernel.elf
