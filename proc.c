@@ -19,6 +19,7 @@
 #include <video.h>
 #include <keyboard.h>
 #include <snd.h>
+#include <gdt.h>
 
 /*
  * Process in memory
@@ -134,6 +135,7 @@ static int start_proc_locked(char *name, char *arguments) {
 
     proc->threads = 1;
     proc->thread_slots = 1;   /* slot 0 is this main thread */
+    proc->main_thread = proc->thread_list;
 
     proc->thread_list->state = PROC_ACTIVE;
     proc->state = PROC_ACTIVE;
@@ -720,6 +722,7 @@ void remove_proc(int pid) {
          * interactive workload. See apps/lua/PORTING.md. */
 
         cur->thread_list = thread->next;
+        gdt_tls_free(thread->tls_slot);
         kfree(thread->fpu_state_raw);
         kfree(thread);
     }
@@ -756,8 +759,8 @@ int start_kernel_proc(char *name, void (*thread)(void)) {
      * programs' address space: every `link.lds` in apps/ links at `. = 8M`, and
      * load_elf_relocate() maps and copies the image (e.g. /rd/zsh, 27 KB) right
      * over these live stacks, corrupting the running kernel thread. Place them
-     * in the free identity-mapped window 0x440000..0x600000, just past the
-     * page-table storage window (page_start .. 0x43c000). Bump the base so a
+     * in the free identity-mapped window KPROC_STACK_BASE..KPROC_STACK_END
+     * (mm.h), just past the page-table storage window. Bump the base so a
      * second (third, ...) kernel thread does not land on the previous one. */
     static uint32_t kproc_stack_base = KPROC_STACK_BASE;
 

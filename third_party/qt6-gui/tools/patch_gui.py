@@ -39,10 +39,11 @@ if not already_gui:
 # a runtime kill-switch for this (QT_NO_GUI_THREADPOOL); koppios has no
 # environment, so make it unconditional. Callers fall back to the serial path.
 # Still required after the kernel's thread stack/heap overlap was fixed (PR #9):
-# patch_tls.py turned every thread_local into a plain static, so QThreadData::current()
-# is a single global and the first pool worker makes the main thread "see" the worker's
-# thread data (tried 2026-10-05: sendEvent asserts "owned by a different thread").
-# Real threads need real TLS first (e.g. -femulated-tls + lib/emutls.c).
+# patch_tls.py used to turn every thread_local into a plain static, so
+# QThreadData::current() was one shared global and the first pool worker made the
+# main thread "see" the worker's thread data (tried 2026-10-05: sendEvent asserts
+# "owned by a different thread"). That reason is gone -- TLS is real now
+# (set_thread_area + lib/tls.c), and the seven thread_local patches are dropped.
 p2 = sys.argv[1] + "/src/corelib/thread/qthreadpool.cpp"
 t = open(p2).read()
 if "koppios" not in t:

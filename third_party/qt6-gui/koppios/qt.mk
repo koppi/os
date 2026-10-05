@@ -127,7 +127,7 @@ $(B)/libft.a: $(FT_OBJS)
 QT_LIBS_gui     := $(B)/libqt.a $(B)/libhb.a $(B)/libpcre2.a $(B)/libft.a
 QT_LIBS_widgets := $(B)/libqtwidgets.a $(QT_LIBS_gui)
 
-KLIB := $(addprefix $(LIB)/,cxx_start.o mutex.o system_calls.o unistd.o stdlib.o string.o stdio.o \
+KLIB := $(addprefix $(LIB)/,cxx_start.o tls.o mutex.o system_calls.o unistd.o stdlib.o string.o stdio.o \
   cxxabi.o cxx_string.o cxx_rbtree.o cxx_hashtable.o cxx_chrono.o cxx_pmr.o cxx_condvar.o \
   cxx_list.o pthread_glibc.o libm.o libc_ext.o emutls.o)
 
@@ -139,7 +139,7 @@ $$(B)/app/$(1).o: $(2)
 	@mkdir -p $$(@D)
 	@echo "  APP  $(2)"
 	@$$(CXX) $$(QT_CXXFLAGS) -MMD -MP -c $$< -o $$@
-$(1): $$(B)/app/$(1).o $$(KOPPIOS_OBJS) $$(QT_LIBS_$(3)) $$(Q)/koppios/qt_app.lds | klib
+$(1): $$(B)/app/$(1).o $$(KOPPIOS_OBJS) $$(QT_LIBS_$(3)) $$(Q)/koppios/qt_app.lds $$(KLIB)
 	@echo "  LD   $(1)"
 	@$$(CXX) -m32 -nostdlib -no-pie -Wl,-T,$$(Q)/koppios/qt_app.lds -Os -Wl,--gc-sections -Wl,--no-keep-memory \
 	  -o $$(B)/app/$(1).unstripped $$(B)/app/$(1).o $$(KOPPIOS_OBJS) \
@@ -150,6 +150,12 @@ endef
 
 klib:
 	@$(MAKE) -s -C $(LIB)
+
+# lib/Makefile recompiles all of lib/ on every run, so after `klib` the objects are always new
+# and an app relinks whenever it is built. (As an order-only prerequisite `klib` ran but a change
+# in lib/ never relinked the app: it kept the old runtime.)
+$(KLIB): klib
+	@:
 
 qt-clean:
 	rm -rf $(B)

@@ -165,7 +165,7 @@ struct QPropertyDelayedNotifications
     }
 };
 
-/* koppios addition, not upstream Qt: single-threaded closure, no %gs TLS (see .qt6-gui-bootstrap/patch_tls.py) */ Q_CONSTINIT static QBindingStatus bindingStatus;
+Q_CONSTINIT static thread_local QBindingStatus bindingStatus;
 
 /*!
     \since 6.2

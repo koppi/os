@@ -39,6 +39,27 @@ void gdt_load_ap(void);
  */
 int gdt_tss_entry(int index, uint32_t base);
 
+/** Number of per-thread TLS segment descriptors (one GDT slot per user thread that
+ *  called `set_thread_area`). */
+#define GDT_TLS_SLOTS 512
+
+/** @return The ring-3 selector for TLS slot @p slot (a GDT index from @ref gdt_tls_alloc). */
+#define GDT_TLS_SELECTOR(slot) ((uint16_t) (((slot) << 3) | 3))
+
+/**
+ * @brief Claim a free TLS segment descriptor and point it at @p base.
+ *
+ * The descriptor is a flat ring-3 read/write data segment (limit 4 GiB) whose base is the
+ * thread's TLS pointer, so `%gs:0` is the thread control block and `%gs:-N` its thread-local
+ * variables, exactly as ELF's local-exec model for i386 expects.
+ * @return The GDT index (use @ref GDT_TLS_SELECTOR), or 0 if all slots are taken.
+ */
+int gdt_tls_alloc(uint32_t base);
+/** @brief Re-point an allocated TLS slot at a new @p base. */
+void gdt_tls_set_base(int slot, uint32_t base);
+/** @brief Release a TLS slot (and invalidate its descriptor). Ignores 0. */
+void gdt_tls_free(int slot);
+
 /**
  * @brief Fill one GDT entry.
  * @param index  Entry index.

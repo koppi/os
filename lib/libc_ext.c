@@ -61,7 +61,9 @@ int atexit(void (*function)(void)) {
     return 0;
 }
 
-int __cxa_thread_atexit(void (*function)(void *), void *arg, void *dso) {
+/* Weak: a program linked with lib/tls.o gets the real one, which runs the destructors when
+ * the thread ends; without it there are no thread_local objects to register anyway. */
+__attribute__((weak)) int __cxa_thread_atexit(void (*function)(void *), void *arg, void *dso) {
     (void) function;
     (void) arg;
     (void) dso;

@@ -1437,7 +1437,7 @@ QByteArray QTzTimeZonePrivate::staticSystemTimeZoneId()
         ianaId = ianaId.sliced(1);
 
     if (ianaId.isEmpty()) {
-        /* koppios addition, not upstream Qt: single-threaded closure, no %gs TLS (see .qt6-gui-bootstrap/patch_tls.py) */ static ZoneNameReader reader;
+        Q_CONSTINIT thread_local static ZoneNameReader reader;
         ianaId = reader.name();
     }
 

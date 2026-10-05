@@ -19,11 +19,10 @@ namespace chipnomad {
  * The short version: real exceptions do link against this kernel (libsupc++
  * and libgcc_eh both do, with the image's .eh_frame registered by hand), but
  * the distribution's libsupc++ is built with -fstack-protector and reads its
- * canary from %gs:0x14. This kernel's segmentation is flat -- a ring-3 %gs
- * has base 0 -- so that read lands on linear address 0x14, which is not
- * mapped, and __gxx_personality_v0 page-faults on the first throw. Giving it
- * somewhere to read means per-process TLS descriptors in the GDT, reloaded on
- * every context switch: a kernel feature, not something a port decides.
+ * canary from %gs:0x14. That address is the thread pointer of the ELF TLS
+ * block (syscall 38, set_thread_area), not a compiler-inserted canary, so the
+ * unwinder's own stack-protector check has nothing valid to compare against
+ * and real exceptions still cannot be used here.
  *
  * What this file does with exceptions is narrow enough that the substitution
  * is faithful: every throw is `throw <const char *>`, every one is caught by

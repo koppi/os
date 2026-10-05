@@ -129,11 +129,13 @@ Real exceptions *do* link against this kernel. `libsupc++.a` and
 answers "no shared objects"; a test program built that way reaches `main`.
 What it does not survive is the first `throw`: the distribution's
 `libsupc++` is compiled with `-fstack-protector`, so `__gxx_personality_v0`
-and `class_type_info` read their canary from `%gs:0x14`, and this kernel's
-segmentation is flat — a ring-3 `%gs` has base 0, so that lands on linear
-address `0x14` and page-faults. Fixing it properly means per-process TLS
-descriptors in the GDT, reloaded on every context switch: a kernel feature,
-not something a port gets to decide.
+and `class_type_info` read their canary from `%gs:0x14`, which is the TLS
+segment's thread pointer, not a compiler-inserted canary. The kernel now hands
+out a per-thread `%gs` (syscall 38, see the top-level README's **Thread-local
+storage**), so that address is inside this thread's TLS block instead of
+faulting — but the value there is not the canary the library expects, so the
+unwinder's own stack-protector check still has nothing valid to compare
+against.
 
 So the app is built `-fno-exceptions` and `project_io.cpp` uses
 `setjmp`/`longjmp` (both real, in `lib/libc_ext.c`). The substitution is

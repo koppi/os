@@ -2543,7 +2543,7 @@ public:
     { return std::find(locations.begin(), locations.end(), method) != locations.end(); }
 };
 
-/* koppios addition, not upstream Qt: single-threaded closure, no %gs TLS (see .qt6-gui-bootstrap/patch_tls.py) */ Q_CONSTINIT static FlaggedDebugSignatures flaggedSignatures = {};
+Q_CONSTINIT static thread_local FlaggedDebugSignatures flaggedSignatures = {};
 } // unnamed namespace
 
 const char *qFlagLocation(const char *method)

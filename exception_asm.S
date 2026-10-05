@@ -124,10 +124,13 @@ syscall_handle:
     push %esp
     call syscall_disp
     addl $4, %esp
-    pop %gs
-    pop %fs
-    pop %es
+    /* Reverse of the pushes above (ds was pushed last). With every segment register
+     * holding the same selector the old gs/fs/es/ds order was harmless; a per-thread TLS
+     * selector in %gs would have come back in %ds. */
     pop %ds
+    pop %es
+    pop %fs
+    pop %gs
     popa
     iret
     .size syscall_handle, .-syscall_handle

@@ -423,7 +423,7 @@ QLoggingRegistry::installFilter(QLoggingCategory::CategoryFilter filter)
 
 QLoggingRegistry *QLoggingRegistry::instance()
 {
-    /* koppios addition, not upstream Qt: single-threaded closure, no %gs TLS (see .qt6-gui-bootstrap/patch_tls.py) */ static bool recursionGuard = false;
+    Q_CONSTINIT thread_local bool recursionGuard = false;
     if (recursionGuard)
         return nullptr;
     QScopedValueRollback<bool> rollback(recursionGuard, true);

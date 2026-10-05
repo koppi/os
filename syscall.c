@@ -25,9 +25,10 @@
 #include <video.h>
 #include <snd.h>
 #include <io.h>
+#include <gdt.h>
 
 /** One past the highest valid call number. */
-#define MAX_SYSCALL 38
+#define MAX_SYSCALL 39
 
 /** Set to 1 to log every syscall on the console (default 0: off). */
 #define SYSCALL_TRACE 0
@@ -317,6 +318,28 @@ static uint32_t sys_thread_self(void) {
         return (uint32_t) -1;
     return (uint32_t) cur->thread_list->pid;
 }
+
+/** @brief `set_thread_area` (#38): give the calling thread a TLS segment at @p base.
+ *
+ * Allocates (first call) or re-points (later calls) a per-thread GDT descriptor and returns
+ * its ring-3 selector; the caller loads it into %gs itself (`movw %ax, %gs`). The interrupt
+ * and syscall stubs save and restore %gs with the rest of the frame, so every thread keeps its
+ * own base across context switches. Released when the thread exits (stop_thread) or the
+ * process is reaped (remove_proc).
+ * @return The selector, or -1 if no slot is free. */
+static uint32_t sys_set_thread_area(uint32_t base) {
+    process_t *cur = current_user_proc();
+    if(!cur)
+        return (uint32_t) -1;
+    thread_t *t = cur->thread_list;
+    if(t->tls_slot)
+        gdt_tls_set_base(t->tls_slot, base);
+    else
+        t->tls_slot = gdt_tls_alloc(base);
+    if(!t->tls_slot)
+        return (uint32_t) -1;
+    return GDT_TLS_SELECTOR(t->tls_slot);
+}
 ///@}
 
 /** Call number → implementation. NULL entries are unimplemented. */
@@ -358,7 +381,8 @@ static uintptr_t syscalls[] = {
     (uintptr_t) sys_thread_yield,    // thread_yield  34
     (uintptr_t) sys_thread_self,     // thread_self   35
     (uintptr_t) sys_getmouse,        // getmouse      36  (relative motion + buttons, gfx grab only)
-    (uintptr_t) sys_getrandom        // getrandom     37  (kernel CSPRNG into a user buffer, <= 256 bytes)
+    (uintptr_t) sys_getrandom,       // getrandom     37  (kernel CSPRNG into a user buffer, <= 256 bytes)
+    (uintptr_t) sys_set_thread_area  // set_thread_area 38 (per-thread %gs segment for ELF TLS)
 };
 
 /**

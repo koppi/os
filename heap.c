@@ -344,7 +344,7 @@ process_t *current_user_proc(void) {
         cur = proc_by_cr3(cr3);
 
     if (cur && cur->thread_list && cur->pdir != get_kern_directory() &&
-        cur->thread_list->heap >= 0x400000)
+        proc_heap_thread(cur)->heap >= 0x400000)
         return cur;
     return 0;
 }
@@ -353,13 +353,13 @@ void *umalloc_sys(size_t len) {
     process_t *cur = current_user_proc();
     if(!cur)
         return 0;
-    return umalloc_locked(len, cur->thread_list, cur->pdir);
+    return umalloc_locked(len, proc_heap_thread(cur), cur->pdir);
 }
 
 void ufree_sys(void *ptr) {
     process_t *cur = current_user_proc();
     if(cur)
-        ufree_locked(ptr, cur->thread_list);
+        ufree_locked(ptr, proc_heap_thread(cur));
 }
 
 void *urealloc_sys(void *ptr, size_t nsize) {
@@ -378,7 +378,7 @@ void *urealloc_sys(void *ptr, size_t nsize) {
         return 0;
 
     uint32_t f = spin_lock(&uheap_lock);
-    int grown = urealloc_inplace((heap_info_t *) cur->thread_list->heap, h, nsize);
+    int grown = urealloc_inplace((heap_info_t *) proc_heap_thread(cur)->heap, h, nsize);
     spin_unlock(&uheap_lock, f);
     if(grown)
         return ptr;

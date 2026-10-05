@@ -55,6 +55,7 @@ mcopy -i "$IMG" -D o apps/hello-set/helloset ::helloset
 mcopy -i "$IMG" -D o apps/hello-thread/hellothr ::hellothr
 mcopy -i "$IMG" -D o apps/hello-pthread/hellopth ::hellopth
 mcopy -i "$IMG" -D o apps/hello-theap/thrheap ::thrheap
+mcopy -i "$IMG" -D o apps/hello-tls/tlsthr ::tlsthr
 mcopy -i "$IMG" -D o apps/hello-qt/helloqt        ::helloqt
 mcopy -i "$IMG" -D o apps/01/01           ::tst
 mcopy -i "$IMG" -D o apps/example/example ::example

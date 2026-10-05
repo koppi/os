@@ -12,7 +12,7 @@ Pipeline, all against a throw-away *scratch* directory (use `$TMPDIR`; it takes
    `~/.cache/qgcoder-wasm/Qt/6.10.2/gcc_64/include`), generates the CamelCase
    forwarding headers (`gen_camel.py`, then `redirect_forwards.sh` so a
    `QtWidgets` forward never shadows a real `QtGui` one), applies the source
-   patches (`patch_osdetect.py`, `patch_tls.py`, `patch_gui.py`,
+   patches (`patch_osdetect.py`, `patch_gui.py`,
    `patch_minimal.py`, `patch_widgets.py`) and runs `genmoc.sh`. The QtWidgets
    feature set is trimmed there by hand-editing `qtwidgets-config*.h` (see the
    vendored README for why `menu` and `shortcut` must stay on).

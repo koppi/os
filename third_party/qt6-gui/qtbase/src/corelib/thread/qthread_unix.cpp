@@ -127,7 +127,7 @@ enum { ThreadPriorityResetFlag = 0x80000000 };
 // the QThreadData object must still be alive when the plugins do unload.
 
 // Always access this through the {get,set,clear}_thread_data() functions.
-/* koppios addition, not upstream Qt: single-threaded closure, no %gs TLS (see .qt6-gui-bootstrap/patch_tls.py) */ Q_CONSTINIT static QThreadData *currentThreadData = nullptr;
+Q_CONSTINIT static thread_local QThreadData *currentThreadData = nullptr;
 
 static void destroy_current_thread_data(QThreadData *data)
 {

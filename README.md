@@ -128,9 +128,15 @@ each is on.
   clamped to the kernel heap at 96 MiB), below the boot RAM disk. A slot is
   guard / 256 KiB user stack / guard / 16 KiB kernel stack / guard / a 512 KiB
   heap window (`PROC_THREAD_*` in [`proc.h`](proc.h)), 36 of them per process.
-  A thread's own malloc arena still grows in place but only to the end of its
-  window (`thread_t::heap_ceiling`, checked by `heap_grow`), so it cannot run
-  into the next slot either. `thread_create` checks the slot is wholly
+  **One heap per process, not one per thread.** Every `malloc`/`free`/
+  `realloc` and `fopen` handle of a process resolves to the *main* thread's
+  arena (`proc_heap_thread()` in [`proc.h`](proc.h)): memory one thread
+  allocates has to be usable and freeable by another, and has to outlive the
+  thread that allocated it, which a per-thread arena cannot promise. Each
+  thread still has its own private arena inside its slot; it is simply no
+  longer the one malloc uses. The arena still grows in place, but only to the
+  end of its window (`thread_t::heap_ceiling`, checked by `heap_grow`), so it
+  cannot run into the next slot either. `thread_create` checks the slot is wholly
   unmapped before building in it, unwinds a half-built slot, and returns `-1`
   — repeatably, with nothing remapped or leaked — when the slots are used up.
   Slots are not recycled (an exited thread's kernel stack is deliberately
@@ -172,6 +178,48 @@ each is on.
   specifically, a 5,000-item producer/consumer over a condition variable
   (proves no lost wakeup and no hang), and TLS correctness across 4 threads
   (each must read back only its own value). `PASS`, 5 separate boot runs.
+  `pthread_key_create` keeps its destructor and runs it at thread end
+  (`__pthread_run_key_dtors`, up to four rounds as POSIX asks, so a
+  destructor may set the value again), after the thread's `thread_local`
+  destructors and before its TLS block goes away. Qt depends on this:
+  `QThreadData`'s cleanup, which is what ends `QThread::wait()`, is a
+  pthread key destructor.
+* **Thread-local storage**: real ELF `thread_local` / `__thread`, i.e. the
+  i386 **local-exec** model (`%gs:-N` for a variable, `%gs:0` for the thread
+  pointer) — GCC 15 has no `-femulated-tls` for this target, so the real
+  thing is the only option, and a variable left at address ~0 page-faults.
+  Three pieces:
+  * the kernel hands out a per-thread `%gs`: syscall 38
+    (`set_thread_area`) allocates (first call) or re-points (later calls) a
+    GDT descriptor after the TSS slots — a flat ring-3 read/write data
+    segment whose base is the thread pointer (`gdt_tls_alloc`/`_set_base`/
+    `_free` in [`gdt.c`](gdt.c)) and returns its selector, which libc loads
+    into `%gs`. The interrupt and syscall stubs already save and restore `%gs`
+    with the rest of the frame, so every thread keeps its own base across
+    context switches; a slot is released when the thread exits
+    (`stop_thread`) or the process is reaped (`remove_proc`).
+  * the linker script defines the TLS segment image — `.tdata`/`.tbss` and
+    the symbols `__tdata_start`/`__tdata_end`/`__tbss_end`, e.g.
+    [`qt_app.lds`](third_party/qt6-gui/koppios/qt_app.lds) and
+    [`hello_tls.lds`](apps/hello-tls/hello_tls.lds). `.tbss` takes no address
+    space of its own, and the segment alignment must stay 16 (what
+    [`lib/tls.c`](lib/tls.c) lays the per-thread block out for; the script
+    asserts it).
+  * [`lib/tls.c`](lib/tls.c) builds one copy per thread as
+    `[ .tdata | .tbss ][ TCB ]` (variant II: the linker computes offsets
+    *below* the thread pointer), sets `%gs`, and runs the destructors that
+    `__cxa_thread_atexit` registers, newest first, when the thread ends —
+    the main thread's from `_start` after `main()` returns.
+  Everything is weak-referenced from its callers (`cxx_start.c`,
+  `pthread_glibc.c`), so a program whose linker script has no TLS symbols
+  never calls into any of this and keeps `%gs` flat. Note that
+  `-fno-use-cxa-atexit` makes GCC silently drop the destructor registration
+  entirely, so a program testing this must not pass it (every other C++ app
+  here does, harmlessly, since it has no `thread_local` objects).
+  [`apps/hello-tls`](apps/hello-tls) is the regression test: a `thread_local`
+  from `.tdata` and one from `.tbss`, a `thread_local` object with a
+  constructor and a destructor, per-thread copies that survive context
+  switches, and thread slots created and reclaimed repeatedly.
 * `int 0x72` syscall gate — [`syscall.c`](syscall.c). Implemented calls:
   `printf`, `gets`/`scanf`, `fork`, `exit`, process return, `fopen`, `fclose`,
   `malloc`, `free`, `realloc`, `write`, `fread`, `time`, `clock`, `spit`
@@ -499,12 +547,15 @@ for anything more (there is no TLS or resolver cache).
   `getmouse`(36, one raw pointer event — relative motion + buttons — while the
   program holds the full-screen grab; non-blocking, like `getscan`) and
   `getrandom`(37, up to 256 bytes from the kernel CSPRNG; libc's `getentropy`
-  is built on it) —
+  is built on it) and `set_thread_area`(38, a per-thread ring-3 `%gs` segment
+  for ELF thread-local storage; returns the selector to load — see
+  **Thread-local storage**) —
   see [`syscall.c`](syscall.c). `write_file()` in [`lib/`](lib) wraps #16;
   17-21 back [`apps/zsh`](apps/zsh), 22-31 back [`apps/doom`](apps/doom), and
   32-35 back [`apps/hello-thread`](apps/hello-thread) /
-  [`apps/hello-pthread`](apps/hello-pthread), and 36-37 back
-  [`apps/hello-qt-widgets`](apps/hello-qt-widgets).
+  [`apps/hello-pthread`](apps/hello-pthread), 36-37 back
+  [`apps/hello-qt-widgets`](apps/hello-qt-widgets) and 38 back
+  [`apps/hello-tls`](apps/hello-tls).
 * The ELF loader ([`elf.c`](elf.c)) maps every page of a `PT_LOAD` segment to
   its own frame and covers the `.bss` tail, so multi-page ring-3 binaries load.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
@@ -634,11 +685,22 @@ for anything more (there is no TLS or resolver cache).
     each filled with a position-dependent pattern), then creates and joins a
     thread and re-reads every byte; then three concurrent threads, each
     growing its own arena; then grows the main heap *while* a thread is alive;
-    then lets a thread malloc until it fails (it must stop at its own heap
-    ceiling, not grow into the next slot, where a sentinel thread is holding a
-    pattern block); then creates threads until `thread_create` refuses and
+    then has one thread allocate 200 × 64 KiB from the process-wide heap
+    while a neighbour thread holds a pattern block and its own stack (both
+    must find every byte intact), then passes a block *across* threads in
+    both directions — a thread allocates 300 KiB and exits, the block must
+    still be there for the main thread to verify and free, and vice versa;
+    then creates threads until `thread_create` refuses and
     checks it fails with `-1`, repeatably, with everything intact. Before the fix it died with
     a not-present page fault inside the heap; now `PASS`.
+  * [`apps/hello-tls`](apps/hello-tls) — regression test for real ELF
+    thread-local storage (staged as `tlsthr`; see **Thread-local storage**
+    above). Built like Qt's threaded code is — against the real system
+    `<pthread.h>`, with `lib/tls.c` and a linker script that defines the TLS
+    segment symbols: `thread_local` variables from `.tdata` and `.tbss`, a
+    `thread_local` object with a constructor and a destructor, one private
+    copy per thread that survives context switches, and thread slots created
+    and reclaimed over and over.
   * [`apps/hello-qt`](apps/hello-qt) — **real Qt6** (staged as `helloqt`):
     genuine, vendored Qt 6.8.4 `QString` source (see
     [`third_party/qt6`](../third_party/qt6)) — not a reimplementation —
@@ -675,13 +737,14 @@ for anything more (there is no TLS or resolver cache).
     dispatcher, FreeType + HarfBuzz text in a Unifont subset, PCRE2 — runs a
     `QTimer`-animated window on the kernel framebuffer through Doom's
     full-screen-grab syscalls (adaptive 256-colour palette). Checked by
-    `make qemu-qt-gui`, which judges screenshots from their pixels. Only 11
+    `make qemu-qt-gui`, which judges screenshots from their pixels. Only 10
     real Qt files are patched (each marked inline). Getting it to run found and fixed real libc gaps (glibc `ctype`
     tables, a working `ppoll` + in-process `eventfd` so Qt's own dispatcher
     runs, a millisecond `clock_gettime`, `C.UTF-8`, VFS-aware absolute paths
     in the Qt file engine) and a kernel bug (a secondary thread's stack can
-    overlap a grown heap; fixed since, but the Qt port still cannot run worker
-    threads because its `thread_local`s are plain statics).
+    overlap a grown heap, fixed in PR #9). Its `thread_local`s are real now
+    (see **Thread-local storage**), so Qt's own per-thread state no longer has
+    to be flattened into statics to make the port work.
   * [`apps/hello-qt-widgets`](apps/hello-qt-widgets) — **real QtWidgets** on
     the same vendored tree (staged as `hqtwid`, opt-in, needs a framebuffer
     boot): a `QApplication` with tabs, push/tool/check/radio buttons, sliders,

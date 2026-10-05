@@ -102,10 +102,55 @@ int *__errno_location(void) {
 /* Thread create/join/identity                                          */
 /* -------------------------------------------------------------------- */
 
+/* <stdlib.h> would collide with system_calls.h's system(); the kernel's own malloc/free are
+ * all that is wanted here. */
+extern void *malloc(size_t size);
+extern void free(void *ptr);
+
+/* lib/tls.c, weak: a program without a TLS segment never links it. */
+extern int __tls_thread_init(void) __attribute__((weak));
+extern void __tls_thread_exit(void) __attribute__((weak));
+
+/* A new thread gets its TLS segment (and %gs) before the user's function runs; when that
+ * function returns (or the thread calls pthread_exit) its thread_local destructors run, then its
+ * pthread key destructors, and the segment is freed. */
+extern void __pthread_run_key_dtors(void);
+
+static void thread_finish(void) {
+    if (__tls_thread_exit) {
+        __tls_thread_exit();        /* C++ destructors, then __pthread_run_key_dtors(), then free */
+    } else {
+        __pthread_run_key_dtors();  /* a program without a TLS segment still has keys */
+    }
+}
+
+struct thread_start {
+    void *(*fn)(void *);
+    void *arg;
+};
+
+static void *thread_trampoline(void *p) {
+    struct thread_start ts = *(struct thread_start *) p;
+    free(p);
+    if (__tls_thread_init) {
+        __tls_thread_init();
+    }
+    void *r = ts.fn(ts.arg);
+    thread_finish();
+    return r;
+}
+
 int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_routine)(void *), void *arg) {
     (void) attr;
-    int tid = thread_create((void *) start_routine, arg);
+    struct thread_start *ts = malloc(sizeof(*ts));
+    if (!ts) {
+        return 1;
+    }
+    ts->fn = start_routine;
+    ts->arg = arg;
+    int tid = thread_create((void *) thread_trampoline, ts);
     if (tid < 0) {
+        free(ts);
         return 1; /* POSIX wants a positive error number; we have no
                     * distinct errno values to report here. */
     }
@@ -143,6 +188,7 @@ int pthread_equal(pthread_t a, pthread_t b) {
 
 void pthread_exit(void *retval) {
     (void) retval;
+    thread_finish();
     syscall3(4, 0, 0, 0); /* exit / stop_thread(): does not return */
     for (;;) {
     }
@@ -398,6 +444,8 @@ int pthread_cond_broadcast(pthread_cond_t *cond) {
 /* -------------------------------------------------------------------- */
 
 #define PT_MAX_TLS 256
+#define PT_MAX_KEYS 256
+#define PT_DESTRUCTOR_ITERATIONS 4
 
 typedef struct {
     int used;
@@ -409,6 +457,9 @@ typedef struct {
 static tls_slot_t g_tls[PT_MAX_TLS];
 static mutex_t g_tls_lock;
 static unsigned int g_next_key = 1;
+/* Destructor per key (POSIX: run at thread exit for every key whose value is non-NULL). Qt
+ * depends on this: QThreadData's cleanup, which is what ends QThread::wait(), runs from one. */
+static void (*g_key_dtor[PT_MAX_KEYS])(void *);
 static int g_tls_lock_init = 0;
 
 static void tls_lock_ensure_init(void) {
@@ -456,10 +507,12 @@ static void *tls_get(int tid, pthread_key_t key) {
 }
 
 int pthread_key_create(pthread_key_t *key, void (*destructor)(void *)) {
-    (void) destructor;
     tls_lock_ensure_init();
     mutex_lock(&g_tls_lock);
     *key = g_next_key++;
+    if (*key < PT_MAX_KEYS) {
+        g_key_dtor[*key] = destructor;
+    }
     mutex_unlock(&g_tls_lock);
     return 0;
 }
@@ -467,6 +520,9 @@ int pthread_key_create(pthread_key_t *key, void (*destructor)(void *)) {
 int pthread_key_delete(pthread_key_t key) {
     tls_lock_ensure_init();
     mutex_lock(&g_tls_lock);
+    if (key < PT_MAX_KEYS) {
+        g_key_dtor[key] = 0;
+    }
     for (int i = 0; i < PT_MAX_TLS; i++) {
         if (g_tls[i].used && g_tls[i].key == key) {
             g_tls[i].used = 0;
@@ -474,6 +530,44 @@ int pthread_key_delete(pthread_key_t key) {
     }
     mutex_unlock(&g_tls_lock);
     return 0;
+}
+
+/* Called once per ending thread (thread_trampoline / pthread_exit, via __tls_thread_exit so the
+ * thread's TLS block is still alive: a destructor may touch thread_local variables). Like POSIX:
+ * up to PT_DESTRUCTOR_ITERATIONS rounds, since a destructor may set a value again. Then the
+ * thread's table slots are released so dead thread ids do not fill the table. */
+void __pthread_run_key_dtors(void) {
+    tls_lock_ensure_init();
+    int self = thread_self();
+    for (int round = 0; round < PT_DESTRUCTOR_ITERATIONS; round++) {
+        int ran = 0;
+        for (int i = 0; i < PT_MAX_TLS; i++) {
+            mutex_lock(&g_tls_lock);
+            void (*dtor)(void *) = 0;
+            void *val = 0;
+            if (g_tls[i].used && g_tls[i].tid == self && g_tls[i].value && g_tls[i].key < PT_MAX_KEYS
+                && g_key_dtor[g_tls[i].key]) {
+                dtor = g_key_dtor[g_tls[i].key];
+                val = (void *) g_tls[i].value;
+                g_tls[i].value = 0;
+            }
+            mutex_unlock(&g_tls_lock);
+            if (dtor) {
+                dtor(val);              /* not under the lock: it may call pthread_setspecific */
+                ran = 1;
+            }
+        }
+        if (!ran) {
+            break;
+        }
+    }
+    mutex_lock(&g_tls_lock);
+    for (int i = 0; i < PT_MAX_TLS; i++) {
+        if (g_tls[i].used && g_tls[i].tid == self) {
+            g_tls[i].used = 0;
+        }
+    }
+    mutex_unlock(&g_tls_lock);
 }
 
 int pthread_setspecific(pthread_key_t key, const void *value) {

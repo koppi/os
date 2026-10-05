@@ -2053,7 +2053,7 @@ static void ungrabMessageHandler() { }
 
 #elif defined(Q_COMPILER_THREAD_LOCAL)
 
-/* koppios addition, not upstream Qt: single-threaded closure, no %gs TLS (see .qt6-gui-bootstrap/patch_tls.py) */ Q_CONSTINIT static bool msgHandlerGrabbed = false;
+Q_CONSTINIT static thread_local bool msgHandlerGrabbed = false;
 
 static bool grabMessageHandler()
 {

@@ -28,6 +28,7 @@ typedef struct thread {
     uint32_t heap_ceiling;          /**< Highest address (exclusive) heap_grow() may extend the arena to. */
     uint32_t image_base;            /**< Lowest vaddr of the loaded image. */
     uint32_t image_size;            /**< Image span, page-rounded. */
+    int tls_slot;                   /**< GDT index of this thread's TLS segment (`set_thread_area`), 0 if it has none. */
     uint8_t *fpu_state;            /**< 16-byte-aligned FXSAVE area (@ref FPU_STATE_SIZE). */
     void *fpu_state_raw;          /**< Unaligned base of @c fpu_state (for @c kfree). */
     struct thread *next;            /**< Next thread in the ring. */

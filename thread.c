@@ -13,6 +13,7 @@
 #include <fpu.h>
 
 #include <spinlock.h>
+#include <gdt.h>
 
 /** Next thread id to hand out (1 is the console's main thread). */
 static int pid = 2;
@@ -141,6 +142,11 @@ void stop_thread(int code) {
         vmm_unmap(cur->pdir, thread->stack_limit - (p + 1) * PAGE_SIZE);
     for(vmm_addr_t va = thread->heap; va < thread->heap_limit; va += PAGE_SIZE)
         vmm_unmap(cur->pdir, va);
+
+    /* Its TLS segment goes back to the pool: this thread never returns to ring 3, and the
+     * unlinked control block is never reaped by remove_proc(), so nothing else frees it. */
+    gdt_tls_free(thread->tls_slot);
+    thread->tls_slot = 0;
 
     /* The kernel-stack frames and the thread control block are intentionally
      * leaked: this CPU is still executing on this thread's stack and

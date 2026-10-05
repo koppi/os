@@ -272,9 +272,8 @@ done
 
 bash "$BOOT/redirect_forwards.sh" "$SCRATCH"
 
-echo "=== thread_local -> static patches (no %gs TLS on this kernel) ==="
+echo "=== source patches ==="
 python3 "$BOOT/patch_osdetect.py" "$QTBASE"
-python3 "$BOOT/patch_tls.py" "$QTBASE"
 python3 "$BOOT/patch_gui.py" "$QTBASE"
 python3 "$BOOT/patch_minimal.py" "$QTBASE"
 python3 "$BOOT/patch_widgets.py" "$QTBASE"

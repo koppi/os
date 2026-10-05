@@ -19,8 +19,10 @@
  *   2. several concurrent threads, each with its own stack and heap growth
  *   3. grow the main heap *while* a thread is alive: the heap must not run
  *      into the live thread's stack
- *   4. a thread that mallocs until it fails must hit its own heap ceiling,
- *      not grow into the thread slot next to it
+ *   4. a thread that mallocs a lot gets it from the process-wide heap (one arena for all
+ *      threads), without touching a neighbour thread's block or stack
+ *   4b. memory a thread allocated outlives it and another thread can free it, and the reverse
+ *      (what any threaded program does, Qt's events and strings included)
  *   5. keep creating threads until thread_create refuses: it must fail with -1
  *      and leave everything intact (the per-process slot region is finite)
  */
@@ -143,11 +145,10 @@ extern "C" void *worker(void *arg) {
     return 0;
 }
 
-/* Phase 4: a thread's heap grows in place, so a thread that keeps allocating
- * runs up toward whatever is above its arena. `hog` is created first (the
- * lower slot) and allocates until malloc gives up; `sentinel` (the next slot up,
- * right in the hog's way) holds a pattern-filled block and its own stack, and
- * must find both untouched. */
+/* Phase 4: every thread allocates from the one process-wide heap, which grows in place. `hog`
+ * allocates a lot of it; `sentinel`, running at the same time, holds a pattern-filled block
+ * and its own stack and must find both untouched, and every one of the hog's chunks must
+ * keep its own pattern. */
 #define SENTINEL_BYTES (100u * 1024u)
 #define HOG_CHUNK      (64u * 1024u)
 #define HOG_MAX_CHUNKS 200
@@ -171,7 +172,7 @@ extern "C" void *hog_worker(void *arg) {
     while (n < HOG_MAX_CHUNKS) {
         u8 *c = (u8 *) malloc(HOG_CHUNK);
         if (!c) {
-            p->hog_hit_null = 1;
+            p->hog_hit_null = 1;      /* not expected: 200 x 64 KiB fits the shared heap */
             break;
         }
         fill(c, HOG_CHUNK, 900u + (u32) n);
@@ -206,6 +207,31 @@ extern "C" void *sentinel_worker(void *arg) {
     }
     p->sentinel_ok = ok;
     p->sentinel_done = 1;
+    return 0;
+}
+
+#define OWNER_BYTES (300u * 1024u)
+static u8 *volatile g_owner_block;
+static u8 *volatile g_handed;
+static volatile int g_freed;
+
+/* Allocates a block, fills it and exits: the block must outlive the thread. */
+extern "C" void *owner_worker(void *arg) {
+    (void) arg;
+    u8 *b = (u8 *) malloc(OWNER_BYTES);
+    if (b)
+        fill(b, OWNER_BYTES, 555);
+    g_owner_block = b;
+    return 0;
+}
+
+/* Checks and frees a block the main thread allocated. */
+extern "C" void *free_worker(void *arg) {
+    (void) arg;
+    if (g_handed && verify(g_handed, OWNER_BYTES, 556) < 0) {
+        free(g_handed);
+        g_freed = 1;
+    }
     return 0;
 }
 
@@ -274,7 +300,7 @@ int main() {
     check_main_heap("after the live thread exited", NSMALL + NSMALL2);
     printf((char *) "phase 3 (heap grows beside a live thread): %s\n", g_ok ? (char *) "ok" : (char *) "BAD");
 
-    /* ---- phase 4: a thread's heap stops at its own ceiling ---------------- */
+    /* ---- phase 4: threads allocate from the shared process heap ----------- */
     int hog = thread_create((void *) hog_worker, (void *) &g_pair);
     int sen = thread_create((void *) sentinel_worker, (void *) &g_pair);
     CHECK(hog >= 0 && sen >= 0, "phase4 thread_create hog=%d sentinel=%d\n", hog, sen);
@@ -284,14 +310,37 @@ int main() {
         thread_join(sen);
     CHECK(g_pair.hog_done && g_pair.sentinel_done, "phase4 hog_done=%d sentinel_done=%d\n",
           g_pair.hog_done, g_pair.sentinel_done);
-    CHECK(g_pair.hog_chunks >= 4, "phase4 hog got %d chunks (own data corrupt if < 0)\n",
-          g_pair.hog_chunks);
-    CHECK(g_pair.hog_hit_null, "phase4 hog never ran out of heap: its arena has no ceiling\n");
+    CHECK(g_pair.hog_chunks == HOG_MAX_CHUNKS, "phase4 hog got %d of %d chunks (own data corrupt if < 0)\n",
+          g_pair.hog_chunks, HOG_MAX_CHUNKS);
+    CHECK(!g_pair.hog_hit_null, "phase4 hog ran out of heap\n");
     CHECK(g_pair.sentinel_ok, "phase4 sentinel's block or stack was overrun\n");
     check_main_heap("after the hog", NSMALL + NSMALL2);
-    printf((char *) "phase 4 (thread heap ceiling): hog got %d x 64 KiB then malloc -> %s: %s\n",
-           g_pair.hog_chunks, g_pair.hog_hit_null ? (char *) "NULL" : (char *) "still going",
+    printf((char *) "phase 4 (shared process heap): hog got %d x 64 KiB, malloc -> %s: %s\n",
+           g_pair.hog_chunks, g_pair.hog_hit_null ? (char *) "NULL" : (char *) "never failed",
            g_ok ? (char *) "ok" : (char *) "BAD");
+
+    /* ---- phase 4b: memory crosses threads in both directions -------------- */
+    {
+        g_owner_block = 0;
+        int t1 = thread_create((void *) owner_worker, 0);
+        if (t1 >= 0)
+            thread_join(t1);
+        CHECK(t1 >= 0 && g_owner_block != 0, "phase4b owner thread=%d block=%p\n", t1, (void *) g_owner_block);
+        /* The thread that allocated it has exited; its block must still be there and intact. */
+        CHECK(g_owner_block && verify(g_owner_block, OWNER_BYTES, 555) < 0, "phase4b block did not survive its thread\n");
+        free(g_owner_block);                       /* freed by a different thread than the allocator */
+
+        g_handed = (u8 *) malloc(OWNER_BYTES);
+        if (g_handed)
+            fill(g_handed, OWNER_BYTES, 556);
+        g_freed = 0;
+        int t2 = thread_create((void *) free_worker, 0);
+        if (t2 >= 0)
+            thread_join(t2);
+        CHECK(g_handed && t2 >= 0 && g_freed == 1, "phase4b free_worker verified+freed=%d\n", g_freed);
+        check_main_heap("after cross-thread free", NSMALL + NSMALL2);
+        printf((char *) "phase 4b (memory crosses threads): %s\n", g_ok ? (char *) "ok" : (char *) "BAD");
+    }
 
     /* ---- phase 5: run the slot region dry -------------------------------- */
     int made = 0, refused = 0;

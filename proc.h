@@ -99,11 +99,22 @@ typedef struct proc {
                                     thread that exits and one created after it
                                     never share a virtual-address span. */
     thread_t *thread_list;    /**< Current thread (head of the ring). */
+    thread_t *main_thread;    /**< The first thread; its arena is the process-wide malloc heap (@ref proc_heap_thread). */
     int cpu;                  /**< CPU index running this process now, -1 if none (SMP). */
     uint32_t last_ran;        /**< pit_ms() when last scheduled (round-robin tiebreak). */
     struct proc *next;        /**< Next process in the scheduler ring. */
     struct proc *prec;        /**< Previous process in the scheduler ring. */
 } process_t;
+
+/**
+ * @return The thread whose arena serves every malloc/free/realloc (and fopen handle) of @p p:
+ *         the main thread, so the process has ONE heap, as threads expect -- memory a thread
+ *         allocates may be used and freed by another, and must outlive the allocating thread.
+ *         (Each thread still owns a small private arena in its slot; it is no longer used.)
+ */
+static inline thread_t *proc_heap_thread(process_t *p) {
+    return p->main_thread ? p->main_thread : p->thread_list;
+}
 
 /** asm stub at @ref RETURN_ADDR — turns `main`'s return into an exit syscall. */
 extern void end_process();

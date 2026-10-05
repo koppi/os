@@ -80,8 +80,11 @@ def window_checks(img):
     ok = True
     x0, y0, x1, y1 = bbox_nonblack(img)
     w, h = x1 - x0 + 1, y1 - y0 + 1
-    good = 600 <= w <= 660 and 380 <= h <= 420
-    print(f"    frame bbox {w}x{h} at ({x0},{y0}) (want ~640x400): {'ok' if good else 'FAIL'}")
+    # 640x400 on a 640x480 display; the kernel scales it up by an integer on a larger one
+    # (e.g. 1280x800 once virtio-gpu has followed the window), so judge the shape, not the size.
+    ratio = w / h if h else 0
+    good = 1.55 < ratio < 1.65 and w >= 600
+    print(f"    frame bbox {w}x{h} at ({x0},{y0}), aspect {ratio:.2f} (want ~1.60, >= 600 wide): {'ok' if good else 'FAIL'}")
     ok &= good
     n = light = dark = 0
     for y in range(y0, y1, 2):

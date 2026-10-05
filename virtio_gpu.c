@@ -197,10 +197,14 @@ static volatile uint8_t  *cc;            /* common config (identity MMIO)    */
 static volatile uint8_t  *isr;           /* ISR status (mapped, unused)      */
 static volatile uint16_t *vq_notify;     /* control-queue notify doorbell    */
 
-static struct vring_desc  *vq_desc;
-static struct vring_avail *vq_avail;
-static struct vring_used  *vq_used;
-static uint16_t            vq_last_used;
+/* The rings are written by the device behind the compiler's back, so every one
+ * of these is volatile -- without it gcc hoists the `vq_used->idx` load out of
+ * the completion spin in vq_cmd() (inportb() carries no memory clobber) and the
+ * driver times out on a command the device has already finished. */
+static volatile struct vring_desc  *vq_desc;
+static volatile struct vring_avail *vq_avail;
+static volatile struct vring_used  *vq_used;
+static uint16_t                     vq_last_used;
 
 /* Request / response staging. Small, and in .bss so VA == PA for the device. */
 static uint8_t g_req[256]  __attribute__((aligned(16)));
@@ -554,9 +558,9 @@ static int virtio_bringup(uint32_t notify_mult) {
         return -1;
     memset(ring, 0, PAGE_SIZE);
     uint32_t b = ((uint32_t) ring + 15u) & ~15u;
-    vq_desc  = (struct vring_desc  *) b;                 /* 256 B */
-    vq_avail = (struct vring_avail *) (b + 256);         /*  36 B */
-    vq_used  = (struct vring_used  *) ((b + 256 + 36 + 3) & ~3u);
+    vq_desc  = (volatile struct vring_desc  *) b;                 /* 256 B */
+    vq_avail = (volatile struct vring_avail *) (b + 256);          /*  36 B */
+    vq_used  = (volatile struct vring_used  *) ((b + 256 + 36 + 3) & ~3u);
     vq_last_used = 0;
     /* Polled: never ask the device to raise a used-buffer interrupt. */
     vq_avail->flags = VRING_AVAIL_F_NO_INTERRUPT;

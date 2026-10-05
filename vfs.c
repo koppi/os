@@ -219,7 +219,7 @@ file *vfs_file_open(char *name, char *mode) {
 file *vfs_file_open_user(char *name, char *mode) {
     process_t *cur = current_user_proc();
     if(cur && cur->thread_list) {
-        file *f = (file *) umalloc_locked(sizeof(file), cur->thread_list, cur->pdir);
+        file *f = (file *) umalloc_locked(sizeof(file), proc_heap_thread(cur), cur->pdir);
         if(nfs_is_mounted() && nfs_owns_path(name)) {
             file fil = nfs_vfs_open(name, mode);
             memcpy(f, &fil, sizeof(file));
@@ -375,7 +375,7 @@ void vfs_file_close_user(file *f) {
             fs_leave(s);
             process_t *cur = current_user_proc();
             if(cur && cur->thread_list) {
-                ufree_locked(f, cur->thread_list);
+                ufree_locked(f, proc_heap_thread(cur));
             }
         }
     }

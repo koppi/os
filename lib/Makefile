@@ -61,6 +61,7 @@ all:
 	@$(CC) $(CFLAGS_GLIBC_FP) libc_ext.c
 	@$(CC) $(CFLAGS_GLIBC) emutls.c
 	@$(CC) $(CFLAGS) cxx_start.c
+	@$(CC) $(CFLAGS) tls.c
 	@$(CC) $(CFLAGS) libm.c
 	@$(CXX) $(CXXFLAGS) cxxabi.cpp
 	@$(CXX) $(CXXFLAGS_STLIMPL) cxx_string.cpp

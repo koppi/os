@@ -69,7 +69,10 @@
  * The two are declared together because they must not meet: the kproc slots
  * run up to exactly where the console's stacks begin.
  */
-#define KPROC_STACK_BASE 0x440000u
+/* Placed above the page-table storage window (paging.c): that starts at the end of the kernel
+ * image (~0x404000 today, and moving up as the kernel grows) and is 128 blocks = 512 KiB long, so
+ * it ends around 0x484000; paging_init() clamps it to stop here regardless. */
+#define KPROC_STACK_BASE 0x4C0000u
 #define KPROC_STACK_END  0x600000u
 
 typedef uint32_t mm_addr_t;   /**< A physical address. */

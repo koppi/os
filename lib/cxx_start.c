@@ -21,10 +21,24 @@ extern ctor_fn __init_array_end[];
 
 extern int main(void);
 
+/* lib/tls.c: weak, so a program linked without it (or without TLS symbols in its linker script)
+ * is unaffected. TLS must exist before the first constructor runs: they may use thread_local. */
+extern int __tls_thread_init(void) __attribute__((weak));
+extern void __tls_main_exit(void) __attribute__((weak));
+
 int _start(void) {
+    if (__tls_thread_init) {
+        __tls_thread_init();
+    }
+
     for (ctor_fn *f = __init_array_start; f != __init_array_end; f++) {
         (*f)();
     }
 
-    return main();
+    int rc = main();
+
+    if (__tls_main_exit) {
+        __tls_main_exit();     /* the main thread's thread_local destructors (not its pthread keys: exit() skips those) */
+    }
+    return rc;
 }

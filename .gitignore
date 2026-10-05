@@ -20,6 +20,7 @@ apps/hello-set/helloset
 apps/hello-thread/hellothr
 apps/hello-pthread/hellopth
 apps/hello-theap/thrheap
+apps/hello-tls/tlsthr
 apps/hello-qt/helloqt
 apps/example/example
 apps/mem/mem

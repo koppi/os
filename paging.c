@@ -10,12 +10,15 @@
  */
 #include <lib/string.h>
 #include <memory.h>
+#include <mm.h>
 #include <proc.h>
 #include <spinlock.h>
 #include <log.h>
 
-/** Number of 4 KiB blocks in the storage window (256 KiB). */
-#define MAX_BLOCKS 64
+/** Number of 4 KiB blocks in the storage window (512 KiB). Every 4 MiB of address space a
+ *  process (or the kernel) maps costs one, so a bigger RAM disk and a thread region that can
+ *  fill all seven of its tables want room; 64 ran out. */
+#define MAX_BLOCKS 128
 
 /** The whole storage window must stay inside map_kernel()'s identity map — a
  *  block above it would #PF the moment page_table_malloc() zeroed it. The 4 MiB
@@ -26,8 +29,8 @@
  *  paging came up triple-faulted the MBA while QEMU/OVMF happened to fit. */
 #define IDMAP_LIMIT 0x800000u
 
-/** 2 words = 64 bits, one per 4 KiB block in the storage window. */
-static uint32_t bitmap[2];
+/** One bit per 4 KiB block in the storage window. */
+static uint32_t bitmap[MAX_BLOCKS / 32];
 /** Base of the page-table storage window (set by @ref paging_init). */
 static uint32_t page_start;
 /** Blocks actually safe to hand out (<= MAX_BLOCKS): those below IDMAP_LIMIT. */
@@ -108,6 +111,19 @@ uint32_t paging_init(uint32_t start) {
         uint32_t fit = (IDMAP_LIMIT - page_start) / BLOCKS_LEN;
         if (fit < (uint32_t) usable_blocks)
             usable_blocks = (int) fit;
+        /* ...and must stop where the kernel threads' stacks begin (mm.h). The window follows
+         * the kernel image, which keeps growing, so this has to be checked rather than
+         * assumed: the last blocks used to overlap those stacks. */
+        if (page_start < KPROC_STACK_BASE) {
+            uint32_t room = (KPROC_STACK_BASE - page_start) / BLOCKS_LEN;
+            if (room < (uint32_t) usable_blocks) {
+                klogf(LOG_WARNING, "paging: only %u of %d window blocks fit below the kernel "
+                                   "stacks at 0x%x\n", room, MAX_BLOCKS, KPROC_STACK_BASE);
+                usable_blocks = (int) room;
+            }
+        } else {
+            usable_blocks = 0;
+        }
     } else {
         usable_blocks = 0;   /* window past the identity map -- unusable */
     }

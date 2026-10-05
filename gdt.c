@@ -5,6 +5,7 @@
 #include <gdt.h>
 #include <tss.h>
 #include <percpu.h>
+#include <spinlock.h>
 
 /**
  * Number of GDT slots: 0 null, 1-4 flat code/data rings, then one TSS
@@ -12,7 +13,9 @@
  * TSS and the scheduler can load this single table on every core.
  */
 #define GDT_TSS_BASE 5
-#define GDT_LEN (GDT_TSS_BASE + MAX_CPU)
+/** Per-thread TLS descriptors follow the TSS slots (see @ref gdt_tls_alloc). */
+#define GDT_TLS_BASE (GDT_TSS_BASE + MAX_CPU)
+#define GDT_LEN (GDT_TLS_BASE + GDT_TLS_SLOTS)
 
 struct gdt_info gdt_tab[GDT_LEN];
 struct gdt_ptr ptr;
@@ -52,6 +55,38 @@ int gdt_tss_entry(int index, uint32_t base) {
     int slot = GDT_TSS_BASE + index;
     gdt_set_entry(slot, base, base + sizeof(tss_t), 0xE9);
     return slot;
+}
+
+static spinlock_t tls_lock = SPINLOCK_INIT;
+static uint32_t tls_used[GDT_TLS_SLOTS / 32];
+
+int gdt_tls_alloc(uint32_t base) {
+    uint32_t f = spin_lock(&tls_lock);
+    for(int i = 0; i < GDT_TLS_SLOTS; i++) {
+        if(tls_used[i / 32] & (1u << (i % 32)))
+            continue;
+        tls_used[i / 32] |= 1u << (i % 32);
+        spin_unlock(&tls_lock, f);
+        /* The slot is ours alone now, so no lock is needed to fill it in. */
+        gdt_set_entry(GDT_TLS_BASE + i, base, 0xFFFFFFFF, 0xF2);   /* ring-3 data, writable */
+        return GDT_TLS_BASE + i;
+    }
+    spin_unlock(&tls_lock, f);
+    return 0;
+}
+
+void gdt_tls_set_base(int slot, uint32_t base) {
+    if(slot >= GDT_TLS_BASE && slot < GDT_LEN)
+        gdt_set_entry(slot, base, 0xFFFFFFFF, 0xF2);
+}
+
+void gdt_tls_free(int slot) {
+    if(slot < GDT_TLS_BASE || slot >= GDT_LEN)
+        return;
+    gdt_set_entry(slot, 0, 0, 0);
+    uint32_t f = spin_lock(&tls_lock);
+    tls_used[(slot - GDT_TLS_BASE) / 32] &= ~(1u << ((slot - GDT_TLS_BASE) % 32));
+    spin_unlock(&tls_lock, f);
 }
 
 /**
