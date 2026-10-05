@@ -37,7 +37,7 @@ Every change is marked inline (`grep -r "koppios addition" qtbase`):
 | `src/widgets/kernel/qwidget.cpp` | `QWidgetPrivate::flagsForDumping()` builds its geometry string with `QByteArray` (`tools/patch_widgets.py`) | The original uses `std::stringstream`; there are no libstdc++ iostreams here. |
 | `src/gui/kernel/qguiapplication.cpp` | `init_platform()` calls `qt_koppios_create_platform_integration()` | There is no `dlopen()` plugin loader. |
 | `src/plugins/platforms/minimal/qminimalintegration.cpp` | `fontDatabase()` returns `qt_koppios_create_font_database()` | Qt's own minimal platform plugin has no usable font database without fontconfig. |
-| `src/corelib/thread/qthreadpool.cpp` | `QThreadPoolPrivate::qtGuiInstance()` always returns null (Qt's own `QT_NO_GUI_THREADPOOL` path) | Qt parallelizes big image fills/conversions through it. A worker thread's stack is placed at a fixed offset above the image, which collides with a heap that has grown in place, and thread exit then unmaps live heap pages (a kernel layout bug, see below). Image code falls back to its serial path. |
+| `src/corelib/thread/qthreadpool.cpp` | `QThreadPoolPrivate::qtGuiInstance()` always returns null (Qt's own `QT_NO_GUI_THREADPOOL` path) | Qt parallelizes big image fills/conversions through it, and **no Qt worker thread can run in this port**: the `thread_local` removals above make `QThreadData::current()` one shared global, so when a pool worker starts, the main thread's `QThread::currentThread()` becomes the worker's and Qt asserts ("Cannot send events to objects owned by a different thread"). Image code falls back to its serial path. (Originally also a dodge for the kernel's thread stack/heap overlap, which PR #9 has since fixed; re-enabling the pool afterwards still failed as described.) |
 
 `koppios/dc_patched/string-to-double.cc` is a patched **copy** of the upstream
 file (`std::locale::classic()`'s `ctype<char>::tolower` is plain ASCII
@@ -137,11 +137,15 @@ from it.
   resources. Fusion and Windows are the only styles.
 * Output is the kernel's 8-bit indexed `gfx_blit`, so colour is limited to one
   256-entry palette per frame sequence (built from the first frame).
-* Kernel bug found along the way and **not** fixed here: a secondary thread's
-  stack/heap are placed at fixed offsets above the image, so a thread created
-  after the main heap has grown past that point overlaps it (thread exit then
-  unmaps live heap pages). This port therefore avoids creating GUI worker threads (see the
-  `qthreadpool.cpp` patch above); revert that patch once the kernel is fixed.
+* **No Qt worker threads.** `thread_local` is replaced by plain `static` in seven
+  places (the kernel sets up no `%gs` TLS segment), so Qt's per-thread data is
+  one shared global and a second thread corrupts the main thread's view of
+  itself; the `qthreadpool.cpp` patch above keeps Qt from starting one.
+  (The kernel's thread stack/heap overlap that first motivated it was fixed in
+  PR #9; reverting the patch on top of that was tried and aborts at start-up
+  with the sendEvent assertion described above.) Getting real threads needs
+  real thread-local storage first, e.g. `-femulated-tls` on top of
+  `lib/emutls.c`, then dropping the `thread_local` patches and this one.
 
 ## Licences
 

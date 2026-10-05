@@ -680,7 +680,8 @@ for anything more (there is no TLS or resolver cache).
     tables, a working `ppoll` + in-process `eventfd` so Qt's own dispatcher
     runs, a millisecond `clock_gettime`, `C.UTF-8`, VFS-aware absolute paths
     in the Qt file engine) and a kernel bug (a secondary thread's stack can
-    overlap a grown heap; the Qt port avoids spawning GUI worker threads).
+    overlap a grown heap; fixed since, but the Qt port still cannot run worker
+    threads because its `thread_local`s are plain statics).
   * [`apps/hello-qt-widgets`](apps/hello-qt-widgets) — **real QtWidgets** on
     the same vendored tree (staged as `hqtwid`, opt-in, needs a framebuffer
     boot): a `QApplication` with tabs, push/tool/check/radio buttons, sliders,
