@@ -17,6 +17,7 @@
 #include <spinlock.h>
 #include <log.h>
 #include <video.h>
+#include <wm.h>
 #include <keyboard.h>
 #include <snd.h>
 #include <gdt.h>
@@ -674,6 +675,11 @@ void remove_proc(int pid) {
         keyboard_raw_mode(0);
         video_ungrab();
     }
+    /* Same reasoning for a window (wm.c): a program that exits through
+     * wm_close has already given it up, but one that faults would otherwise
+     * leave a dead window on the desktop holding the keyboard, and the shell
+     * would never get another keystroke. */
+    wm_reap(pid);
     /* Same for the PCM output (snd.c): left open, it would keep the module
      * silenced and the card draining an empty ring forever. */
     if(snd_user_active())

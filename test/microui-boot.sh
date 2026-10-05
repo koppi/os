@@ -1,18 +1,18 @@
 #!/bin/bash
-# microui-boot.sh — boot os.iso headless and drive the two ring-3 microui apps,
-# apps/calc and apps/clock, so the port can be checked without sitting in front
-# of a display.
+# microui-boot.sh — boot os.iso headless and drive the ring-3 microui apps,
+# apps/calc and apps/clock, so the window manager can be checked without
+# sitting in front of a display.
 #
 # The shell is reached over the serial console (uart.c feeds serial RX into the
-# console input ring). Keystrokes go in with the monitor's `sendkey`, which
-# exercises the raw-scancode path these apps read (make *and* break, which the
-# ASCII ring does not carry); pointer motion and clicks go in with `mouse_move`
-# and `mouse_button`, which is the only way to reach the pointer ring behind
-# syscall 36. Every step leaves a PNG behind, and the apps echo what they did
-# to the console, so each scenario can be judged from the serial log as well as
-# from the pictures.
+# console input ring, a path the window manager deliberately does not take over
+# -- see keyboard.c). Keystrokes for the apps go in with the monitor's
+# `sendkey`, which is the real keyboard and therefore the routed one; the
+# pointer goes in with `mouse_move` and `mouse_button`. Every step leaves a PNG
+# behind, and the apps echo what they did to the console, so each scenario can
+# be judged from the serial log as well as from the pictures.
 #
-#   test/microui-boot.sh [calc|keys|mouse|clock|quit|all]      (default: all)
+#   test/microui-boot.sh [window|keys|mouse|two|close|fullscreen|all]
+#                                                              (default: all)
 #
 # Output, one subdirectory per scenario, in $OUT.
 set -u
@@ -28,24 +28,26 @@ for t in qemu-system-i386 socat; do
 done
 [ -f os.iso ] || { echo "microui-boot: no os.iso -- run 'make iso' first"; exit 1; }
 
-# The apps grab a 640x400 surface and video_blit8 scales it by the largest
-# whole number that fits, centred. Everything the mouse steps below assume
-# about where a button is comes from these two numbers.
-SURF_W=640
-SURF_H=400
-
-# run <name> <command line> <script>
+# Where the window manager puts things. A program's window is placed at
+# (60 + 28*slot, 60 + 28*slot) and is its surface plus one 24-pixel title bar
+# (wm.c), so every coordinate below is in *desktop* pixels and independent of
+# the screen size -- which is what makes clicking a particular button from a
+# script possible at all.
 #
-# <script> is one "delay:action" per line, applied in order after the command
-# has been sent: key:<k> taps a key, shot:<n> screenshots, serial:<text> types
-# a line at the shell, home: parks the pointer at the surface's top-left,
-# to:<x>,<y> moves it there (from wherever `home` left it), click: taps the
-# left button.
+#   calc  slot 0: window (60,60) 320x328, body (60,84) 320x304
+#   clock slot 1: window (88,88) 332x384, body (88,112) 332x360
+
+# run <name> <script>
+#
+# <script> is one "kind:arg" step at a time: cmd types a line at the shell,
+# key taps a key, shot screenshots, sleep waits, home parks the pointer at the
+# desktop's top-left corner, to:<dx>,<dy> walks it from where it is, click taps
+# the left button, and down/up bracket a drag.
 run() {
-    local name=$1 cmd=$2 script=$3
+    local name=$1; shift
     local d="$OUT/$name"
     rm -rf "$d"; mkdir -p "$d"
-    echo "=== $name: $cmd"
+    echo "=== $name"
 
     qemu-system-i386 -vga "$VGA" -m 512M -no-reboot -smp 4 $KVM \
         -rtc base=localtime,clock=vm \
@@ -65,42 +67,42 @@ run() {
 
     mon() { echo "$1" | socat - "unix-connect:$d/mon.sock" >/dev/null 2>&1; }
 
-    # The pointer is relative, so there is no "move to (x,y)" -- park it against
-    # a corner first and count from there. A USB boot-protocol mouse carries one
-    # signed byte per axis per report, so a long move is many short ones.
+    # The pointer is relative -- there is no "move to (x,y)" -- so park it
+    # against the corner first and count from there. A USB boot-protocol mouse
+    # carries one signed byte per axis per report, so a long move is many short
+    # ones; the kernel clamps the pointer to the screen, which is what makes
+    # `home` land exactly on (0,0).
     nudge() {
-        local dx=$1 dy=$2 step
+        local dx=$1 dy=$2 sx sy
         while [ "$dx" -ne 0 ] || [ "$dy" -ne 0 ]; do
-            step=$dx; [ "$step" -gt 100 ] && step=100; [ "$step" -lt -100 ] && step=-100
-            local sy=$dy; [ "$sy" -gt 100 ] && sy=100; [ "$sy" -lt -100 ] && sy=-100
-            mon "mouse_move $step $sy"
-            dx=$((dx - step)); dy=$((dy - sy))
+            sx=$dx; [ "$sx" -gt 100 ] && sx=100; [ "$sx" -lt -100 ] && sx=-100
+            sy=$dy; [ "$sy" -gt 100 ] && sy=100; [ "$sy" -lt -100 ] && sy=-100
+            mon "mouse_move $sx $sy"
+            dx=$((dx - sx)); dy=$((dy - sy))
             sleep 0.05
         done
     }
-    home() { nudge -700 -700; nudge -700 -700; }
 
     sleep "$BOOT_WAIT"
-    printf '%s\n' "$cmd" >&9
 
-    local step delay rest kind arg
-    while IFS= read -r step; do
-        [ -z "$step" ] && continue
-        delay=${step%%:*}; rest=${step#*:}
-        kind=${rest%%:*}; arg=${rest#*:}
-        sleep "$delay"
+    local step kind arg
+    for step in "$@"; do
+        kind=${step%%:*}; arg=${step#*:}
         case "$kind" in
-            key)    mon "sendkey $arg" ;;
-            serial) printf '%s\n' "$arg" >&9 ;;
-            home)   home ;;
-            to)     nudge "${arg%%,*}" "${arg##*,}" ;;
-            click)  mon "mouse_button 1"; sleep 0.2; mon "mouse_button 0" ;;
-            shot)   mon "screendump $d/$arg.ppm"; sleep 1
-                    [ -f "$d/$arg.ppm" ] && command -v pnmtopng >/dev/null \
-                        && pnmtopng "$d/$arg.ppm" > "$d/$arg.png" 2>/dev/null
-                    rm -f "$d/$arg.ppm" ;;
+            cmd)   printf '%s\n' "$arg" >&9 ;;
+            key)   mon "sendkey $arg" ;;
+            sleep) sleep "$arg" ;;
+            home)  nudge -900 -900; nudge -900 -900 ;;
+            to)    nudge "${arg%%,*}" "${arg##*,}" ;;
+            click) mon "mouse_button 1"; sleep 0.2; mon "mouse_button 0" ;;
+            down)  mon "mouse_button 1" ;;
+            up)    mon "mouse_button 0" ;;
+            shot)  mon "screendump $d/$arg.ppm"; sleep 1
+                   [ -f "$d/$arg.ppm" ] && command -v pnmtopng >/dev/null \
+                       && pnmtopng "$d/$arg.ppm" > "$d/$arg.png" 2>/dev/null
+                   rm -f "$d/$arg.ppm" ;;
         esac
-    done <<< "$script"
+    done
 
     mon quit
     sleep 1
@@ -108,64 +110,79 @@ run() {
     kill $qpid $spid 2>/dev/null; wait $qpid $spid 2>/dev/null
     rm -f "$d"/*.sock "$d"/in.fifo
 
-    # Strip the kernel's own timestamped log lines: what matters here is what
-    # the app printed.
+    # Strip the kernel's own timestamped log lines, except the window
+    # manager's: those say what it decided to do and are the point here.
     sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$d/serial.log" \
-        | grep -vE '^\[ *[0-9]+\.[0-9]+\]' | grep -v '^$' | tail -"${TAIL:-12}"
+        | grep -aoE "wm: window [0-9] '[^']*' [0-9x]+ for pid [0-9]+|^(calc|clock): .*" \
+        | tail -"${TAIL:-12}"
     echo "    -> $d"
     echo
 }
 
-# The calculator comes up and draws: window, display, 4x5 keypad, pointer.
-do_calc() {
-    run calc calc $'4:shot:window'
+# The calculator comes up as a window on the running desktop: title bar, close
+# box, its surface composited into the body, the rest of the desktop still
+# there and still drawing.
+do_window() {
+    run window "cmd:calc &" sleep:4 shot:desktop
 }
 
-# Arithmetic from the keyboard. Immediate execution, so "2 + 3 * 4" settles to
-# 5 at the '*' and then to 20 -- the log lines say so, which is the point.
-# Then a divide by zero, which must be caught and must need C to leave.
+# Typing goes to the focused window and nowhere else. Immediate execution, so
+# "2 + 3 * 4" settles to 5 at the '*' and then to 20; then a divide by zero,
+# which must be caught. If the keystrokes had also reached the shell behind it,
+# the serial log would show it trying to run them as commands.
 do_keys() {
-    run keys calc \
-        $'4:shot:idle\n1:key:2\n1:key:shift-equal\n1:key:3\n1:key:shift-8\n1:key:4\n1:key:ret\n2:shot:result\n1:key:c\n1:key:8\n1:key:slash\n1:key:0\n1:key:ret\n2:shot:divzero\n1:key:c\n2:shot:cleared'
+    run keys "cmd:calc &" sleep:4 \
+        key:2 key:shift-equal key:3 key:shift-8 key:4 key:ret sleep:2 shot:result \
+        key:c key:8 key:slash key:0 key:ret sleep:2 shot:divzero
 }
 
-# The pointer: park it, walk it to the "7" key and click, then to "+", "5", "=".
-# This is the syscall-36 path -- relative motion and a button mask -- plus
-# microui's own hit testing on top of it.
+# The pointer: park it, walk it to the "7" key and click, then "+", "5", "=".
+# These are desktop coordinates; the window manager turns them into the
+# window's own before the program ever sees them.
 do_mouse() {
-    # Keypad geometry: the 320x328 window is centred in the 640x400 surface, so
-    # its body starts at (165, 65); the display row is 54 high and the button
-    # rows 40 high, 4 apart, in 71-wide columns 4 apart (the last stretches to
-    # the body's right edge). That puts "7" at (200, 187), "+" at (432, 275),
-    # "5" at (275, 231) and "=" at (432, 319): 7 + 5 = 12.
-    run mouse calc \
-        $'4:home:\n1:to:200,187\n1:shot:hover\n1:click:\n1:to:232,88\n1:click:\n1:to:-157,-44\n1:click:\n1:to:157,88\n1:click:\n2:shot:clicked'
+    run mouse "cmd:calc &" sleep:4 \
+        home: to:100,211 shot:hover click: \
+        to:232,88 click: to:-157,-44 click: to:157,88 click: \
+        sleep:2 shot:clicked
 }
 
-# The clock: two shots a few seconds apart (the hands must have moved), then a
-# click on "24h" to check that a control under the custom-drawn face still
-# works. -v makes it log a line a second, so the serial tail shows time running.
-do_clock() {
-    # The 332x384 window is centred in the 640x400 surface, which puts the
-    # "24h" checkbox -- the middle one on the options row under the face -- at
-    # (277, 348).
-    run clock 'clock -v' \
-        $'4:shot:face\n6:shot:later\n1:home:\n1:to:277,348\n1:click:\n2:shot:24h'
+# Two programs, two windows, at the same time -- which is the whole point.
+# Click the clock's "24h" through its window, then drag that window by its
+# title bar and check the program's surface went with it.
+do_two() {
+    run two "cmd:calc &" sleep:3 "cmd:clock &" sleep:4 shot:both \
+        home: to:210,428 click: sleep:2 shot:24h \
+        to:40,-328 down: sleep:0.3 to:320,160 up: sleep:2 shot:dragged
 }
 
-# Esc gives the screen back: the desktop has to return and the shell has to get
-# the keyboard back, for both apps in turn.
-do_quit() {
-    run quit calc \
-        $'4:shot:calc\n1:key:esc\n3:shot:desktop\n1:serial:clock\n5:shot:clock\n1:key:esc\n3:shot:back\n1:serial:ls /rd\n3:shot:shell'
+# Closing. The title bar's box is a *request*: the window manager sends it and
+# the program exits, which is what takes the window away. Esc does the same
+# from the keyboard. Afterwards the shell must have the keyboard back.
+do_close() {
+    run close "cmd:calc &" sleep:3 "cmd:clock &" sleep:4 \
+        home: to:408,100 click: sleep:3 shot:clock_closed \
+        to:-200,0 click: key:esc sleep:3 shot:both_closed \
+        "cmd:ls /rd" sleep:2
+}
+
+# The other path: `-f` asks for the whole screen instead of a window, which is
+# also what happens on a machine with no desktop to put one on. The desktop is
+# parked, the program draws its own title bar and its own pointer, and Esc
+# gives everything back.
+do_fullscreen() {
+    run fullscreen "cmd:calc -f" sleep:4 shot:grabbed \
+        key:2 key:shift-equal key:3 key:ret sleep:2 shot:result \
+        key:esc sleep:3 shot:desktop_back
 }
 
 case "${1:-all}" in
-    calc)  do_calc ;;
-    keys)  do_keys ;;
-    mouse) do_mouse ;;
-    clock) do_clock ;;
-    quit)  do_quit ;;
-    all)   do_calc; do_keys; do_mouse; do_clock; do_quit ;;
-    *)     echo "usage: $0 [calc|keys|mouse|clock|quit|all]"; exit 1 ;;
+    window)     do_window ;;
+    keys)       do_keys ;;
+    mouse)      do_mouse ;;
+    two)        do_two ;;
+    close)      do_close ;;
+    fullscreen) do_fullscreen ;;
+    all)        do_window; do_keys; do_mouse; do_two; do_close; do_fullscreen ;;
+    *)          echo "usage: $0 [window|keys|mouse|two|close|fullscreen|all]"
+                exit 1 ;;
 esac

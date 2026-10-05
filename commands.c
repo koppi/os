@@ -235,8 +235,25 @@ void console_start(char *command) {
  */
 static volatile int spawn_state;      /* 0 idle, 1 filling, 2 ready to run */
 static volatile int spawn_result;
+static volatile int spawn_detach;     /* run it and return, do not wait */
 static char         spawn_path[64];
 static char         spawn_args[128];
+
+/**
+ * Processes started detached, waiting to be reaped.
+ *
+ * A foreground spawn is reaped by the request that started it, because that
+ * request is still sitting there waiting. A detached one has nobody waiting,
+ * so its pid is parked here and @ref console_spawn_service collects it once it
+ * stops -- on the init thread, which is the only context allowed to tear a
+ * process down (see @ref console_spawn_request).
+ *
+ * Four, matching the window manager's window limit (wm.h): these exist so that
+ * more than one *windowed* program can be on the desktop at a time, and a
+ * fifth would have nowhere to draw.
+ */
+#define SPAWN_DETACHED_MAX 4
+static volatile int spawn_detached[SPAWN_DETACHED_MAX];
 
 /** @brief Bounded copy of a NUL-terminated string (const-source strncpy). */
 static void spawn_copy(char *dst, const char *src, size_t n) {
@@ -247,12 +264,13 @@ static void spawn_copy(char *dst, const char *src, size_t n) {
         dst[i] = 0;
 }
 
-int console_spawn_request(const char *path, const char *args) {
+int console_spawn_request(const char *path, const char *args, int detach) {
     while(!__sync_bool_compare_and_swap(&spawn_state, 0, 1))
         asm volatile("pause");
 
     spawn_copy(spawn_path, path, sizeof spawn_path);
     spawn_copy(spawn_args, args, sizeof spawn_args);
+    spawn_detach = detach;
 
     __sync_synchronize();
     spawn_state = 2;
@@ -262,18 +280,53 @@ int console_spawn_request(const char *path, const char *args) {
     return spawn_result;
 }
 
+/** @brief Reap whichever detached processes have stopped. Init thread only. */
+static void reap_detached(void) {
+    for(int i = 0; i < SPAWN_DETACHED_MAX; i++) {
+        int pid = spawn_detached[i];
+        if(pid > 0 && proc_state(pid) == PROC_STOPPED) {
+            remove_proc(pid);
+            spawn_detached[i] = 0;
+        }
+    }
+}
+
 void console_spawn_service(void) {
+    reap_detached();
+
     if(spawn_state != 2)
         return;
 
     int rc = -1;
     int pid = start_proc(spawn_path, spawn_args);
     if(pid != PROC_STOPPED) {
-        while(proc_state(pid) != PROC_STOPPED)
-            asm volatile("pause");
-        remove_proc(pid);
-        rc = 0;
-        printf("\n");
+        if(spawn_detach) {
+            /* Park the pid and go: the point of a detached spawn is that the
+             * shell -- and this thread -- carry on while it runs, which is what
+             * lets a second windowed program start beside the first. */
+            rc = -1;
+            for(int i = 0; i < SPAWN_DETACHED_MAX; i++)
+                if(spawn_detached[i] == 0) {
+                    spawn_detached[i] = pid;
+                    rc = pid;
+                    break;
+                }
+            if(rc < 0) {
+                /* No slot to remember it by, so nothing could ever reap it.
+                 * Run it in the foreground instead of leaking it. */
+                printf("start: too many background programs; running in the foreground\n");
+                while(proc_state(pid) != PROC_STOPPED)
+                    asm volatile("pause");
+                remove_proc(pid);
+                rc = 0;
+            }
+        } else {
+            while(proc_state(pid) != PROC_STOPPED)
+                asm volatile("pause");
+            remove_proc(pid);
+            rc = 0;
+            printf("\n");
+        }
     }
     spawn_result = rc;
     __sync_synchronize();

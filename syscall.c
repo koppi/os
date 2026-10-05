@@ -26,9 +26,10 @@
 #include <snd.h>
 #include <io.h>
 #include <gdt.h>
+#include <wm.h>
 
 /** One past the highest valid call number. */
-#define MAX_SYSCALL 39
+#define MAX_SYSCALL 45
 
 /** Set to 1 to log every syscall on the console (default 0: off). */
 #define SYSCALL_TRACE 0
@@ -134,7 +135,20 @@ static uint32_t sys_listdir(const char *path, char *buf, uint32_t n) {
  * directory does not map.
  */
 static uint32_t sys_spawn(const char *path, const char *args) {
-    return (uint32_t) console_spawn_request(path ? path : "", args ? args : "");
+    return (uint32_t) console_spawn_request(path ? path : "", args ? args : "", 0);
+}
+
+/**
+ * @brief `spawn_bg` syscall (#44): load and run @p path without waiting for it.
+ *
+ * The same marshalling as #21, minus the wait: the caller gets the new pid
+ * back immediately and the init thread reaps the program when it ends. What
+ * `cmd &` in the shell is built on, and the only way two windowed programs can
+ * be on the desktop at once (wm.h) -- #21 serialises every program in the
+ * system behind the one request slot.
+ */
+static uint32_t sys_spawn_bg(const char *path, const char *args) {
+    return (uint32_t) console_spawn_request(path ? path : "", args ? args : "", 1);
 }
 
 /**
@@ -342,6 +356,71 @@ static uint32_t sys_set_thread_area(uint32_t base) {
 }
 ///@}
 
+/**
+ * @name Windowed graphics (#39..#43)
+ *
+ * The other way for a ring-3 program to draw: instead of taking the whole
+ * screen the way #22 does, it asks the desktop for a window and hands frames
+ * to that (wm.c). The program never learns where its window is -- the pointer
+ * arrives already in its own coordinates and the keyboard only while it is
+ * focused -- so a windowed program is a full-screen program with the grab
+ * swapped out, which is exactly how apps/microui uses both.
+ *
+ * Separate calls rather than flags on #22..#25: those four are the interface
+ * Doom, ChipNomad and the Qt port are built on, and #22's two arguments leave
+ * nowhere to put a flag that an existing caller is not already passing
+ * garbage in.
+ */
+///@{
+
+/** @brief Identify the calling process to wm.c. @return its pid, or -1. */
+static int sys_wm_pid(void) {
+    process_t *cur = current_user_proc();
+    if(!cur || !cur->thread_list)
+        return -1;
+    return cur->thread_list->pid;
+}
+
+/** @brief `wm_open` (#39): ask for a @p w x @p h window titled @p title. */
+static uint32_t sys_wm_open(uint32_t w, uint32_t h, const char *title) {
+    int pid = sys_wm_pid();
+    if(pid < 0)
+        return 0;
+    return (uint32_t) wm_open(pid, w, h, title);
+}
+
+/** @brief `wm_close` (#40): give the window back. */
+static uint32_t sys_wm_close(void) {
+    int pid = sys_wm_pid();
+    if(pid >= 0)
+        wm_close(pid);
+    return 0;
+}
+
+/** @brief `wm_blit` (#41): present one frame of the window's own size. */
+static uint32_t sys_wm_blit(const uint8_t *pix) {
+    int pid = sys_wm_pid();
+    return (uint32_t) (pid < 0 ? -1 : wm_blit(pid, pix));
+}
+
+/** @brief `wm_palette` (#42): install the window's 256 entries of 0x00RRGGBB. */
+static uint32_t sys_wm_palette(const uint32_t *pal) {
+    int pid = sys_wm_pid();
+    return (uint32_t) (pid < 0 ? -1 : wm_palette(pid, pal));
+}
+
+/**
+ * @brief `wm_event` (#43): pop one input or window event, 0 if none are queued.
+ *
+ * Non-blocking, like `getscan` and `getmouse`: a windowed program polls it
+ * once a frame. wm.h describes the packing.
+ */
+static uint32_t sys_wm_event(void) {
+    int pid = sys_wm_pid();
+    return pid < 0 ? 0 : wm_event(pid);
+}
+///@}
+
 /** Call number → implementation. NULL entries are unimplemented. */
 static uintptr_t syscalls[] = {
     (uintptr_t) printf,              // printf   0
@@ -382,7 +461,13 @@ static uintptr_t syscalls[] = {
     (uintptr_t) sys_thread_self,     // thread_self   35
     (uintptr_t) sys_getmouse,        // getmouse      36  (relative motion + buttons, gfx grab only)
     (uintptr_t) sys_getrandom,       // getrandom     37  (kernel CSPRNG into a user buffer, <= 256 bytes)
-    (uintptr_t) sys_set_thread_area  // set_thread_area 38 (per-thread %gs segment for ELF TLS)
+    (uintptr_t) sys_set_thread_area, // set_thread_area 38 (per-thread %gs segment for ELF TLS)
+    (uintptr_t) sys_wm_open,         // wm_open      39  (a desktop window, wm.c)
+    (uintptr_t) sys_wm_close,        // wm_close     40
+    (uintptr_t) sys_wm_blit,         // wm_blit      41
+    (uintptr_t) sys_wm_palette,      // wm_palette   42
+    (uintptr_t) sys_wm_event,        // wm_event     43  (key/pointer/window, non-blocking)
+    (uintptr_t) sys_spawn_bg         // spawn_bg     44  (spawn without waiting; `cmd &`)
 };
 
 /**

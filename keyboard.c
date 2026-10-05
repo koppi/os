@@ -14,6 +14,7 @@
 #include <printf.h>
 #include <sb16.h>
 #include <keyboard.h>
+#include <wm.h>
 
 enum KBD_PORTS {
 	KBD_CHECK = 0x64,   /* status (read) / command (write) */
@@ -164,9 +165,12 @@ void keyboard_raw_mode(int on) {
 }
 
 void keyboard_push_scan(uint8_t code, int e0, int release) {
+    uint16_t ev = (uint16_t) ((e0 ? KBD_RAW_E0 : 0) |
+                              (release ? KBD_RAW_BREAK : 0) | (code & 0x7F));
     if(raw_on)
-        raw_push((uint16_t) ((e0 ? KBD_RAW_E0 : 0) |
-                             (release ? KBD_RAW_BREAK : 0) | (code & 0x7F)));
+        raw_push(ev);
+    if(wm_wants_keys())
+        wm_key(ev);
 }
 
 int keyboard_raw_get(void) {
@@ -272,6 +276,10 @@ void keyboard_read_key() {
 
     if(raw_on)
         raw_push((uint16_t) ((kbd_e0 ? KBD_RAW_E0 : 0) | code));
+    /* A windowed program gets the same event the raw ring carries, routed to
+     * it alone; `code` already has the break bit, which is what it needs. */
+    if(wm_wants_keys())
+        wm_key((uint16_t) ((kbd_e0 ? KBD_RAW_E0 : 0) | code));
 
     if(kbd_e0) {
         kbd_e0 = 0;
@@ -283,12 +291,12 @@ void keyboard_read_key() {
                 /* The cursor keys, as the one control character every reader
                  * of this ring understands (see keyboard.h). The rest of the
                  * cluster has no such character and stays in the raw ring. */
-                case SC_E0_UP:    kbd_buf_push(KBD_CH_UP);    break;
-                case SC_E0_DOWN:  kbd_buf_push(KBD_CH_DOWN);  break;
-                case SC_E0_LEFT:  kbd_buf_push(KBD_CH_LEFT);  break;
-                case SC_E0_RIGHT: kbd_buf_push(KBD_CH_RIGHT); break;
-                case SC_E0_HOME:  kbd_buf_push(KBD_CH_HOME);  break;
-                case SC_E0_END:   kbd_buf_push(KBD_CH_END);   break;
+                case SC_E0_UP:    keyboard_push_local_char(KBD_CH_UP);    break;
+                case SC_E0_DOWN:  keyboard_push_local_char(KBD_CH_DOWN);  break;
+                case SC_E0_LEFT:  keyboard_push_local_char(KBD_CH_LEFT);  break;
+                case SC_E0_RIGHT: keyboard_push_local_char(KBD_CH_RIGHT); break;
+                case SC_E0_HOME:  keyboard_push_local_char(KBD_CH_HOME);  break;
+                case SC_E0_END:   keyboard_push_local_char(KBD_CH_END);   break;
                 default: break;   /* Insert/Delete/PgUp/PgDn, Print Screen, ... */
             }
         }
@@ -319,7 +327,7 @@ void keyboard_read_key() {
 
     char c = shift_state ? shifted_keyboard_map[code] : keyboard_map[code];
     if(c)
-        kbd_buf_push(c);
+        keyboard_push_local_char(c);
 }
 
 /**
@@ -328,6 +336,26 @@ void keyboard_read_key() {
  * Used by the USB HID keyboard driver, which does its own HID-usage → ASCII
  * translation and feeds the result here so console input is source-agnostic.
  */
+/**
+ * @brief A character typed on *this machine's* keyboard.
+ *
+ * Dropped while a program window has the keyboard (wm.c): that program is
+ * already reading the same keystrokes as raw scancodes, and this ring is the
+ * shell's. Letting both have them is the single-consumer problem in reverse --
+ * every key would be typed twice, once into the window and once at the prompt
+ * behind it.
+ *
+ * The serial line deliberately does not come through here (uart.c uses
+ * @ref keyboard_push_char): it is the out-of-band path, how a remote operator
+ * and the boot tests drive the machine, and a window on the screen in front of
+ * someone else is no reason for it to go deaf.
+ */
+void keyboard_push_local_char(char c) {
+    if(wm_wants_keys())
+        return;
+    keyboard_push_char(c);
+}
+
 void keyboard_push_char(char c) {
     if(c)
         kbd_buf_push(c);

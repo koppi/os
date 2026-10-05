@@ -1,7 +1,7 @@
 # microui in ring 3
 
 A shared runtime that lets a **userspace** program put a microui window on the
-screen. Two programs use it:
+desktop. Two programs use it:
 
 * [`apps/calc`](../calc) — a four-function calculator
 * [`apps/clock`](../clock) — an analog clock
@@ -11,28 +11,40 @@ This directory builds no binary of its own; `mui.mk` is included by each app's
 
 ```
 make -C apps/calc && make -C apps/clock
-make qemu-iso                 # then, at the shell: calc   /   clock
-make qemu-microui             # or drive both headless (test/microui-boot.sh)
+make qemu-iso                 # then, at the shell:
+                              #   calc          a window on the desktop
+                              #   clock &       ...and a second one beside it
+                              #   calc -f       the whole screen instead
+make qemu-microui             # or drive it all headless (test/microui-boot.sh)
 ```
 
-Esc gives the screen back to the desktop.
+Esc quits, and so does the window's close box.
 
 ## Why there is anything to port at all
 
 The kernel already draws its desktop with microui: [`microui.c`](../../microui.c)
 is vendored at the repo root, [`graphics.c`](../../graphics.c) drives it and
-[`renderer.c`](../../renderer.c) renders its command list straight into the
-32-bpp framebuffer shadow. None of that is reachable from ring 3 — the shadow
-is kernel memory, and `draw_rect`/`draw_string` are kernel functions.
+[`renderer.c`](../../renderer.c) renders its command list into the 32-bpp
+framebuffer shadow. None of that is reachable from ring 3 — the shadow is
+kernel memory, and `draw_rect`/`draw_string` are kernel functions.
 
-What ring 3 *does* have is the full-screen grab the Doom port added (syscalls
-22–25, see [`video.h`](../../video.h)): a program asks for a surface of its own
-size, hands over **8-bpp indexed** frames and a 256-entry palette, and gets
-them scaled by the largest whole number that fits and centred on black. Add the
-raw keyboard ring (26) and the pointer ring (36) and that is everything a GUI
-needs. So the port is a second renderer for the same toolkit, plus an event
-pump — and `microui.c` itself is compiled a **second time**, for ring 3, rather
-than copied or forked.
+What ring 3 *does* have is an 8-bpp indexed surface of its own, which the
+kernel will put on screen one of two ways:
+
+* **as a window** ([`wm.h`](../../wm.h), syscalls 39–43). The desktop keeps
+  drawing, the window has a title bar to drag it by and a close box, up to four
+  programs can have one at once, and the keyboard reaches a program only while
+  its window is focused. The window manager owns the frame; the program owns
+  the content and never learns where on screen it is.
+* **as the whole screen** ([`video.h`](../../video.h), syscalls 22–25 — the
+  grab the Doom port added). The desktop is parked until the program gives it
+  back. This is the fallback when there is no desktop to put a window on, and
+  what `-f` asks for.
+
+Add the raw keyboard ring and the pointer and that is everything a GUI needs.
+So the port is a second renderer for the same toolkit, plus an event pump —
+and `microui.c` itself is compiled a **second time**, for ring 3, rather than
+copied or forked.
 
 ## The pieces
 
@@ -92,12 +104,19 @@ primitives it draws with (`mui_fill`, `mui_line`, `mui_disc`, `mui_ring`,
 
 ### Input
 
-`getscan` (26) gives make *and* break codes, so Shift and Caps Lock are
-tracked here and characters are fed to `mu_input_text`; `getmouse` (36) gives
-relative motion and a button mask, which accumulates into a position this
-runtime also has to *draw*, because the kernel's own pointer belongs to the
-desktop it just parked. Esc quits, the same convention every full-screen
-program in this tree uses.
+Keys arrive the same way on both paths — a scancode with its break and 0xE0
+bits, which is what `getscan` (26) carries and what the window manager's key
+events carry — so one table translates both, and Shift and Caps Lock are
+tracked here.
+
+The pointer is where the two differ, and the difference is the whole point.
+`getmouse` (36) is the raw *device*: relative motion and a button mask, from
+which a full-screen program keeps its own pointer position and has to *draw*
+the arrow itself, because the kernel's own pointer belongs to the desktop it
+just parked. A window's pointer is already a pointer: the desktop has decided
+where the window is and whether this program is the one being pointed at, and
+delivers a position in the window's own coordinates. Drawing an arrow there
+too would put two on screen, a frame apart.
 
 ## The shim
 
@@ -123,20 +142,20 @@ what the ring-3 libc in [`lib/`](../../lib) actually has:
 
 ## Writing another one
 
+The frame callback is called inside a window that is already open, so it only
+lays widgets out — and therefore cannot tell, and does not need to, which of
+the two paths it is on.
+
 ```c
 #include <printf.h>
 #include "mui.h"
 
 static void frame(mu_Context *ctx, void *udata) {
-    if (mu_begin_window_ex(ctx, "Hello", mu_rect(100, 100, 200, 120),
-                           MU_OPT_NOCLOSE | MU_OPT_NOSCROLL)) {
-        mu_layout_row(ctx, 1, (int[]) { -1 }, 0);
-        mu_label(ctx, "Esc quits");
-        mu_end_window(ctx);
-    }
+    mu_layout_row(ctx, 1, (int[]) { -1 }, 0);
+    mu_label(ctx, "Esc quits");
 }
 
-int main(void) { return mui_run(frame, 0) < 0 ? 1 : 0; }
+int main(void) { return mui_run("Hello", 200, 120, frame, 0) < 0 ? 1 : 0; }
 ```
 
 plus a `Makefile` of four lines (`APP`, `OBJ`, an optional `APP_LIB_OBJ` for

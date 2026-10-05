@@ -82,6 +82,21 @@ each is on.
 * The page-table storage window moved from a fixed `0x200000` (which the
   linked-in 1.3 MiB font blob had grown the kernel image straight through) to
   just past `kernel_end` — [`paging.c`](paging.c).
+* The **userspace return trampoline** moved for the same reason, and had been
+  silently broken for a while. `RETURN_ADDR` was `0x400000`, from when the
+  kernel image ended below 4 MiB and that was the first free page above it; the
+  image has long since grown past that line and the linker had put `kern_dir`
+  — the kernel's own page directory, page-aligned and exactly a page long — at
+  `0x400000`. `sched_init()` copies a page of trampoline over `RETURN_ADDR`
+  before switching to that directory, so every boot was overwriting the page
+  directory and surviving on whatever happened to follow it in `.bss`. Adding a
+  few kilobytes anywhere in the image moved the damage onto something live and
+  the machine hung at the scheduler with no output at all — which is how it was
+  found. It now sits at `0x7FF000`, one page below `KERNEL_SPACE_END` and on
+  the far side of everything that grows with the kernel, and
+  [`kernel.lds`](kernel.lds) asserts at link time that the image cannot reach
+  it or the kernel-thread stacks. [`vmm.c`](vmm.c) carries the up-to-date map
+  of the identity-mapped low region.
 
 ### Scheduling & processes
 * Preemptive weighted fixed-priority round-robin scheduler with real-time
@@ -494,6 +509,52 @@ for anything more (there is no TLS or resolver cache).
   ([`proc.c`](proc.c)) drops the grab when it reaps the process, so a program
   that faults mid-frame cannot freeze the display. This is what
   [`apps/doom`](apps/doom) renders through.
+* **Window manager** — [`wm.c`](wm.c) / [`wm.h`](wm.h): the same 8-bpp surface,
+  composited into a window on the running desktop instead of taking the screen.
+  See below.
+
+### Window manager
+
+microui was always most of one — it drags windows, keeps a z-order, draws a
+title bar with a close box — but two things were missing before a ring-3
+program could be a window on this desktop.
+
+**Clipping.** `r_set_clip_rect` in [`renderer.c`](renderer.c) was a no-op, so
+microui's clip commands were thrown away and a window's contents painted
+wherever the widget happened to land: a scrolled log ran outside its panel, and
+a window in front could not cover the one behind. The renderer now honours the
+clip on every primitive. Text is the awkward case — ssfn draws whole cells into
+whatever surface it is pointed at and has no clip of its own — so a glyph the
+clip rectangle cuts through is rasterised into an ink mask (`draw_char_mask`)
+and plotted a pixel at a time, while a glyph wholly inside takes the fast
+whole-cell path. Partial glyphs only happen at the edges of a scrolling panel,
+so the slow path almost never runs.
+
+**Somewhere to put the program.** A program asks for a window (`wm_open`,
+syscall 39), hands over frames and a palette (`wm_blit` / `wm_palette`), and
+polls one 32-bit word per input event (`wm_event`). The desktop gives each live
+window a `mu_begin_window` of its own, sized to the surface plus one title bar
+so the body *is* the surface and the blit is 1:1, and pushes a draw command of
+its own type into microui's command list — so a program's pixels are
+composited **in z-order**, under whatever is in front of them and clipped to
+their own window's body, rather than paint over the top afterwards. Up to four
+windows at a time; each frame costs w*h bytes of the kernel heap.
+
+Input is routed, not shared. Clicking a window gives it the keyboard, and
+[`keyboard.c`](keyboard.c) then stops decoding the machine's keystrokes into
+the shell's ring and sends the raw scancodes to that window instead — the
+serial console deliberately keeps its own path, so a remote operator and the
+boot tests are never locked out by a window on someone else's screen. The
+pointer arrives in the window's own coordinates, sampled once a frame by the
+desktop, because where a window is is a thing only the desktop knows. The title
+bar's close box is a *request*: the program gets a window event and exits, and
+the window goes when the program does.
+
+Programs that want the whole screen are unaffected — [`apps/doom`](apps/doom),
+[`apps/chipnomad`](apps/chipnomad) and the Qt demos still grab it, and the
+window manager stands down while they hold it. [`apps/microui`](apps/microui)
+asks for a window first and falls back to the grab, so the same binary works on
+a machine with no desktop (`calc -f` forces it).
 
 ### Audio
 * [`hxcmod.c`](hxcmod.c) Amiga MOD player; sample module in
@@ -566,10 +627,14 @@ for anything more (there is no TLS or resolver cache).
   32-35 back [`apps/hello-thread`](apps/hello-thread) /
   [`apps/hello-pthread`](apps/hello-pthread), 36-37 back
   [`apps/hello-qt-widgets`](apps/hello-qt-widgets) and 38 back
-  [`apps/hello-tls`](apps/hello-tls). The graphics, keyboard and pointer calls
-  (22-27, 36) are the whole interface the microui apps in
-  [`apps/calc`](apps/calc) / [`apps/clock`](apps/clock) need as well — no
-  syscall was added for them.
+  [`apps/hello-tls`](apps/hello-tls). 39-43 are the **window manager**
+  ([`wm.h`](wm.h)): `wm_open`/`wm_close`/`wm_blit`/`wm_palette`/`wm_event`, a
+  window on the desktop instead of the whole screen, which is what
+  [`apps/calc`](apps/calc) and [`apps/clock`](apps/clock) ask for first and
+  22-27 / 36 what they fall back to. 44 is `spawn_bg` — `#21` waits for the
+  program it starts, so until this there could only ever be one at a time, and
+  a window manager that can show four of them wants a shell that can start
+  four (`cmd &` in [`apps/zsh`](apps/zsh)).
 * The ELF loader ([`elf.c`](elf.c)) maps every page of a `PT_LOAD` segment to
   its own frame and covers the `.bss` tail, so multi-page ring-3 binaries load.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
@@ -774,21 +839,25 @@ for anything more (there is no TLS or resolver cache).
     starts with an empty one; Qt reads several `QT_*` variables).
   * [`apps/calc`](apps/calc) — a graphical **calculator** (staged as `calc`)
     and [`apps/clock`](apps/clock) — an **analog clock** (staged as `clock`):
-    the first ring-3 programs with a real GUI that is not Qt. Both are built on
-    [`apps/microui`](apps/microui), a shared runtime that compiles the kernel's
-    own vendored [`microui.c`](microui.c) a *second* time, for ring 3, and
-    renders its command list into the full-screen grab (syscalls 22-25) as
-    8-bpp indexed frames. Because that renderer sees the drawing calls rather
-    than a finished picture, it **builds** the 256-entry palette as the frame
-    is painted instead of quantizing into a fixed one — a microui frame uses
-    about a dozen colours, so every one lands exactly. Text is the same
-    Unifont the kernel console draws, sliced out of `unifont.sfn` at build time
-    into a 1520-byte 8x16 table (`apps/microui/mkfont.c`) rather than carrying
-    the 1.2 MiB blob into a ring-3 image. The clock face is drawn through a
-    command type of the runtime's own, so it clips and layers inside its window
-    like a widget would, which microui's rect/text/icon command list cannot do
-    by itself. `make qemu-microui` drives both headless — keyboard arithmetic,
-    pointer clicks on the keypad, and Esc handing the desktop back.
+    ring-3 programs that are **windows on the desktop**, not full-screen
+    programs. Both are built on [`apps/microui`](apps/microui), a shared
+    runtime that compiles the kernel's own vendored [`microui.c`](microui.c) a
+    *second* time, for ring 3, and renders its command list into an 8-bpp
+    indexed surface the window manager composites (see **Window manager**
+    below) — or, when there is no desktop to put a window on, into the
+    full-screen grab. Because that renderer sees the drawing calls rather than
+    a finished picture, it **builds** the 256-entry palette as the frame is
+    painted instead of quantizing into a fixed one; a microui frame uses about
+    a dozen colours, so every one lands exactly. Text is the same Unifont the
+    kernel console draws, sliced out of `unifont.sfn` at build time into a
+    1520-byte 8x16 table (`apps/microui/mkfont.c`) rather than carrying the
+    1.2 MiB blob into a ring-3 image. The clock face is drawn through a command
+    type of the runtime's own, so it clips and layers inside its window like a
+    widget would, which microui's rect/text/icon command list cannot do by
+    itself. `make qemu-microui` drives it all headless: two windows at once,
+    keyboard arithmetic in the focused one, pointer clicks on the keypad,
+    dragging a window by its title bar, the close box, and the full-screen
+    fallback.
   * [`apps/01`](apps/01) — returns immediately (staged as `tst`)
   * [`apps/example`](apps/example) — reads a number, a char and a string with
     `scanf` and echoes them back

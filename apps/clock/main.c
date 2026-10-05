@@ -238,48 +238,40 @@ static void draw_face(const mui_Surface *s, mu_Rect r, void *udata) {
  *  The window                                                        *
  * ------------------------------------------------------------------ */
 
-/* Sized to its contents: the face, two readout lines, the options row and a
- * hint line, plus microui's title bar, padding and row spacing. */
+/* The content size: the face, two readout lines, the options row and a hint
+ * line, plus microui's padding and row spacing. The title bar is not in it --
+ * whoever owns the window frame draws that (see ../microui/mui.h). */
 #define WIN_W 332
-#define WIN_H 384
+#define WIN_H 360
 
 static void frame(mu_Context *ctx, void *udata) {
     clock_state *c = (clock_state *) udata;
 
     tick(c);
 
-    /* MU_OPT_NOCLOSE: Esc is the way out of a full-screen program here, and a
-     * title-bar X would leave this one running with nothing on screen. */
-    if (mu_begin_window_ex(ctx, "Clock",
-                           mu_rect((MUI_W - WIN_W) / 2, (MUI_H - WIN_H) / 2,
-                                   WIN_W, WIN_H),
-                           MU_OPT_NOCLOSE | MU_OPT_NOSCROLL)) {
-        mu_layout_row(ctx, 1, (int[]) { -1 }, 248);
-        mui_draw_custom(ctx, mu_layout_next(ctx), draw_face, c);
+    mu_layout_row(ctx, 1, (int[]) { -1 }, 248);
+    mui_draw_custom(ctx, mu_layout_next(ctx), draw_face, c);
 
-        mu_layout_row(ctx, 1, (int[]) { -1 }, 0);
-        mu_Rect r = mu_layout_next(ctx);
-        mu_draw_control_text(ctx, c->digital, r, MU_COLOR_TEXT,
-                             MU_OPT_ALIGNCENTER);
-        mu_layout_row(ctx, 1, (int[]) { -1 }, 0);
-        r = mu_layout_next(ctx);
-        mu_draw_control_text(ctx, c->date, r, MU_COLOR_TEXT,
-                             MU_OPT_ALIGNCENTER);
+    mu_layout_row(ctx, 1, (int[]) { -1 }, 0);
+    mu_Rect r = mu_layout_next(ctx);
+    mu_draw_control_text(ctx, c->digital, r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
 
-        mu_layout_row(ctx, 3, (int[]) { 104, 104, -1 }, 0);
-        mu_checkbox(ctx, "sweep", &c->sweep);
-        mu_checkbox(ctx, "24h", &c->show_24h);
-        mu_checkbox(ctx, "numerals", &c->numerals);
+    mu_layout_row(ctx, 1, (int[]) { -1 }, 0);
+    r = mu_layout_next(ctx);
+    mu_draw_control_text(ctx, c->date, r, MU_COLOR_TEXT, MU_OPT_ALIGNCENTER);
 
-        mu_layout_row(ctx, 1, (int[]) { -1 }, 0);
-        mu_label(ctx, "Esc quits");
+    mu_layout_row(ctx, 3, (int[]) { 104, 104, -1 }, 0);
+    mu_checkbox(ctx, "sweep", &c->sweep);
+    mu_checkbox(ctx, "24h", &c->show_24h);
+    mu_checkbox(ctx, "numerals", &c->numerals);
 
-        mu_end_window(ctx);
-    }
+    mu_layout_row(ctx, 1, (int[]) { -1 }, 0);
+    mu_label(ctx, "Esc quits");
 }
 
 /**
- * @brief Entry point. `clock -v` echoes each second to the console.
+ * @brief Entry point. `clock -v` echoes each second to the console;
+ *        `clock -f` takes the whole screen instead of a window.
  */
 int main(int argc, char **argv) {
     static clock_state c = { .sweep = 1, .numerals = 1 };
@@ -287,10 +279,12 @@ int main(int argc, char **argv) {
     for (int i = 1; i < argc; i++)
         if (argv[i] && argv[i][0] == '-' && argv[i][1] == 'v')
             c.verbose = 1;
+        else if (argv[i] && argv[i][0] == '-' && argv[i][1] == 'f')
+            mui_fullscreen(1);
 
-    if (mui_run(frame, &c) < 0) {
-        printf("clock: cannot take the screen -- no framebuffer, or another "
-               "program is holding it\n");
+    if (mui_run("Clock", WIN_W, WIN_H, frame, &c) < 0) {
+        printf("clock: no window and no screen -- is there a framebuffer, and "
+               "is another program holding it?\n");
         return 1;
     }
     return 0;

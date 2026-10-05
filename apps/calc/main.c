@@ -340,13 +340,12 @@ static void keyboard(mu_Context *ctx, calc *c) {
  * ------------------------------------------------------------------ */
 
 /*
- * Sized to its contents: display, five keypad rows, one hint line, plus
- * microui's title bar, padding and row spacing. MU_OPT_NOSCROLL below then
- * means what it says -- there is nothing to scroll -- rather than hiding an
- * overflow.
+ * The content size: display, five keypad rows and one hint line, plus
+ * microui's padding and row spacing. The title bar is not in it -- whoever
+ * owns the window frame draws that (see ../microui/mui.h).
  */
 #define WIN_W 320
-#define WIN_H 328
+#define WIN_H 304
 
 static void frame(mu_Context *ctx, void *udata) {
     calc *c = (calc *) udata;
@@ -354,40 +353,35 @@ static void frame(mu_Context *ctx, void *udata) {
     keyboard(ctx, c);
     format(c);
 
-    /* MU_OPT_NOCLOSE: Esc is the way out of a full-screen program here, and a
-     * title-bar X would otherwise leave this one running with a blank screen
-     * and no window to get back. */
-    if (mu_begin_window_ex(ctx, "Calculator",
-                           mu_rect((MUI_W - WIN_W) / 2, (MUI_H - WIN_H) / 2,
-                                   WIN_W, WIN_H),
-                           MU_OPT_NOCLOSE | MU_OPT_NOSCROLL)) {
-        mu_layout_row(ctx, 1, (int[]) { -1 }, 54);
-        mui_draw_custom(ctx, mu_layout_next(ctx), draw_display, c);
+    mu_layout_row(ctx, 1, (int[]) { -1 }, 54);
+    mui_draw_custom(ctx, mu_layout_next(ctx), draw_display, c);
 
-        for (int row = 0; row < 5; row++) {
-            mu_layout_row(ctx, 4, (int[]) { 71, 71, 71, -1 }, 40);
-            for (int col = 0; col < 4; col++) {
-                const key *k = &g_keypad[row][col];
-                /* Every label here is distinct, and microui derives a widget's
-                 * id from its label, so no mu_push_id juggling is needed. */
-                if (mu_button(ctx, k->label))
-                    press(c, k);
-            }
+    for (int row = 0; row < 5; row++) {
+        mu_layout_row(ctx, 4, (int[]) { 71, 71, 71, -1 }, 40);
+        for (int col = 0; col < 4; col++) {
+            const key *k = &g_keypad[row][col];
+            /* Every label here is distinct, and microui derives a widget's id
+             * from its label, so no mu_push_id juggling is needed. */
+            if (mu_button(ctx, k->label))
+                press(c, k);
         }
-
-        mu_layout_row(ctx, 1, (int[]) { -1 }, 0);
-        mu_label(ctx, "0-9 . + - * /  Enter =  Esc quits");
-
-        mu_end_window(ctx);
     }
+
+    mu_layout_row(ctx, 1, (int[]) { -1 }, 0);
+    mu_label(ctx, "0-9 . + - * /  Enter =  Esc quits");
 }
 
-int main(void) {
+/** @brief Entry point. `calc -f` takes the whole screen instead of a window. */
+int main(int argc, char **argv) {
     static calc c;
 
-    if (mui_run(frame, &c) < 0) {
-        printf("calc: cannot take the screen -- no framebuffer, or another "
-               "program is holding it\n");
+    for (int i = 1; i < argc; i++)
+        if (argv[i] && argv[i][0] == '-' && argv[i][1] == 'f')
+            mui_fullscreen(1);
+
+    if (mui_run("Calculator", WIN_W, WIN_H, frame, &c) < 0) {
+        printf("calc: no window and no screen -- is there a framebuffer, and "
+               "is another program holding it?\n");
         return 1;
     }
     return 0;

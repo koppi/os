@@ -18,6 +18,14 @@ uint8_t keyboard_enabled();
 void keyboard_read_key();
 /** @brief Inject a decoded character (used by the USB HID keyboard driver). */
 void keyboard_push_char(char c);
+/**
+ * @brief Inject a character typed on this machine's own keyboard.
+ *
+ * Same ring, except that it is dropped while a program window has the keyboard
+ * (wm.h). The serial line uses @ref keyboard_push_char instead and is never
+ * dropped -- see keyboard.c.
+ */
+void keyboard_push_local_char(char c);
 
 /**
  * @name Cursor keys in the character stream

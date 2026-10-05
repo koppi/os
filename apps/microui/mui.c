@@ -49,6 +49,12 @@ static inline unsigned ksys2(int n, unsigned a, unsigned b) {
     __asm__ volatile ("int $0x72" : "=a"(r) : "a"(n), "b"(a), "c"(b) : "memory");
     return r;
 }
+static inline unsigned ksys3(int n, unsigned a, unsigned b, unsigned c) {
+    unsigned r;
+    __asm__ volatile ("int $0x72"
+                      : "=a"(r) : "a"(n), "b"(a), "c"(b), "d"(c) : "memory");
+    return r;
+}
 
 enum {
     SYS_EXIT        = 5,
@@ -61,8 +67,25 @@ enum {
     SYS_GFX_BLIT    = 25,
     SYS_GETSCAN     = 26,
     SYS_MSLEEP      = 27,
-    SYS_GETMOUSE    = 36
+    SYS_GETMOUSE    = 36,
+    /* The window manager (wm.h): a window on the desktop instead of the
+     * whole screen. */
+    SYS_WM_OPEN     = 39,
+    SYS_WM_CLOSE    = 40,
+    SYS_WM_BLIT     = 41,
+    SYS_WM_PALETTE  = 42,
+    SYS_WM_EVENT    = 43
 };
+
+/** @name wm_event (#43) words; mirrors WM_EV_* / WM_KEY_* in the kernel's wm.h. */
+///@{
+#define WMEV_VALID    0x80000000u
+#define WMEV_KIND(e)  (((e) >> 28) & 7u)
+#define WMEV_KEY      0u
+#define WMEV_POINTER  1u
+#define WMEV_WINDOW   2u
+#define WMEV_WIN_CLOSE 1u
+///@}
 
 /** getscan (#26) result bits; mirrors KBD_RAW_* in the kernel's keyboard.h. */
 #define SCAN_BREAK 0x0080
@@ -97,6 +120,7 @@ void putchar_(char c) {
  * reaches the serial log).
  */
 void halt(void) {
+    ksys0(SYS_WM_CLOSE);
     ksys0(SYS_GFX_CLOSE);
     ksys1(SYS_EXIT, (unsigned) -1);
     for (;;)                 /* unreachable: the syscall does not return */
@@ -135,16 +159,18 @@ void qsort(void *base, size_t n, size_t size,
  *  The surface and its palette                                        *
  * ------------------------------------------------------------------ */
 
-static unsigned char g_pix[MUI_W * MUI_H];   /**< The indexed frame. */
-
 /**
- * What shows through where no window covers the screen. Deliberately not
- * MU_COLOR_WINDOWBG: the whole surface in the window colour makes every
- * window's own edge disappear into it.
+ * The frame, big enough for the largest surface this runtime will open. One
+ * buffer, not two: microui is immediate-mode and the whole surface is redrawn
+ * every frame, so there is never a previous frame worth keeping.
  */
-static mu_Color g_backdrop = { 24, 26, 32, 255 };
+static unsigned char g_pix[MUI_MAX_W * MUI_MAX_H];
+static int g_w, g_h;            /**< The surface actually in use. */
+static int g_windowed;          /**< Non-zero when the desktop owns the frame. */
+static int g_want_fullscreen;   /**< Set by mui_fullscreen(): skip the window. */
 
-void mui_backdrop(mu_Color c) { g_backdrop = c; }
+int mui_windowed(void) { return g_windowed; }
+void mui_fullscreen(int on) { g_want_fullscreen = on; }
 
 static unsigned g_pal[256];                  /**< 0x00RRGGBB per slot. */
 static int g_pal_n;                          /**< Slots taken this frame. */
@@ -455,8 +481,8 @@ void mui_draw_custom(mu_Context *ctx, mu_Rect rect, mui_DrawFn fn, void *udata) 
 
 /** @brief Walk the command list and paint it into @ref g_pix. */
 static void render(mu_Context *ctx) {
-    const mu_Rect full = mu_rect(0, 0, MUI_W, MUI_H);
-    mui_Surface s = { g_pix, MUI_W, MUI_H, full };
+    const mu_Rect full = mu_rect(0, 0, g_w, g_h);
+    mui_Surface s = { g_pix, g_w, g_h, full };
     mu_Command *cmd = 0;
 
     while (mu_next_command(ctx, &cmd)) {
@@ -493,11 +519,11 @@ static void render(mu_Context *ctx) {
  *  The pointer                                                        *
  * ------------------------------------------------------------------ */
 
-static int g_mx = MUI_W / 2, g_my = MUI_H / 2;
+static int g_mx, g_my;
 
 /*
  * Drawn here because a grabbed screen has no compositor behind it: the
- * kernel's own pointer is part of the desktop it just parked. 'X' is the
+ * kernel's own pointer is part of the desktop the grab just parked. 'X' is the
  * outline, '.' the fill, as in the Qt port's overlay.
  */
 static const char *const g_cursor[] = {
@@ -508,10 +534,16 @@ static const char *const g_cursor[] = {
     "      X..X  ", "      X..X  ", "       XX   "
 };
 
-/** @brief Stamp the pointer into the finished frame. */
+/**
+ * @brief Stamp the pointer into the finished frame.
+ *
+ * Only on the full-screen path. A window's pointer is the desktop's, drawn by
+ * the desktop over everything including this program's surface, so drawing one
+ * here as well would put two arrows on screen a frame apart.
+ */
 static void draw_cursor(void) {
-    const mu_Rect full = mu_rect(0, 0, MUI_W, MUI_H);
-    mui_Surface s = { g_pix, MUI_W, MUI_H, full };
+    const mu_Rect full = mu_rect(0, 0, g_w, g_h);
+    mui_Surface s = { g_pix, g_w, g_h, full };
     unsigned char edge = pal_index(mu_color(0, 0, 0, 255));
     unsigned char body = pal_index(mu_color(255, 255, 255, 255));
     for (int row = 0; row < (int) (sizeof g_cursor / sizeof *g_cursor); row++)
@@ -575,61 +607,98 @@ static int g_shift, g_caps, g_quit, g_buttons;
 
 void mui_quit(void) { g_quit = 1; }
 
-/** @brief Drain the raw key ring into @p ctx. Esc sets the quit flag. */
-static void pump_keys(mu_Context *ctx) {
-    unsigned ev;
-    while ((ev = ksys0(SYS_GETSCAN)) & SCAN_VALID) {
-        int release = (ev & SCAN_BREAK) != 0, e0 = (ev & SCAN_E0) != 0;
-        unsigned sc = ev & 0x7F;
+/**
+ * @brief Turn one raw key event into microui input.
+ *
+ * @p raw is a scancode with the break and 0xE0 bits, which is what both
+ * sources give: `getscan` on the full-screen path and the window manager's
+ * key events on the other. Esc sets the quit flag either way.
+ */
+static void translate_key(mu_Context *ctx, unsigned raw) {
+    int release = (raw & SCAN_BREAK) != 0, e0 = (raw & SCAN_E0) != 0;
+    unsigned sc = raw & 0x7F;
 
-        if (e0) {
-            /* The grey keys. Only the two that collide with the keypad and
-             * mean something to a microui frame are worth translating. */
-            if (sc == 0x1C) {                     /* keypad Enter */
-                if (release) mu_input_keyup(ctx, MU_KEY_RETURN);
-                else         mu_input_keydown(ctx, MU_KEY_RETURN);
-            } else if (sc == 0x1D) {              /* right Ctrl */
-                if (release) mu_input_keyup(ctx, MU_KEY_CTRL);
-                else         mu_input_keydown(ctx, MU_KEY_CTRL);
-            } else if (sc == 0x35 && !release) {  /* keypad / */
-                mu_input_text(ctx, "/");
-            }
-            continue;
+    if (e0) {
+        /* The grey keys. Only the ones that collide with the keypad and mean
+         * something to a microui frame are worth translating. */
+        if (sc == 0x1C) {                         /* keypad Enter */
+            if (release) mu_input_keyup(ctx, MU_KEY_RETURN);
+            else         mu_input_keydown(ctx, MU_KEY_RETURN);
+        } else if (sc == 0x1D) {                  /* right Ctrl */
+            if (release) mu_input_keyup(ctx, MU_KEY_CTRL);
+            else         mu_input_keydown(ctx, MU_KEY_CTRL);
+        } else if (sc == 0x35 && !release) {      /* keypad / */
+            mu_input_text(ctx, "/");
         }
+        return;
+    }
 
-        if (sc == 0x01) {                         /* Esc: leave */
-            if (!release)
-                g_quit = 1;
-            continue;
-        }
-        if (sc == 0x3A) {                         /* Caps Lock */
-            if (!release)
-                g_caps = !g_caps;
-            continue;
-        }
-        if (sc >= sizeof g_keys / sizeof *g_keys)
-            continue;
+    if (sc == 0x01) {                             /* Esc: leave */
+        if (!release)
+            g_quit = 1;
+        return;
+    }
+    if (sc == 0x3A) {                             /* Caps Lock */
+        if (!release)
+            g_caps = !g_caps;
+        return;
+    }
+    if (sc >= sizeof g_keys / sizeof *g_keys)
+        return;
 
-        keydef k = g_keys[sc];
-        if (k.key == MU_KEY_SHIFT)
-            g_shift = !release;
-        if (k.key) {
-            if (release) mu_input_keyup(ctx, k.key);
-            else         mu_input_keydown(ctx, k.key);
-            continue;
-        }
-        if (release || !k.normal)
-            continue;
-        int letter = k.normal >= 'a' && k.normal <= 'z';
-        char c = (g_shift != (g_caps && letter)) ? k.shifted : k.normal;
-        if (c && c != '\t') {
-            char text[2] = { c, 0 };
-            mu_input_text(ctx, text);
-        }
+    keydef k = g_keys[sc];
+    if (k.key == MU_KEY_SHIFT)
+        g_shift = !release;
+    if (k.key) {
+        if (release) mu_input_keyup(ctx, k.key);
+        else         mu_input_keydown(ctx, k.key);
+        return;
+    }
+    if (release || !k.normal)
+        return;
+    int letter = k.normal >= 'a' && k.normal <= 'z';
+    char c = (g_shift != (g_caps && letter)) ? k.shifted : k.normal;
+    if (c && c != '\t') {
+        char text[2] = { c, 0 };
+        mu_input_text(ctx, text);
     }
 }
 
-/** @brief Drain the pointer ring into @p ctx, tracking the cursor position. */
+/** @brief Drain the full-screen raw key ring into @p ctx. */
+static void pump_keys(mu_Context *ctx) {
+    unsigned ev;
+    while ((ev = ksys0(SYS_GETSCAN)) & SCAN_VALID)
+        translate_key(ctx, ev & 0xFFFF);
+}
+
+/**
+ * @brief Feed one pointer sample to @p ctx and track the button edges.
+ *
+ * Both paths end here, because microui wants the same three things from each:
+ * where the pointer is, and which buttons went down and up since last time.
+ * Its button bits happen to be the driver's (left 1, right 2, middle 4), so
+ * the mask passes straight through.
+ */
+static void feed_pointer(mu_Context *ctx, int x, int y, int buttons) {
+    g_mx = x;
+    g_my = y;
+    mu_input_mousemove(ctx, x, y);
+    for (int bit = 1; bit <= 4; bit <<= 1) {
+        int now = buttons & bit, was = g_buttons & bit;
+        if (now && !was)
+            mu_input_mousedown(ctx, x, y, bit);
+        else if (!now && was)
+            mu_input_mouseup(ctx, x, y, bit);
+    }
+    g_buttons = buttons;
+}
+
+/**
+ * @brief Drain the full-screen pointer ring into @p ctx.
+ *
+ * getmouse reports *relative* motion -- it is the raw device, not a pointer --
+ * so the position is this program's to keep, and to draw.
+ */
 static void pump_mouse(mu_Context *ctx) {
     unsigned ev;
     while ((ev = ksys0(SYS_GETMOUSE)) & MOUSE_VALID) {
@@ -637,22 +706,40 @@ static void pump_mouse(mu_Context *ctx) {
         int dx = (int) (ev & 0xFFF), dy = (int) ((ev >> 12) & 0xFFF);
         if (dx & 0x800) dx -= 0x1000;
         if (dy & 0x800) dy -= 0x1000;
-        int buttons = (int) ((ev >> 24) & 7);
 
-        g_mx = mu_clamp(g_mx + dx, 0, MUI_W - 1);
-        g_my = mu_clamp(g_my + dy, 0, MUI_H - 1);
-        mu_input_mousemove(ctx, g_mx, g_my);
+        feed_pointer(ctx, mu_clamp(g_mx + dx, 0, g_w - 1),
+                     mu_clamp(g_my + dy, 0, g_h - 1), (int) ((ev >> 24) & 7));
+    }
+}
 
-        /* microui's button bits happen to be the driver's (left 1, right 2,
-         * middle 4), so the mask passes straight through. */
-        for (int bit = 1; bit <= 4; bit <<= 1) {
-            int now = buttons & bit, was = g_buttons & bit;
-            if (now && !was)
-                mu_input_mousedown(ctx, g_mx, g_my, bit);
-            else if (!now && was)
-                mu_input_mouseup(ctx, g_mx, g_my, bit);
+/**
+ * @brief Drain the window's event queue into @p ctx.
+ *
+ * The windowed counterpart of @ref pump_keys and @ref pump_mouse together:
+ * keys arrive in the same encoding getscan uses, so they go through the same
+ * translation, and the pointer arrives as an *absolute* position in this
+ * window's own coordinates -- the desktop has already decided where the window
+ * is and whether this program is the one being pointed at. A close event is
+ * the title bar's box; obeying it is what makes that box work.
+ */
+static void pump_window(mu_Context *ctx) {
+    unsigned ev;
+    while ((ev = ksys0(SYS_WM_EVENT)) & WMEV_VALID) {
+        switch (WMEV_KIND(ev)) {
+        case WMEV_KEY:
+            translate_key(ctx, ev & 0xFFFF);
+            break;
+        case WMEV_POINTER:
+            feed_pointer(ctx, (int) (ev & 0xFFF), (int) ((ev >> 12) & 0xFFF),
+                         (int) ((ev >> 24) & 7));
+            break;
+        case WMEV_WINDOW:
+            if ((ev & 0xFF) == WMEV_WIN_CLOSE)
+                g_quit = 1;
+            break;
+        default:
+            break;
         }
-        g_buttons = buttons;
     }
 }
 
@@ -673,44 +760,103 @@ static int text_height_cb(mu_Font font) {
 /** One frame every ~16 ms: the rate the kernel's own compositor runs at. */
 #define FRAME_MS 16
 
-int mui_run(mui_FrameFn frame, void *udata) {
+/**
+ * The title bar the full-screen path draws for itself. The window manager
+ * draws one on the other path, so the surface is this much taller there and
+ * the program's content is the same size either way.
+ */
+#define FALLBACK_TITLE_H 24
+
+int mui_run(const char *title, int w, int h, mui_FrameFn frame, void *udata) {
     static mu_Context ctx;        /* ~290 KiB: .bss, not the 256 KiB stack */
 
-    if (!frame)
+    if (!frame || w <= 0 || h <= 0)
         return -1;
-    if (!ksys2(SYS_GFX_OPEN, MUI_W, MUI_H))
-        return -1;
+    if (!title)
+        title = "program";
+
+    /*
+     * A window first, the whole screen only if there is no desktop to put one
+     * on. The difference the program sees is this much: how big its surface
+     * is, where its input comes from, and whether it draws its own chrome.
+     */
+    g_windowed = 0;
+    g_w = w;
+    g_h = h;
+    if (!g_want_fullscreen && w <= MUI_MAX_W && h <= MUI_MAX_H &&
+        ksys3(SYS_WM_OPEN, (unsigned) w, (unsigned) h,
+              (unsigned) (unsigned long) title)) {
+        g_windowed = 1;
+    } else {
+        g_h = h + FALLBACK_TITLE_H;
+        if (w > MUI_MAX_W || g_h > MUI_MAX_H)
+            return -1;
+        if (!ksys2(SYS_GFX_OPEN, (unsigned) g_w, (unsigned) g_h))
+            return -1;
+        g_mx = g_w / 2;
+        g_my = g_h / 2;
+    }
 
     mu_init(&ctx);
     ctx.text_width = text_width_cb;
     ctx.text_height = text_height_cb;
 
+    /*
+     * Who draws the frame. In a window the desktop already drew the title bar
+     * and the border, so drawing another inside it would be two frames deep;
+     * on the full-screen path there is nothing behind this program at all, so
+     * it draws its own. Either way the window fills the surface and is not
+     * movable, closable or resizable from in here -- those belong to whoever
+     * owns the frame.
+     */
+    int opt = MU_OPT_NOCLOSE | MU_OPT_NORESIZE | MU_OPT_NOSCROLL;
+    if (g_windowed)
+        opt |= MU_OPT_NOTITLE | MU_OPT_NOFRAME;
+
     g_quit = 0;
     while (!g_quit) {
         unsigned t0 = mui_ms();
 
-        pump_keys(&ctx);
-        pump_mouse(&ctx);
+        if (g_windowed) {
+            pump_window(&ctx);
+        } else {
+            pump_keys(&ctx);
+            pump_mouse(&ctx);
+        }
 
         mu_begin(&ctx);
-        frame(&ctx, udata);
+        if (mu_begin_window_ex(&ctx, title, mu_rect(0, 0, g_w, g_h), opt)) {
+            frame(&ctx, udata);
+            mu_end_window(&ctx);
+        }
         mu_end(&ctx);
 
-        /* Slot 0 is the clear colour, so clearing the surface to 0 paints the
-         * background; everything the frame draws interns after it. */
+        /* Slot 0 is the window background, so clearing the surface to 0 fills
+         * it; everything the frame draws interns after that. MU_OPT_NOFRAME
+         * means microui paints no background of its own, so on the windowed
+         * path this is the only thing that does. */
         g_pal_n = 0;
-        memset(g_pix, pal_index(g_backdrop), sizeof g_pix);
+        memset(g_pix, pal_index(ctx.style->colors[MU_COLOR_WINDOWBG]),
+               (size_t) g_w * g_h);
         render(&ctx);
-        draw_cursor();
 
-        ksys1(SYS_GFX_PALETTE, (unsigned) (unsigned long) g_pal);
-        ksys1(SYS_GFX_BLIT, (unsigned) (unsigned long) g_pix);
+        if (g_windowed) {
+            ksys1(SYS_WM_PALETTE, (unsigned) (unsigned long) g_pal);
+            ksys1(SYS_WM_BLIT, (unsigned) (unsigned long) g_pix);
+        } else {
+            draw_cursor();
+            ksys1(SYS_GFX_PALETTE, (unsigned) (unsigned long) g_pal);
+            ksys1(SYS_GFX_BLIT, (unsigned) (unsigned long) g_pix);
+        }
 
         unsigned spent = mui_ms() - t0;
         if (spent < FRAME_MS)
             ksys1(SYS_MSLEEP, FRAME_MS - spent);
     }
 
-    ksys0(SYS_GFX_CLOSE);
+    if (g_windowed)
+        ksys0(SYS_WM_CLOSE);
+    else
+        ksys0(SYS_GFX_CLOSE);
     return 0;
 }

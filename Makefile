@@ -208,10 +208,12 @@ qemu-doom: iso
 qemu-chipnomad: iso
 	@bash test/chipnomad-boot.sh all
 
-# Drive the ring-3 microui apps (apps/calc, apps/clock): start each over the
-# serial console, type at the calculator, click its keypad and the clock's
-# options with the monitor's mouse, check Esc gives the desktop back.
-# Screenshots and the apps' own log lines per step in /tmp/microui-boot.
+# Drive the ring-3 microui apps (apps/calc, apps/clock) and the window manager
+# they run on: start them over the serial console, check two windows share the
+# desktop, type at the focused one, click its keypad and drag its title bar with
+# the monitor's mouse, close one with its close box and the other with Esc, and
+# check the full-screen fallback still works. Screenshots and the apps' own log
+# lines per step in /tmp/microui-boot.
 qemu-microui: iso
 	@bash test/microui-boot.sh all
 

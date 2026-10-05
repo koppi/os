@@ -567,6 +567,64 @@ void draw_string(uint32_t x, uint32_t y, const char *text, uint32_t color) {
     }
 }
 
+/**
+ * @brief Draw one character cell with its top-left at (@p x, @p y).
+ *
+ * The whole-cell path: fast (ssfn writes the shadow directly) but clipped only
+ * against the screen, so the caller must know the cell is wholly inside
+ * whatever smaller region it is drawing into. @ref draw_char_mask is the one
+ * to use when it is not.
+ */
+void draw_char(int x, int y, char c, uint32_t color) {
+    if (!bfb_addr)
+        return;
+    if (x < 0 || y < 0 ||
+        x + FBCON_CW > vbemem.xres || y + FBCON_CH > vbemem.yres)
+        return;
+
+    ssfn_font      = &_binary_unifont_sfn_start;
+    ssfn_dst_ptr   = (uint8_t *) vbemem.buffer;
+    ssfn_dst_pitch = vbemem.pitch;
+    ssfn_dst_w     = vbemem.xres;
+    ssfn_dst_h     = vbemem.yres;
+    ssfn_fg = (vbemem.buffer == (uint32_t *) fb_base) ? pack_color(color) : color;
+    ssfn_x = (uint32_t) x;
+    ssfn_y = (uint32_t) y;
+    ssfn_putc((unsigned char) c);
+}
+
+/**
+ * @brief Rasterise one character into an ink mask, @ref VIDEO_CW x
+ *        @ref VIDEO_CH bytes, 1 where the glyph has ink.
+ *
+ * For drawing text that a window's clip rectangle cuts in half. ssfn renders
+ * whole cells into whatever surface it is pointed at and has no notion of a
+ * clip smaller than that surface, so the glyph is rendered here into a private
+ * scratch cell and the caller plots the part it wants. Everything about the
+ * glyph -- the font, the baseline, the advance -- stays in this file; the
+ * caller only ever sees ink or no ink.
+ */
+void draw_char_mask(char c, uint8_t *mask) {
+    static uint32_t cell[FBCON_CW * FBCON_CH];
+
+    memset(cell, 0, sizeof cell);
+    memset(mask, 0, FBCON_CW * FBCON_CH);
+    if (!bfb_addr)
+        return;
+
+    ssfn_font      = &_binary_unifont_sfn_start;
+    ssfn_dst_ptr   = (uint8_t *) cell;
+    ssfn_dst_pitch = FBCON_CW * 4;
+    ssfn_dst_w     = FBCON_CW;
+    ssfn_dst_h     = FBCON_CH;
+    ssfn_fg        = 0xFFFFFF;        /* any non-zero: the mask is binary */
+    ssfn_x = ssfn_y = 0;
+    ssfn_putc((unsigned char) c);
+
+    for (int i = 0; i < FBCON_CW * FBCON_CH; i++)
+        mask[i] = cell[i] ? 1 : 0;
+}
+
 void draw_data_with_alfa(uint32_t* data, uint32_t width, uint32_t height, uint32_t x, uint32_t y) {
     if (!bfb_addr) return;
     for (uint32_t j = 0; j < height; j++)

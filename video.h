@@ -91,6 +91,28 @@ void draw_pixel(int x, int y, uint32_t color);
 void draw_rect(int x, int y, int w, int h, uint32_t color);
 /** @brief Draw @p text at (@p x, @p y) using the built-in SSFN font. */
 void draw_string(uint32_t x, uint32_t y, const char *text, uint32_t color);
+
+/** @name The UI font cell
+ *
+ * The built-in font is GNU Unifont, which is natively an 8x16 bitmap, so a
+ * character cell is these two numbers everywhere -- the text console, the
+ * desktop's renderer and its text metrics all measure in them.
+ */
+///@{
+#define VIDEO_CW 8
+#define VIDEO_CH 16
+///@}
+
+/** @brief Draw one character cell at (@p x, @p y); clipped to the screen only. */
+void draw_char(int x, int y, char c, uint32_t color);
+/**
+ * @brief Rasterise @p c into @p mask, @ref VIDEO_CW * @ref VIDEO_CH bytes,
+ *        1 where the glyph has ink.
+ *
+ * For text a window's clip rectangle cuts through: the caller plots the part
+ * of the cell it wants. See renderer.c.
+ */
+void draw_char_mask(char c, uint8_t *mask);
 /**
  * @brief Blit a 32-bpp image, treating a zero alpha byte as transparent.
  * @param data          Pixel array, row-major, @p width * @p height entries.

@@ -40,7 +40,14 @@ const char *console_cwd(void);
  *        because the ELF loader must run on the kernel page directory.
  * @return the child's exit status, or -1 if it could not be started.
  */
-int console_spawn_request(const char *path, const char *args);
+/**
+ * @param detach Non-zero to start it and return at once (the caller does not
+ *        wait and does not reap it; @ref console_spawn_service does). This is
+ *        what lets two windowed programs share the desktop -- see wm.h.
+ * @return 0 when a foreground program has finished, the new pid for a detached
+ *         one, or -1 if it could not be started.
+ */
+int console_spawn_request(const char *path, const char *args, int detach);
 
 /** @brief Run one pending @ref console_spawn_request; call from the init loop. */
 void console_spawn_service(void);

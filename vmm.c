@@ -23,19 +23,25 @@
 #include <bootdiag.h>
 
 /*
- * |------------------------------------------------|
- * | 0x0 - 0x400000 -> identity mapped kernel space |
- * | kernel_end - 0x200000 -> kernel heap           |
- * | 0x200000 - 0x400000 -> paging structures       |
- * |------------------------------------------------|
- * | 0x400000 - 0x401000 -> common space            |
- * |------------------------------------------------|
- * | 0x401000 - 0x700000 -> free space              |
- * |------------------------------------------------|
- * | 0x700000 - 0x800000 -> elf loading space       |
- * |------------------------------------------------|
- * | 0x800000 - end -> programs address space       |
- * |------------------------------------------------|
+ * The identity-mapped low region, [0, KERNEL_SPACE_END). Everything here is
+ * mapped 1:1 and reserved in the PMM, so nothing in it can be handed out as a
+ * general frame. Addresses are the ones in mm.h and proc.h.
+ *
+ * |--------------------------------------------------------------|
+ * | 0x000000 - 0x100000  -> real-mode / BIOS low memory          |
+ * | 0x100000 - kernel_end -> the kernel image (grows; see below) |
+ * | kernel_end - +512 KiB -> page-table storage window (paging.c)|
+ * | 0x4C0000 - 0x600000  -> kernel-thread stacks (KPROC_STACK_*) |
+ * | 0x600000 - 0x7FF000  -> free                                 |
+ * | 0x7FF000 - 0x800000  -> the RETURN_ADDR trampoline (proc.h)  |
+ * |--------------------------------------------------------------|
+ * | 0x800000 - ...       -> a program's own address space        |
+ * |--------------------------------------------------------------|
+ *
+ * The image grows with the kernel and the storage window follows it, so the
+ * two fixed pages above them are the ones that have to be kept out of reach:
+ * kernel.lds asserts that they are. The ELF staging window moved out of this
+ * region to 72 MiB long ago (elf.c); the kernel heap is at 96 MiB (mm.h).
  */
 
 page_dir_t kern_dir[1024] __attribute__((aligned(4096)));

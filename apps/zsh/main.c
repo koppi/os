@@ -64,6 +64,12 @@ static int  sys_listdir(const char *p, char *b, int n) {
 static int  sys_spawn(const char *path, const char *args) {
     return (int)SC2(21, path, args);
 }
+/* Start a program without waiting for it (#44). The window manager can show
+ * four programs at once, which only means something if the shell can start a
+ * second one while the first is still up -- see wm.h. */
+static int  sys_spawn_bg(const char *path, const char *args) {
+    return (int)SC2(44, path, args);
+}
 
 /** Mirrors the kernel `file` handle (lib/stdio.h FILE). */
 typedef struct { char name[32]; u32 flags, len, eof, dev, cur, type; } OSFILE;
@@ -584,6 +590,22 @@ static void run_segment(const char *seg_in) {
     apply_alias(seg);
     glob_expand(seg);
 
+    /*
+     * A trailing `&` runs the program without waiting for it. Only a program
+     * can be backgrounded -- a kernel console command runs inside this
+     * process's own syscall and there is nothing to detach.
+     */
+    int bg = 0;
+    {
+        int e = slen(seg);
+        while (e > 0 && is_space(seg[e - 1])) e--;
+        if (e > 0 && seg[e - 1] == '&') {
+            bg = 1;
+            seg[e - 1] = 0;
+            while (e > 1 && is_space(seg[e - 2])) seg[--e - 1] = 0;
+        }
+    }
+
     char cmd[64];
     int i = 0;
     while (seg[i] && !is_space(seg[i]) && i < 63) { cmd[i] = seg[i]; i++; }
@@ -620,6 +642,7 @@ static void run_segment(const char *seg_in) {
     prog[k] = 0;
 
     if (!is_start && prog[0] != '/' && !prog_dir(prog)) {
+        if (bg) w("background: not a program, running it in the foreground\n");
         sys_run(seg);
         return;
     }
@@ -639,7 +662,16 @@ static void run_segment(const char *seg_in) {
         scat(full, "/");
         scat(full, prog);
     }
-    sys_spawn(full, pargs);
+    if (bg) {
+        int pid = sys_spawn_bg(full, pargs);
+        if (pid > 0) {
+            w("["); wu((u32) pid); w("] "); w(full); wc('\n');
+        } else {
+            w(full); w(": could not start in the background\n");
+        }
+    } else {
+        sys_spawn(full, pargs);
+    }
 }
 
 static void exec_line(const char *line) {

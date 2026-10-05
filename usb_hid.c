@@ -236,7 +236,7 @@ void usb_hid_report_keyboard(const uint8_t *rpt, int len, uint8_t prev[8],
             continue;   /* still held from last report */
         char c = shift ? kbd_ascii_shift[code] : kbd_ascii[code];
         if(c)
-            keyboard_push_char(c);
+            keyboard_push_local_char(c);
         push_scan_usage(code, 0);
     }
 

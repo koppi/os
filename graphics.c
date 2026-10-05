@@ -21,6 +21,7 @@
 #include <bmp.h>
 #include <sb16.h>
 #include <rand.h>
+#include <wm.h>
 
 short mouse_icon[] =  {
         1,0,0,0,0,0,0,0,0,0,0,
@@ -126,9 +127,108 @@ void write_log(char *text) {
     logbuf_updated = 1;
 }
 
+/* ------------------------------------------------------------------ *
+ *  Ring-3 program windows                                             *
+ * ------------------------------------------------------------------ */
+
+/**
+ * A draw command of the desktop's own, past the ones microui defines: paint
+ * window manager slot @c slot into @c rect.
+ *
+ * It goes into microui's command list rather than being painted after the
+ * frame so that a program's surface is composited *in z-order*, under whatever
+ * is in front of it and clipped to its own window's body. Painted afterwards
+ * it would sit on top of every kernel window, which is the difference between
+ * a window manager and a program that happens to be drawing on the screen.
+ */
+#define MU_COMMAND_SURFACE MU_COMMAND_MAX
+
+typedef struct {
+    mu_BaseCommand base;
+    mu_Rect rect;
+    int slot;
+} surface_command;
+
+/** @brief Queue slot @p slot's surface to be painted into @p rect. */
+static void draw_surface_cmd(mu_Rect rect, int slot) {
+    /* The same clip dance mu_draw_icon does: emit a clip command when the
+     * rect is only partly visible, and restore the unclipped one after. */
+    int clipped = mu_check_clip(&ctx, rect);
+    if (clipped == MU_CLIP_ALL)
+        return;
+    if (clipped == MU_CLIP_PART)
+        mu_set_clip(&ctx, mu_get_clip_rect(&ctx));
+    surface_command *cmd = (surface_command *)
+        mu_push_command(&ctx, MU_COMMAND_SURFACE, sizeof(surface_command));
+    cmd->rect = rect;
+    cmd->slot = slot;
+    if (clipped)
+        mu_set_clip(&ctx, mu_rect(0, 0, 0x1000000, 0x1000000));
+}
+
+/**
+ * @brief Give every live program window a microui window of its own.
+ *
+ * microui is already most of a window manager -- it drags, it resizes, it
+ * keeps a z-order, it draws a title bar with a close box -- so a program's
+ * window is an ordinary `mu_begin_window` whose body happens to be filled by
+ * someone else's pixels. Sizing it to the surface plus one title bar makes
+ * @c cnt->body exactly the surface, so the blit is 1:1 and needs no scaling.
+ *
+ * The close box is a *request*: microui clears @c cnt->open when it is
+ * clicked, which this turns into a window event for the program and then
+ * undoes. A program that takes the hint exits and its window goes with it; one
+ * that ignores it keeps its window, which is what every other system does too.
+ */
+static void draw_program_windows(void) {
+    int clicked_program = 0;
+
+    for (int i = 0; i < WM_MAX_WINDOWS; i++) {
+        wm_window_t *win = wm_slot(i);
+        if (!win)
+            continue;
+
+        /* The container is keyed on the owning pid, not the title: two
+         * programs may be called the same thing, and a slot reused by a new
+         * program should not inherit the old one's position. */
+        mu_push_id(&ctx, &win->pid, sizeof win->pid);
+
+        mu_Rect want = mu_rect(win->init_x, win->init_y,
+                               win->w, win->h + ctx.style->title_height);
+        if (mu_begin_window_ex(&ctx, win->title, want,
+                               MU_OPT_NORESIZE | MU_OPT_NOSCROLL)) {
+            mu_Container *cnt = mu_get_current_container(&ctx);
+            mu_Rect body = cnt->body;
+
+            draw_surface_cmd(body, i);
+            wm_viewport(i, body.x, body.y);
+
+            if (ctx.mouse_pressed && ctx.hover_root == cnt) {
+                wm_set_focus(i);
+                clicked_program = 1;
+            }
+            mu_end_window(&ctx);
+        } else {
+            /* Not open: the close box was clicked last frame. Tell the
+             * program and put the window back until it acts on it. */
+            wm_request_close(i);
+            mu_Container *cnt = mu_get_container(&ctx, win->title);
+            if (cnt)
+                cnt->open = 1;
+        }
+        mu_pop_id(&ctx);
+    }
+
+    /* A click anywhere else -- a kernel window, the background -- hands the
+     * keyboard back to the shell. */
+    if (ctx.mouse_pressed && !clicked_program)
+        wm_set_focus(-1);
+}
+
 /**
  * @brief Build the desktop's microui frame: a "system" window (sound toggle,
- *        shutdown) and a "console" window (scrolling log + command textbox).
+ *        shutdown), a "console" window (scrolling log + command textbox) and
+ *        one window per ring-3 program that asked for one.
  */
 void mu_2() {
     mu_begin(&ctx);
@@ -174,6 +274,8 @@ void mu_2() {
         mu_end_window(&ctx);
     }
 
+    draw_program_windows();
+
     mu_end(&ctx);
 }
 
@@ -199,6 +301,11 @@ unsigned long createRGB(int r, int g, int b) {
 
 /** @brief Render one frame of the desktop: starfield background then the UI. */
 void paint_desktop() {
+    /* Release windows closed since the last frame. This thread is the only
+     * reader of a window's pixels, so it is the only place the memory behind
+     * them can be freed without racing the compositor (see wm.h). */
+    wm_frame_begin();
+
     int scr_w = vbemem.xres ? vbemem.xres : 1280;
     int scr_h = vbemem.yres ? vbemem.yres : 1024;
 
@@ -271,21 +378,36 @@ void paint_desktop() {
 
     mu_Command *cmd = 0;
     while (mu_next_command(&ctx, &cmd)) {
-        if (cmd->type == MU_COMMAND_TEXT) {
+        switch (cmd->type) {
+        case MU_COMMAND_TEXT:
             r_draw_text(cmd->text.str, cmd->text.pos, cmd->text.color);
-        }
-        if (cmd->type == MU_COMMAND_RECT) {
+            break;
+        case MU_COMMAND_RECT:
             r_draw_rect(cmd->rect.rect, cmd->rect.color);
-        }
-        if (cmd->type == MU_COMMAND_ICON) {
+            break;
+        case MU_COMMAND_ICON:
             r_draw_icon(cmd->icon.id, cmd->icon.rect, cmd->icon.color);
-        }
-        if (cmd->type == MU_COMMAND_CLIP) {
+            break;
+        case MU_COMMAND_CLIP:
             r_set_clip_rect(cmd->clip.rect);
+            break;
+        case MU_COMMAND_SURFACE: {
+            surface_command *sc = (surface_command *) cmd;
+            wm_window_t *win = wm_slot(sc->slot);
+            if (win)
+                r_draw_surface(sc->rect, win->pix, win->w, win->h, win->pal);
+            break;
+        }
+        default:
+            break;
         }
     }
-    
-    //paint_mouse();
+
+    /* The pointer, in the focused window's own coordinates. Sampled here, at
+     * the end of the frame, because the windows have just been laid out and
+     * this is the only moment their positions are known to be current. */
+    wm_pointer(get_mouse_info()->x, get_mouse_info()->y,
+               get_mouse_info()->curr_button);
 
     paint_mouse2();
 }

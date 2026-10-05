@@ -15,8 +15,25 @@
 #define PROC_ACTIVE     1   /**< Runnable. */
 #define PROC_NEW        2   /**< Being constructed. */
 
-/** Virtual address of the userspace return stub (see sched.c). */
-#define RETURN_ADDR 0x400000
+/**
+ * Virtual address of the userspace return stub (see sched.c).
+ *
+ * It used to be 0x400000, from when the kernel image ended below 4 MiB and
+ * that page was the first free one above it. The image has long since grown
+ * past that line, and the linker put `kern_dir` -- the kernel's own page
+ * directory, page-aligned and exactly a page long -- at 0x400000. sched_init()
+ * copies a page of trampoline over RETURN_ADDR before it switches to that
+ * directory, so the kernel was overwriting its own page directory on every
+ * boot and surviving on what happened to follow in .bss. Adding a few
+ * kilobytes anywhere in the image moved the damage onto something live and the
+ * machine hung at the scheduler with no output.
+ *
+ * It now sits at the top of the identity-mapped low region instead: above the
+ * kernel-thread stacks (@ref KPROC_STACK_END) and one page below
+ * @ref KERNEL_SPACE_END, so it is on the far side of everything that grows
+ * with the kernel. kernel.lds asserts the image cannot reach it.
+ */
+#define RETURN_ADDR 0x7FF000
 
 /** Per-process userspace stack, in 4 KiB pages (256 KiB). */
 #define PROC_USER_STACK_PAGES   64

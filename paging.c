@@ -128,8 +128,11 @@ uint32_t paging_init(uint32_t start) {
         usable_blocks = 0;   /* window past the identity map -- unusable */
     }
 
-    /* Reserve RETURN_ADDR's own frame (block 4 here) so the storage window
-     * never hands out the trampoline page the bootstrap copied into place. */
+    /* Reserve RETURN_ADDR's own frame if it falls inside the window, so the
+     * storage window can never hand out the trampoline page. It used to be
+     * block 4, from when the window started below 4 MiB; the trampoline now
+     * sits above the kernel stacks (proc.h) and this reserves nothing, but the
+     * check is what makes that safe to change again. */
     uint32_t ret_blk = ((uint32_t) RETURN_ADDR - page_start) / BLOCKS_LEN;
     if(ret_blk < (uint32_t) usable_blocks) {
         paging_set_bit((int) ret_blk);
