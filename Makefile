@@ -197,6 +197,22 @@ qemu-ssh: iso
 qemu-keys: iso
 	@bash test/keys-boot.sh all
 
+# Check the USB game-controller driver on all three host controllers: a pad that
+# QEMU does not have is played by test/usbpad.py over usb-redir (a generic pad on
+# UHCI, a DualShock-shaped one on xHCI with an unplug/replug, an Xbox 360 pad on
+# EHCI). Needs no WAD; logs in /tmp/pad-boot. `bash test/pad-boot.sh doom` then
+# plays Doom with the pad (needs doom1.wad).
+qemu-pad: iso
+	@bash test/pad-boot.sh all
+
+# The game-controller descriptor parser and report decoder as a plain host
+# program, with AddressSanitizer + a fuzzer: no kernel, no QEMU.
+test-gamepad:
+	@gcc -std=gnu11 -Wall -Wextra -g -fsanitize=address,undefined \
+	    -fno-sanitize-recover=undefined -I test/hoststubs -idirafter . \
+	    -o /tmp/gamepad-test test/gamepad-test.c gamepad.c
+	@/tmp/gamepad-test
+
 # Drive apps/doom headless in QEMU: start the game over the serial console,
 # send keystrokes through the monitor, screenshot each step into /tmp/doom-boot.
 # Needs a WAD staged on the RAM disk (apps/doom/PORTING.md).
@@ -274,6 +290,6 @@ clean::
 	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin ap_boot.tmp.* *.d lib/*.d *~ os.iso iso initrd.img docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets cloc docs clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-pad test-gamepad qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets cloc docs clean
 
 -include $(OBJS:.o=.d)

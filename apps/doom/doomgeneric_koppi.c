@@ -9,6 +9,8 @@
  *            screen as one 64 KiB copy plus a palette lookup in the kernel.
  *   keyboard getscan (#26): raw scancodes with make/break, translated here
  *            into Doom key codes. Polled once per frame, never blocking.
+ *   gamepad  getpad (#45): the first USB game controller's buttons and sticks,
+ *            turned into the same Doom key events (see "Game controller").
  *   clock    clock (#15), the free-running PIT millisecond counter.
  *   sleep    msleep (#27).
  *
@@ -20,8 +22,10 @@
 
 #include "doomkeys.h"
 #include "doomgeneric.h"
+#include "doomstat.h"
 #include "i_system.h"
 #include "i_video.h"
+#include "m_controls.h"
 
 #include "ksys.h"
 
@@ -124,6 +128,193 @@ static void poll_keys(void) {
     }
 }
 
+/* ------------------------------------------------------------------ *
+ *  Game controller                                                    *
+ * ------------------------------------------------------------------ */
+
+/*
+ * A USB pad reaches the game as key events, the same way the keyboard does:
+ * every frame the first connected pad's state is turned into the set of Doom
+ * keys it stands for, and what changed since last frame is queued as presses
+ * and releases. The engine never knows there was a pad. That is also all Doom's
+ * own joystick support amounts to (it only ever reads the sign of an axis), so
+ * nothing is lost by it, and the menus, the Y/N prompts and the weapon keys
+ * come for free.
+ *
+ * Buttons are numbered the way the pad's own report descriptor numbers them --
+ * the kernel keeps no table of which pad has which -- so these masks are the
+ * one thing to edit for a pad that disagrees. The console's `pad` command
+ * prints the number of every button as it is pressed. The defaults follow the
+ * numbering that a DualShock 4, a Logitech F310 and most generic pads share:
+ *
+ *    1..4   the four face buttons         7, 8    left / right trigger
+ *    5, 6   left / right shoulder         9, 10   Select / Start
+ *                                         11, 12  stick clicks
+ *
+ * (An Xbox 360 pad is renumbered by the kernel to match.) Which face button is
+ * which varies, so fire and use are each on two of them: whatever the layout,
+ * both are somewhere under a thumb.
+ */
+#define B(n) (1u << ((n) - 1))
+
+#define PADB_FIRE   (B(1) | B(3) | B(8))    /* face buttons, right trigger */
+#define PADB_USE    (B(2) | B(4))           /* the other two face buttons */
+#define PADB_RUN    (B(7) | B(11))          /* left trigger, left stick click */
+#define PADB_PREV   B(5)                    /* previous weapon: left shoulder */
+#define PADB_NEXT   B(6)                    /* next weapon: right shoulder */
+#define PADB_MAP    B(9)                    /* Select: automap */
+#define PADB_START  B(10)                   /* Start: the menu */
+#define PADB_OK     (B(1) | B(3))           /* in a menu: Enter / Yes */
+#define PADB_BACK   (B(2) | B(4))           /* in a menu: Backspace / No */
+
+#define PAD_STICK_ON   16000   /* a stick counts as pushed past this ... */
+#define PAD_STICK_OFF  10000   /* ... until it falls back below this */
+#define PAD_TRIG_ON    110
+#define PAD_TRIG_OFF   70
+
+/* Doom has no next/previous-weapon key until the controls are given one, and
+ * these are codes no keyboard produces, so the keyboard is not affected. */
+#define PAD_KEY_PREVWEAPON 0x01
+#define PAD_KEY_NEXTWEAPON 0x02
+
+/* Everything a pad can hold down, each tied to one Doom key. */
+enum {
+    PK_UP, PK_DOWN, PK_LEFT, PK_RIGHT, PK_STRAFE_L, PK_STRAFE_R,
+    PK_FIRE, PK_USE, PK_RUN, PK_PREV, PK_NEXT, PK_MAP, PK_ESC,
+    PK_ENTER, PK_BACKSPACE, PK_YES, PK_NO,
+    PK_COUNT
+};
+
+static const unsigned char pk_doom[PK_COUNT] = {
+    [PK_UP] = KEY_UPARROW,       [PK_DOWN] = KEY_DOWNARROW,
+    [PK_LEFT] = KEY_LEFTARROW,   [PK_RIGHT] = KEY_RIGHTARROW,
+    [PK_STRAFE_L] = KEY_STRAFE_L, [PK_STRAFE_R] = KEY_STRAFE_R,
+    [PK_FIRE] = KEY_FIRE,        [PK_USE] = KEY_USE,
+    [PK_RUN] = KEY_RSHIFT,
+    [PK_PREV] = PAD_KEY_PREVWEAPON, [PK_NEXT] = PAD_KEY_NEXTWEAPON,
+    [PK_MAP] = KEY_TAB,          [PK_ESC] = KEY_ESCAPE,
+    [PK_ENTER] = KEY_ENTER,      [PK_BACKSPACE] = KEY_BACKSPACE,
+    [PK_YES] = 'y',              [PK_NO] = 'n',
+};
+
+/* Defined in m_menu.c without a header: set while a Y/N prompt is up. */
+extern int messageToPrint;
+
+/* Which half of each stick / trigger is currently held, so a stick sitting on
+ * the threshold does not chatter (see axis_held). */
+enum { AX_LX_NEG, AX_LX_POS, AX_LY_NEG, AX_LY_POS, AX_RX_NEG, AX_RX_POS,
+       AX_LT, AX_RT, AX_COUNT };
+static unsigned char ax_on[AX_COUNT];
+
+static unsigned char pk_held[PK_COUNT];
+static unsigned int  pad_latch;       /* buttons to ignore until let go */
+static int           pad_ctx = -1;    /* menu / prompt / play, last frame */
+
+/** @brief Is the axis value @p mag (already signed towards the direction asked)
+ *         past @p on, staying held until it falls below @p off? */
+static int axis_held(int which, int mag, int on, int off) {
+    if (ax_on[which]) {
+        if (mag < off)
+            ax_on[which] = 0;
+    } else if (mag > on) {
+        ax_on[which] = 1;
+    }
+    return ax_on[which];
+}
+
+/** @brief Work out which keys the pad @p p stands for this frame. */
+static void pad_wants(const struct kpad *p, unsigned char want[PK_COUNT]) {
+    int menu   = menuactive != 0;
+    int prompt = menu && messageToPrint;
+    int ctx    = prompt ? 2 : menu ? 1 : 0;
+
+    /* A button that was held when the screen changed (the one that dismissed a
+     * menu, say) means nothing in the new one until it has been let go, or
+     * "Enter" on a menu item would go on to fire the first shot. */
+    if (ctx != pad_ctx) {
+        pad_latch = p->buttons;
+        pad_ctx = ctx;
+    }
+    pad_latch &= p->buttons;
+    unsigned int b = p->buttons & ~pad_latch;
+
+    int lx_n = axis_held(AX_LX_NEG, -p->lx, PAD_STICK_ON, PAD_STICK_OFF);
+    int lx_p = axis_held(AX_LX_POS,  p->lx, PAD_STICK_ON, PAD_STICK_OFF);
+    int ly_n = axis_held(AX_LY_NEG, -p->ly, PAD_STICK_ON, PAD_STICK_OFF);
+    int ly_p = axis_held(AX_LY_POS,  p->ly, PAD_STICK_ON, PAD_STICK_OFF);
+    int rx_n = axis_held(AX_RX_NEG, -p->rx, PAD_STICK_ON, PAD_STICK_OFF);
+    int rx_p = axis_held(AX_RX_POS,  p->rx, PAD_STICK_ON, PAD_STICK_OFF);
+    int lt   = axis_held(AX_LT, p->lt, PAD_TRIG_ON, PAD_TRIG_OFF);
+    int rt   = axis_held(AX_RT, p->rt, PAD_TRIG_ON, PAD_TRIG_OFF);
+
+    int up    = (p->dpad & KPAD_DPAD_UP)    || ly_n;
+    int down  = (p->dpad & KPAD_DPAD_DOWN)  || ly_p;
+    int left  = (p->dpad & KPAD_DPAD_LEFT);
+    int right = (p->dpad & KPAD_DPAD_RIGHT);
+
+    if (menu) {
+        /* Menus are driven by cursor keys, so every direction -- either stick,
+         * the D-pad -- is one. */
+        want[PK_UP]    = up;
+        want[PK_DOWN]  = down;
+        want[PK_LEFT]  = left  || lx_n || rx_n;
+        want[PK_RIGHT] = right || lx_p || rx_p;
+        if (prompt) {
+            want[PK_YES] = (b & PADB_OK) != 0;
+            want[PK_NO]  = (b & PADB_BACK) != 0;
+        } else {
+            want[PK_ENTER]     = (b & PADB_OK) != 0;
+            want[PK_BACKSPACE] = (b & PADB_BACK) != 0;
+        }
+    } else {
+        /* Left stick walks and strafes, right stick (and the D-pad's sides)
+         * turns -- the usual shooter split. */
+        want[PK_UP]       = up;
+        want[PK_DOWN]     = down;
+        want[PK_LEFT]     = left  || rx_n;
+        want[PK_RIGHT]    = right || rx_p;
+        want[PK_STRAFE_L] = lx_n;
+        want[PK_STRAFE_R] = lx_p;
+        want[PK_FIRE]     = (b & PADB_FIRE) != 0 || rt;
+        want[PK_USE]      = (b & PADB_USE) != 0;
+        want[PK_RUN]      = (b & PADB_RUN) != 0 || lt;
+        want[PK_PREV]     = (b & PADB_PREV) != 0;
+        want[PK_NEXT]     = (b & PADB_NEXT) != 0;
+        want[PK_MAP]      = (b & PADB_MAP) != 0;
+    }
+    want[PK_ESC] = (b & PADB_START) != 0;
+}
+
+/**
+ * @brief Turn this frame's pad state into key events.
+ *
+ * With no pad connected nothing is wanted, so a pad pulled out mid-game lets go
+ * of everything it was holding rather than leaving the player running.
+ */
+static void poll_pad(void) {
+    struct kpad p;
+    unsigned char want[PK_COUNT] = { 0 };
+    int have = 0;
+
+    for (int i = 0; i < KPAD_MAX && !have; i++)
+        have = ksys2(SYS_GETPAD, (unsigned long) i, (unsigned long) &p) == 1;
+
+    if (have) {
+        pad_wants(&p, want);
+    } else {
+        pad_ctx = -1;
+        for (int i = 0; i < AX_COUNT; i++)
+            ax_on[i] = 0;
+    }
+
+    for (int k = 0; k < PK_COUNT; k++) {
+        if (want[k] != pk_held[k]) {
+            queue_key(want[k], pk_doom[k]);
+            pk_held[k] = want[k];
+        }
+    }
+}
+
 int DG_GetKey(int *pressed, unsigned char *doomKey) {
     if (key_rd == key_wr)
         return 0;
@@ -165,6 +356,9 @@ static void take_screen(void) {
 }
 
 void DG_Init(void) {
+    key_prevweapon = PAD_KEY_PREVWEAPON;
+    key_nextweapon = PAD_KEY_NEXTWEAPON;
+
     /* Two ways out of the game, so two places to hook: I_Error and the quit
      * menu unwind through the engine's list, everything else through exit(). */
     I_AtExit(release_screen, true);
@@ -187,6 +381,7 @@ void DG_DrawFrame(void) {
 
     ksys1(SYS_GFX_BLIT, (unsigned long) DG_ScreenBuffer);
     poll_keys();
+    poll_pad();
 }
 
 void DG_SetWindowTitle(const char *title) { (void) title; }

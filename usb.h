@@ -4,8 +4,8 @@
  *        record and the core API used by the host-controller and class drivers.
  *
  * This is a deliberately small USB stack: synchronous control transfers, polled
- * interrupt-IN transfers and a single HID boot-protocol class driver
- * (@ref usb_hid.c), over whichever host controller the machine has — UHCI
+ * interrupt-IN transfers and a HID class driver for boot keyboards and mice
+ * (@ref usb_hid.c) and game controllers (@ref gamepad.c), over whichever host controller the machine has — UHCI
  * (@ref uhci.c), EHCI (@ref ehci.c, the USB 2.0 controller on a Sandy/Ivy
  * Bridge ThinkPad) or xHCI (@ref xhci.c). Enumeration is driven from a kernel
  * thread, not from an interrupt.
@@ -50,7 +50,18 @@
 ///@{
 #define USB_CLASS_HID       0x03
 #define USB_CLASS_HUB       0x09
+#define USB_CLASS_VENDOR    0xFF
 ///@}
+
+/**
+ * @brief Is this interface class/subclass/protocol an Xbox 360 wired
+ *        controller's gamepad interface (vendor class 0xFF, 0x5D, 0x01)?
+ *
+ * The same pad's other interfaces (audio, plug-in module) carry protocols
+ * 0x03 and 0x02 and are not it.
+ */
+#define USB_IS_XINPUT(cls, sub, proto) \
+    ((cls) == USB_CLASS_VENDOR && (sub) == 0x5D && (proto) == 0x01)
 
 /** @name Hub port feature selectors (SET_FEATURE / CLEAR_FEATURE wValue) */
 ///@{

@@ -310,6 +310,27 @@ every PC from the QEMU `pc` machine to a modern ThinkPad:
   the console reads, and a mouse's `[buttons, dx, dy]` report updates the shared
   pointer state — so real USB keyboards and mice work alongside the PS/2 ones.
   A HID device unplugged from a hub releases its interrupt endpoint.
+* **Game controllers** — [`gamepad.c`](gamepad.c). A pad is HID but not
+  boot-protocol: it describes its own reports, so this one *does* parse the
+  report descriptor (an item walker for Usage Page / Logical Min–Max / Report
+  Size, ID and Count / Push–Pop, keeping the bit offsets of the buttons, axes,
+  hat and D-pad of whichever Joystick, Game Pad or Multi-axis collection it
+  finds) and turns every report into one normalised state: buttons numbered
+  the way the *device* numbers them, two sticks scaled to ±32767, two
+  triggers, and a D-pad whether it was a hat or four buttons. The three host
+  controllers only fetch the descriptor and hand over reports
+  ([`usb_hid.c`](usb_hid.c) for UHCI, [`ehci.c`](ehci.c), [`xhci.c`](xhci.c)).
+  An **Xbox 360 wired controller** (vendor class, no descriptor) is
+  recognised by its interface class and its fixed 20-byte report translated
+  into the same state, with buttons numbered like a DualShock's. Ring-3 reads
+  a pad with `getpad` (syscall #45); the `pad` console command lists the pads
+  and prints live buttons and sticks (`pad dump` logs the raw reports) — the
+  way to find out which number is which button of a given pad, since there is
+  no database of that. `apps/doom` is played with one (**Doom** below). xHCI
+  also now handles an unplug (Disable Slot), so a pad can be pulled and
+  replugged. Not supported: pads that need a handshake first (Xbox One,
+  Switch Pro, DualSense), Bluetooth, rumble/LEDs, and — on xHCI, which has no
+  hub support — a pad behind a USB hub.
 
 Devices may hang off either UHCI root port or a hub plugged into one; the QEMU
 flags exercise both (`usb-kbd` on root port 1, a `usb-hub` on root port 2 with a
@@ -472,6 +493,7 @@ for anything more (there is no TLS or resolver cache).
 | USB core (enumeration, control/interrupt transfers) | [`usb.c`](usb.c) |
 | USB hub (recursive enumeration + hot-plug polling) | [`usb_hub.c`](usb_hub.c) |
 | USB HID boot devices (keyboard, mouse) | [`usb_hid.c`](usb_hid.c) |
+| USB game controllers (HID report-descriptor parser, Xbox 360) | [`gamepad.c`](gamepad.c) |
 | Apple BCM5974 multi-touch trackpad (MacBook Air topcase) | [`bcm5974.c`](bcm5974.c) |
 | PCI bus (enumeration, naming, driver binding) | [`pci.c`](pci.c), [`pci_ids.c`](pci_ids.c) |
 | i440FX / PIIX3 chipset (host bridge, ISA bridge, IDE) | [`pci_piix.c`](pci_piix.c) |
@@ -960,6 +982,14 @@ doom -timedemo demo1        # render the built-in demo as fast as the box can
 Arrows move and turn, Ctrl fires, space uses, Alt strafes, Shift runs, 1-7
 pick a weapon, Esc is the menu. Quit from the menu and the desktop comes back.
 
+A **USB game controller** plays it too: the left stick (or D-pad) walks and
+strafes, the right stick turns, the face buttons fire and use, the shoulders
+change weapon, Start is the menu and Select the automap, and the same sticks
+and buttons drive the menus and the Y/N prompts. The mapping is by button
+*number* (the console's `pad` command prints them) and lives in one table at
+the top of the input code in
+[`doomgeneric_koppi.c`](apps/doom/doomgeneric_koppi.c).
+
 * **Display.** The engine already renders into an 8-bpp indexed buffer
   (`-DCMAP256`), which is exactly what the full-screen grab takes, so a frame
   is one 64 KiB copy and the kernel does the palette lookup and the integer
@@ -1097,6 +1127,7 @@ but no longer competes with the shell for keystrokes.)
 | `rm <file>` | delete a file |
 | `sum <file>` | FNV-1a checksum + byte length of a file |
 | `keys` | print the raw key stream (make/break, `E0` prefix) until Esc |
+| `pad` | list the USB game controllers and print their buttons/sticks live until Esc (`pad dump` logs raw reports) |
 | `beep` | play a tone through the AC97 codec |
 | `pci` | list the enumerated PCI devices |
 | `net` | interface MAC, link, counters and the DHCP-assigned address |
@@ -1552,6 +1583,8 @@ screenshot for each. `make usb` builds the GPT USB image the real machine needs.
 
 ```bash
 make qemu-keys    # raw-key-stream check on all three keyboard paths (no WAD)
+make qemu-pad     # USB game controller on UHCI, xHCI (+ unplug/replug) and EHCI (no WAD)
+make test-gamepad # the controller's descriptor parser as a host program, with a fuzzer
 make qemu-ssh     # log in over ssh and check the editor (needs ssh + sshpass)
 make kernel.lst   # full objdump disassembly
 make docs         # Doxygen API docs -> docs/html/index.html (needs doxygen)

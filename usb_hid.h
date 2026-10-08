@@ -1,6 +1,10 @@
 /**
  * @file usb_hid.h
- * @brief USB HID class driver (boot protocol) for real USB keyboards and mice.
+ * @brief USB HID class driver for real USB keyboards, mice and game pads.
+ *
+ * Game pads are not boot-protocol devices and are handled by gamepad.c, which
+ * parses their report descriptors; this file only claims their interrupt
+ * endpoint and passes it the reports (see @ref usb_hid_attach).
  *
  * The driver asks for the HID boot protocol, which is the fixed 8-byte
  * keyboard report [mods, resv, key0..key5] and the [buttons, dx, dy, (wheel)]
@@ -26,14 +30,27 @@
 
 /**
  * @brief Claim a HID interrupt-IN interface discovered during enumeration.
- * @param dev       Owning device.
- * @param iface     Interface number.
- * @param protocol  HID boot protocol (1 = keyboard, 2 = mouse, 0 = neither).
- * @param ep_addr   Interrupt-IN endpoint address.
- * @param maxlen    Endpoint wMaxPacketSize.
+ * @param dev        Owning device.
+ * @param iface      Interface number.
+ * @param protocol   HID boot protocol (1 = keyboard, 2 = mouse, 0 = neither).
+ * @param ep_addr    Interrupt-IN endpoint address.
+ * @param maxlen     Endpoint wMaxPacketSize.
+ * @param rdesc_len  Length of the interface's report descriptor, from its HID
+ *                   descriptor (0 if the configuration did not give one).
+ *
+ * An interface that is neither a boot keyboard nor a boot mouse is read for a
+ * report descriptor and, if that describes a joystick or game pad, claimed as
+ * one (see gamepad_attach()); anything else is left alone.
  */
 void usb_hid_attach(usb_device_t *dev, uint8_t iface, uint8_t protocol,
-                    uint8_t ep_addr, uint16_t maxlen);
+                    uint8_t ep_addr, uint16_t maxlen, uint16_t rdesc_len);
+
+/**
+ * @brief Claim the interrupt-IN endpoint of an Xbox 360 controller's gamepad
+ *        interface (see @ref USB_IS_XINPUT and gamepad_attach_xinput()).
+ */
+void usb_hid_attach_xinput(usb_device_t *dev, uint8_t iface, uint8_t ep_addr,
+                           uint16_t maxlen);
 
 /**
  * @brief Drop every HID interface owned by device @p addr and free its

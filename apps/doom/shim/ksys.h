@@ -57,7 +57,23 @@ enum {
     SYS_SND_CLOSE   = 29,
     SYS_SND_WRITE   = 30,
     SYS_SND_AVAIL   = 31,
+    SYS_GETPAD      = 45,
 };
+
+/* getpad (#45): one game controller's state, copied to a struct kpad.
+ * Mirrors gamepad_state_t in the kernel's gamepad.h. */
+struct kpad {
+    unsigned int  buttons;        /* bit n-1 = button n, in the pad's own numbering */
+    short         lx, ly, rx, ry; /* -32768..32767, 0 at rest, +y DOWN */
+    unsigned char lt, rt;         /* analog triggers, 0..255 */
+    unsigned char dpad;           /* KPAD_DPAD_* bits */
+    unsigned char reserved;
+};
+#define KPAD_DPAD_UP    0x01
+#define KPAD_DPAD_DOWN  0x02
+#define KPAD_DPAD_LEFT  0x04
+#define KPAD_DPAD_RIGHT 0x08
+#define KPAD_MAX        4     /* controllers the kernel tracks */
 
 /* getscan (#26) result bits; mirrors KBD_RAW_* in the kernel's keyboard.h. */
 #define KSCAN_BREAK 0x0080

@@ -27,9 +27,11 @@
 #include <io.h>
 #include <gdt.h>
 #include <wm.h>
+#include <gamepad.h>
+#include <lib/string.h>
 
 /** One past the highest valid call number. */
-#define MAX_SYSCALL 45
+#define MAX_SYSCALL 46
 
 /** Set to 1 to log every syscall on the console (default 0: off). */
 #define SYSCALL_TRACE 0
@@ -421,6 +423,32 @@ static uint32_t sys_wm_event(void) {
 }
 ///@}
 
+/**
+ * @brief `getpad` (#45): copy out the state of game controller @p index.
+ *
+ * Non-blocking, like `getscan` and `getmouse`: a game polls it once a frame and
+ * diffs it against the last. @p out receives a @c gamepad_state_t (gamepad.h) --
+ * buttons numbered the way the device numbers them, sticks scaled to
+ * -32768..32767 with +y down, triggers 0..255, and the D-pad as four bits.
+ *
+ * Unlike #26 and #36 it needs no screen grab: the pad is not shared with the
+ * console the way the keyboard is, so nothing has to be switched off while a
+ * program reads it.
+ *
+ * @return 1 if that pad is connected and @p out was filled, 0 if not, -1 for a
+ *         bad pointer. The pointer comes straight from ring 3, so it must lie
+ *         above the kernel's identity-mapped low memory (as in `getrandom`).
+ */
+static uint32_t sys_getpad(uint32_t index, uint32_t out) {
+    if(out < KERNEL_SPACE_END || out + sizeof(gamepad_state_t) < out)
+        return (uint32_t) -1;
+    gamepad_state_t st;
+    if(!gamepad_get((int) index, &st))
+        return 0;
+    memcpy((void *) out, &st, sizeof(st));
+    return 1;
+}
+
 /** Call number → implementation. NULL entries are unimplemented. */
 static uintptr_t syscalls[] = {
     (uintptr_t) printf,              // printf   0
@@ -467,7 +495,8 @@ static uintptr_t syscalls[] = {
     (uintptr_t) sys_wm_blit,         // wm_blit      41
     (uintptr_t) sys_wm_palette,      // wm_palette   42
     (uintptr_t) sys_wm_event,        // wm_event     43  (key/pointer/window, non-blocking)
-    (uintptr_t) sys_spawn_bg         // spawn_bg     44  (spawn without waiting; `cmd &`)
+    (uintptr_t) sys_spawn_bg,        // spawn_bg     44  (spawn without waiting; `cmd &`)
+    (uintptr_t) sys_getpad           // getpad       45  (game controller state, non-blocking)
 };
 
 /**

@@ -3,6 +3,7 @@
  * @brief USB HID boot-protocol driver: real USB keyboards and mice.
  */
 #include <usb_hid.h>
+#include <gamepad.h>
 #include <uhci.h>
 #include <keyboard.h>
 #include <mouse.h>
@@ -15,12 +16,20 @@
  * believes it over a descriptor that declared report IDs. */
 #define HID_BOOT_LAYOUT_SLACK 3
 
+/** What an attached interrupt endpoint carries, in @c hid_dev_t::protocol.
+ *  The first two are the HID boot protocol numbers. */
+#define HID_KIND_KEYBOARD 1
+#define HID_KIND_MOUSE    2
+#define HID_KIND_PAD      3
+
 /** One attached HID interrupt endpoint. */
 typedef struct {
     int      used;
     int      slot;          /**< UHCI interrupt-poll slot. */
     uint8_t  addr;          /**< Owning device address (for detach). */
-    uint8_t  protocol;      /**< 1 = keyboard, 2 = mouse. */
+    uint8_t  iface;         /**< Interface number (to claim a pad's once). */
+    uint8_t  protocol;      /**< HID_KIND_*. */
+    int      pad;           /**< gamepad.c index, for HID_KIND_PAD. */
     uint8_t  prev[8];       /**< Previous keyboard report (for edge detection). */
     hid_layout_t layout;    /**< Boot or report-ID reports (see usb_hid.h). */
 } hid_dev_t;
@@ -319,6 +328,16 @@ static int hid_get_report_desc(usb_device_t *dev, uint8_t iface, void *buf,
     return usb_control(dev, &s, buf, len);
 }
 
+/** @brief SET_IDLE(0) on @p iface: report only when something changes. */
+static void hid_set_idle(usb_device_t *dev, uint8_t iface) {
+    usb_setup_t s = (usb_setup_t){
+        .bmRequestType = USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
+        .bRequest = HID_REQ_SET_IDLE, .wValue = 0,
+        .wIndex = iface, .wLength = 0,
+    };
+    usb_control(dev, &s, 0, 0);
+}
+
 /** @brief SET_PROTOCOL(boot) + SET_IDLE(0) on @p iface. */
 static void hid_set_boot(usb_device_t *dev, uint8_t iface) {
     usb_setup_t s;
@@ -330,25 +349,85 @@ static void hid_set_boot(usb_device_t *dev, uint8_t iface) {
     };
     usb_control(dev, &s, 0, 0);
 
-    s = (usb_setup_t){
-        .bmRequestType = USB_DIR_OUT | USB_TYPE_CLASS | USB_RECIP_INTERFACE,
-        .bRequest = HID_REQ_SET_IDLE, .wValue = 0,
-        .wIndex = iface, .wLength = 0,
-    };
-    usb_control(dev, &s, 0, 0);
+    hid_set_idle(dev, iface);
+}
+
+/** @brief A free hid[] slot, or -1. */
+static int hid_alloc(void) {
+    for(int i = 0; i < MAX_HID; i++)
+        if(!hid[i].used)
+            return i;
+    return -1;
+}
+
+/**
+ * @brief Claim a HID interface that is not a boot keyboard or mouse, if its
+ *        report descriptor says it is a game controller.
+ */
+static void hid_attach_pad(usb_device_t *dev, uint8_t iface, uint8_t ep_addr,
+                           uint16_t maxlen, uint16_t rdesc_len) {
+    for(int i = 0; i < MAX_HID; i++)
+        if(hid[i].used && hid[i].protocol == HID_KIND_PAD &&
+           hid[i].addr == dev->address && hid[i].iface == iface)
+            return;   /* a second endpoint of an interface already claimed */
+
+    int idx = hid_alloc();
+    if(idx < 0)
+        return;
+
+    /* The whole descriptor, as long as the interface says it is -- but no more
+     * than the control transfer's staging buffer holds (uhci.c's is 512 bytes).
+     * A pad's descriptor is cut off mid-item otherwise, and a half-read one
+     * parses as a pad with half its buttons. */
+    int want = rdesc_len ? rdesc_len : 256;
+    if(want > 512)
+        want = 512;
+    uint8_t *desc = gamepad_rdesc_buf();
+    int n = hid_get_report_desc(dev, iface, desc, want);
+    if(n <= 0) {
+        klogf(LOG_INFO, "USB HID: iface %u has no report descriptor\n", iface);
+        return;
+    }
+
+    int pad = gamepad_attach(dev->vendor, dev->product, desc, n);
+    if(pad < 0) {
+        klogf(LOG_INFO, "USB HID: iface %u is not a game controller, ignored\n", iface);
+        return;
+    }
+    /* No SET_IDLE / SET_PROTOCOL: a pad is in the report protocol after
+     * SET_CONFIGURATION already, idle 0 is the default for anything but a
+     * keyboard, and many pads stall both requests. */
+
+    int slot = uhci_int_claim(dev, ep_addr, maxlen ? maxlen : 8);
+    if(slot < 0) {
+        klogf(LOG_ERR, "USB HID: no free interrupt slot\n");
+        gamepad_detach(pad);
+        return;
+    }
+
+    hid[idx].used     = 1;
+    hid[idx].slot     = slot;
+    hid[idx].addr     = dev->address;
+    hid[idx].iface    = iface;
+    hid[idx].protocol = HID_KIND_PAD;
+    hid[idx].pad      = pad;
+    klogf(LOG_INFO, "USB HID: game controller ready (dev %u, ep 0x%x)\n",
+          dev->address, ep_addr);
 }
 
 void usb_hid_attach(usb_device_t *dev, uint8_t iface, uint8_t protocol,
-                    uint8_t ep_addr, uint16_t maxlen) {
+                    uint8_t ep_addr, uint16_t maxlen, uint16_t rdesc_len) {
+    if(protocol == 0) {
+        hid_attach_pad(dev, iface, ep_addr, maxlen, rdesc_len);
+        return;
+    }
     if(protocol != HID_PROTOCOL_KEYBOARD && protocol != HID_PROTOCOL_MOUSE) {
         klogf(LOG_INFO, "USB HID: iface %u protocol %u not supported\n",
               iface, protocol);
         return;
     }
 
-    int idx = -1;
-    for(int i = 0; i < MAX_HID; i++)
-        if(!hid[i].used) { idx = i; break; }
+    int idx = hid_alloc();
     if(idx < 0)
         return;
 
@@ -380,6 +459,7 @@ void usb_hid_attach(usb_device_t *dev, uint8_t iface, uint8_t protocol,
     hid[idx].used     = 1;
     hid[idx].slot     = slot;
     hid[idx].addr     = dev->address;
+    hid[idx].iface    = iface;
     hid[idx].protocol = protocol;
     hid[idx].layout   = layout;
     memset(hid[idx].prev, 0, sizeof(hid[idx].prev));
@@ -389,27 +469,62 @@ void usb_hid_attach(usb_device_t *dev, uint8_t iface, uint8_t protocol,
           dev->address, ep_addr);
 }
 
+void usb_hid_attach_xinput(usb_device_t *dev, uint8_t iface, uint8_t ep_addr,
+                           uint16_t maxlen) {
+    for(int i = 0; i < MAX_HID; i++)
+        if(hid[i].used && hid[i].protocol == HID_KIND_PAD &&
+           hid[i].addr == dev->address && hid[i].iface == iface)
+            return;
+
+    int idx = hid_alloc();
+    if(idx < 0)
+        return;
+    int pad = gamepad_attach_xinput(dev->vendor, dev->product);
+    if(pad < 0)
+        return;
+    int slot = uhci_int_claim(dev, ep_addr, maxlen ? maxlen : 32);
+    if(slot < 0) {
+        klogf(LOG_ERR, "USB HID: no free interrupt slot\n");
+        gamepad_detach(pad);
+        return;
+    }
+
+    hid[idx].used     = 1;
+    hid[idx].slot     = slot;
+    hid[idx].addr     = dev->address;
+    hid[idx].iface    = iface;
+    hid[idx].protocol = HID_KIND_PAD;
+    hid[idx].pad      = pad;
+}
+
 void usb_hid_detach(uint8_t addr) {
     for(int i = 0; i < MAX_HID; i++) {
         if(hid[i].used && hid[i].addr == addr) {
             uhci_int_release(hid[i].slot);
-            klogf(LOG_INFO, "USB HID: %s gone (dev %u)\n",
-                  hid[i].protocol == HID_PROTOCOL_KEYBOARD ? "keyboard" : "mouse",
-                  addr);
+            if(hid[i].protocol == HID_KIND_PAD) {
+                gamepad_detach(hid[i].pad);
+            } else {
+                klogf(LOG_INFO, "USB HID: %s gone (dev %u)\n",
+                      hid[i].protocol == HID_PROTOCOL_KEYBOARD ? "keyboard"
+                                                               : "mouse",
+                      addr);
+            }
             memset(&hid[i], 0, sizeof(hid[i]));
         }
     }
 }
 
 void usb_hid_poll(void) {
-    uint8_t rpt[16];
+    uint8_t rpt[64];   /* uhci.c's interrupt buffers are this big */
     for(int i = 0; i < MAX_HID; i++) {
         if(!hid[i].used)
             continue;
         int n = uhci_int_poll(hid[i].slot, rpt, sizeof(rpt));
         if(n <= 0)
             continue;
-        if(hid[i].protocol == HID_PROTOCOL_KEYBOARD)
+        if(hid[i].protocol == HID_KIND_PAD)
+            gamepad_report(hid[i].pad, rpt, n);
+        else if(hid[i].protocol == HID_PROTOCOL_KEYBOARD)
             handle_keyboard(&hid[i], rpt, n);
         else
             handle_mouse(rpt, n);

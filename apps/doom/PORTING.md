@@ -46,6 +46,12 @@ Vanilla controls: **arrows** move and turn, **Ctrl** fires, **space** uses,
 automap, **Esc** is the menu. Quit from the menu (or `-timedemo`, which exits
 when it is done) and the desktop comes back.
 
+A **USB game controller** works alongside the keyboard (see *Game controller*
+under Input): **left stick** walks and strafes, **right stick** turns, the
+**D-pad** walks and turns, **face buttons** fire and use, **shoulders** step
+through the weapons, **Start** is the menu, **Select** the automap. Run `pad`
+at the console to see which number a button of your pad is.
+
 Sound and music play through whichever card the kernel found; `-nosound`,
 `-nosfx` and `-nomusic` turn them off. The volume keys and the console's
 `sound 0-100` set the level while the game runs, the same as for the module,
@@ -123,6 +129,46 @@ A USB keyboard works too — [`usb_hid.c`](../../usb_hid.c) maps HID usages back
 to set-1 scancodes and reports releases and modifiers, which the ASCII path
 had no reason to track. That is the path a machine with no PS/2 controller
 (a MacBook) has to use.
+
+### Game controller
+
+A USB pad reaches the game through `getpad` (#45), which copies out the
+state of one pad: buttons numbered **the way the pad's own report descriptor
+numbers them**, two sticks scaled to ±32767 (+y down), two analog triggers, and
+the D-pad as four bits however the pad sent it (see
+[`gamepad.h`](../../gamepad.h)). The kernel keeps no table of which pad numbers
+which button — that is what SDL's controller database is for — so what a
+button *does* is the game's business, and it is all in one place:
+`doomgeneric_koppi.c`, under "Game controller".
+
+It does not go through the engine's joystick events. Doom's own joystick
+support only ever reads the sign of an axis, so nothing would be gained, and
+the menus, the Y/N prompts and the weapon keys would each need handling twice.
+Instead each frame the pad's state is turned into the set of *Doom keys* it
+stands for and the changes are queued as presses and releases, exactly as the
+keyboard's are:
+
+* left stick up/down and the D-pad walk, the left stick's sides **strafe**
+  (`KEY_STRAFE_L/R`), the right stick's sides and the D-pad's sides **turn**;
+* buttons 1 and 3 and the right trigger (button 8, or the analog axis)
+  **fire**, buttons 2 and 4 **use** — two of the four face buttons each,
+  because which face button is which differs between pads and, this way, both
+  actions are under a thumb on any of them;
+* button 7 / 11 and the left trigger **run**, 5 and 6 are previous / next
+  weapon (chocolate-doom's `key_prevweapon` / `key_nextweapon`, which are
+  unbound by default and are given two key codes no keyboard produces), 9 is
+  the automap, 10 (Start) is Esc;
+* in a **menu** every direction is a cursor key, 1/3 is Enter and 2/4 is
+  Backspace, and at a Y/N prompt (`messageToPrint`) they are `y` and `n`.
+
+The numbering the defaults assume — four face buttons first, then shoulders,
+triggers, Select, Start, stick clicks — is what a DualShock 4, a Logitech
+F310 and most cheap pads share, and the kernel renumbers an Xbox 360 pad to
+match. A pad that disagrees needs only the `PADB_*` masks changed.
+
+A button held when the screen changes (the one that closed a menu) is ignored
+until it is let go, or confirming "New Game" would go on to fire the first
+shot. Unplugging the pad releases everything it was holding.
 
 ## Sound
 
@@ -290,6 +336,12 @@ doomgeneric as it ships.
   module, and the mixer that pumps the synthesiser is the sound module's
   `Update`, so with no sound effects nothing drives the music either.
   `-nomusic` on its own works as expected.
+* **The game controller is digital.** Doom reads only the sign of an axis, so
+  a stick is a key held while it is past a threshold (turning accelerates the
+  way the keyboard's does), not a speed. Buttons are mapped by number, with no
+  remapping screen: edit the `PADB_*` masks. Pads that need a USB handshake
+  first (Xbox One, Switch Pro, DualSense) and Bluetooth pads are not seen at
+  all; rumble and LEDs are not driven.
 * **No mouse.** `usemouse` is 0. The PS/2 mouse driver reports absolute
   position for the desktop cursor, not the relative deltas `ev_mouse` wants.
 * **Mono on a Sound Blaster.** The SB16 path runs the card in mono, so the
@@ -333,3 +385,9 @@ and stereo/mono per second, and a good run reads: silence while the machine
 boots (the module is muted from boot), fifteen seconds of stereo once the
 game has the stream, silence again after it quits, then the module in mono
 once the console's `sound on` unmutes it.
+
+The gamepad has its own: `test/pad-boot.sh doom` plays E1M1 with a pad that
+[`test/usbpad.py`](../../test/usbpad.py) emulates over QEMU's `usb-redir`
+(QEMU has no gamepad of its own) — walks, turns, fires, changes weapon, opens
+the menu and moves the cursor — and checks each step against the game's own
+frames. `DOOM_BUS=xhci DOOM_PAD=ds4|xinput|generic` picks the topology and pad.

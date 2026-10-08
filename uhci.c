@@ -67,9 +67,13 @@ static volatile uint32_t frame_list[1024] __attribute__((aligned(4096))); /**< T
 static uhci_qh_t qh_int[NUM_INT_SLOTS];  /**< Periodic (interrupt) queue heads. */
 static uhci_qh_t qh_ctrl;                /**< The shared control queue head. */
 
-/* Control transfer staging (SETUP + up to 8 data TDs + STATUS; 16-byte
- * aligned so the controller can walk them). */
-static uhci_td_t ctrl_td[16];
+/* Control transfer staging (SETUP + data TDs + STATUS; 16-byte aligned so the
+ * controller can walk them). A data stage is one TD per max-packet-size chunk,
+ * and a low-speed or older full-speed device has an 8-byte endpoint 0: the 64
+ * data TDs here are what it takes to read a 512-byte HID report descriptor from
+ * one (a game pad's), where 14 would have cut it off at 112 bytes. */
+#define CTRL_TDS 66
+static uhci_td_t ctrl_td[CTRL_TDS];
 static uint8_t   ctrl_setup_buf[8]  __attribute__((aligned(16)));
 static uint8_t   ctrl_data_buf[512] __attribute__((aligned(16)));
 
@@ -257,7 +261,7 @@ static int wait_qh(uhci_qh_t *qh, int frames) {
     while(elapsed < frames) {
         if(qh->element & TD_T)
             return 1;
-        for(int t = 0; t < 16; t++) {
+        for(int t = 0; t < CTRL_TDS; t++) {
             if(ctrl_td[t].token != 0 &&
                !(ctrl_td[t].status & TD_STS_ACTIVE) &&
                (ctrl_td[t].status & (TD_STS_STALLED | TD_STS_ERRMASK)))
@@ -298,7 +302,7 @@ int uhci_control(usb_device_t *dev, const usb_setup_t *setup, void *data, int le
     /* DATA stage, packets of mps, toggle starting at DATA1. */
     int toggle = 1;
     int off = 0;
-    while(off < len && n < 15) {
+    while(off < len && n < CTRL_TDS - 1) {
         int chunk = len - off;
         if(chunk > mps) chunk = mps;
         ctrl_td[n].status = base_sts | TD_STS_ACTIVE | (in ? TD_SPD : 0);

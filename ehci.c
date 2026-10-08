@@ -19,6 +19,7 @@
 #include <pci.h>
 #include <usb.h>
 #include <usb_hid.h>
+#include <gamepad.h>
 #include <keyboard.h>
 
 #include <mm.h>
@@ -132,7 +133,9 @@ static uint8_t    data_buf[512]  __attribute__((aligned(32)));
 
 static ehci_qh_t  int_qh[MAX_INT];
 static ehci_qtd_t int_qtd[MAX_INT];
-static uint8_t    int_buf[MAX_INT][16] __attribute__((aligned(32)));
+/* 64 bytes: a game pad's input report is the size of its endpoint (a DualShock 4
+ * sends 64), where a boot keyboard's is 8. */
+static uint8_t    int_buf[MAX_INT][64] __attribute__((aligned(32)));
 
 /* ------------------------------------------------------------------ *
  *  Controller / device state                                          *
@@ -159,7 +162,8 @@ static edev_t edev[MAX_DEV];
 static struct {
     int      used;
     uint8_t  ep;
-    uint8_t  proto;        /* 1 = keyboard, 2 = mouse */
+    uint8_t  proto;        /* 1 = keyboard, 2 = mouse, 3 = game pad */
+    int      pad;          /* gamepad.c index, for proto 3 */
     int      maxlen;
     int      toggle;
     uint8_t  prev[8];      /* previous keyboard report (edge detection) */
@@ -246,12 +250,22 @@ static int ehci_control(edev_t *d, const usb_setup_t *s, void *data, int len, in
     for (int i = 0; i < 5; i++) ctrl_qh.ov_buf[i] = 0;
     ctrl_qh.ov_next = (uint32_t)&ctrl_qtd[0];
 
-    int ok = 0;
-    for (int spin = 0; spin < 500000; spin++) {
+    int ok = 0, halted = 0;
+    for (int spin = 0; spin < 500000 && !ok && !halted; spin++) {
         uint32_t tok = ctrl_qtd[n - 1].token;
-        if (!(tok & QTD_ACTIVE)) { ok = 1; break; }
-        if (tok & QTD_HALTED) break;
-        __builtin_ia32_pause();
+        if (!(tok & QTD_ACTIVE)) ok = 1;
+        else if (tok & QTD_HALTED) halted = 1;
+        else __builtin_ia32_pause();
+    }
+    /* A device that is not quick (one behind a USB-over-network redirect, or a
+     * slow microcontroller) is still within the spec at half a second, which is
+     * the longest USB 2.0 allows a data stage to take: after the quick spin,
+     * wait by the clock rather than give up on the count of a loop. */
+    for (int ms = 0; ms < 500 && !ok && !halted; ms++) {
+        msleep(1);
+        uint32_t tok = ctrl_qtd[n - 1].token;
+        if (!(tok & QTD_ACTIVE)) ok = 1;
+        else if (tok & QTD_HALTED) halted = 1;
     }
     ctrl_qh.ov_next = PTR_TERM;
     ctrl_qh.ov_token = QTD_HALTED;
@@ -343,7 +357,8 @@ static int int_claim(edev_t *d, uint8_t ep_addr, int maxlen, int proto) {
     int_arm(s);
 
     klogf(LOG_INFO, "ehci: HID %s on dev %u ep 0x%x (int slot %d)\n",
-          proto == 1 ? "keyboard" : "mouse", d->addr, ep_addr, s);
+          proto == 1 ? "keyboard" : proto == 3 ? "game controller" : "mouse",
+          d->addr, ep_addr, s);
     return s;
 }
 
@@ -365,6 +380,8 @@ static void int_service(int s) {
         if (islot[s].proto == 1)
             usb_hid_report_keyboard(int_buf[s], got, islot[s].prev,
                                          &islot[s].layout);
+        else if (islot[s].proto == 3)
+            gamepad_report(islot[s].pad, int_buf[s], got);
         else
             usb_hid_report_mouse(int_buf[s], got);
     }
@@ -414,6 +431,56 @@ static uint8_t hid_report_id_layout(edev_t *d, int iface) {
 
 static void enum_device(int speed, uint8_t tt_hub, uint8_t tt_port,
                         int depth, const char *where);
+
+/**
+ * @brief Claim a HID interface that is not a boot keyboard or mouse (or an Xbox
+ *        360 controller's vendor-class one) as a game controller.
+ *
+ * A HID interface is read for its report descriptor and turned down if that
+ * does not describe a joystick or game pad; the Xbox 360 pad has no descriptor
+ * and is taken on its interface class alone.
+ */
+static void claim_pad(edev_t *d, int iface, uint8_t eaddr, int emps,
+                      uint16_t rdesc_len, uint16_t vid, uint16_t pid, int xinput) {
+    int pad;
+    if (xinput) {
+        pad = gamepad_attach_xinput(vid, pid);
+    } else {
+        /* As much as the interface says there is, up to what the control
+         * transfer's staging buffer holds. */
+        int want = rdesc_len ? rdesc_len : 256;
+        if (want > (int)sizeof(data_buf))
+            want = sizeof(data_buf);
+        uint8_t *desc = gamepad_rdesc_buf();
+        usb_setup_t s = { .bmRequestType = USB_DIR_IN | USB_TYPE_STANDARD
+                                        | USB_RECIP_INTERFACE,
+                          .bRequest = USB_REQ_GET_DESCRIPTOR,
+                          .wValue = (uint16_t)(USB_DT_HID_REPORT << 8),
+                          .wIndex = (uint16_t)iface, .wLength = (uint16_t)want };
+        int n = ehci_control(d, &s, desc, want, 1);
+        if (n <= 0) {
+            klogf(LOG_INFO, "ehci: iface %d has no report descriptor\n", iface);
+            return;
+        }
+        pad = gamepad_attach(vid, pid, desc, n);
+        if (pad < 0) {
+            klogf(LOG_INFO, "ehci: iface %d is not a game controller, ignored\n",
+                  iface);
+            return;
+        }
+        /* No SET_IDLE / SET_PROTOCOL: a pad is in the report protocol already,
+         * and many stall both. */
+    }
+    if (pad < 0)
+        return;
+
+    int slot = int_claim(d, eaddr, emps ? emps : 8, 3);
+    if (slot < 0) {
+        gamepad_detach(pad);
+        return;
+    }
+    islot[slot].pad = pad;
+}
 
 /** @brief Walk a hub's downstream ports and enumerate anything attached. */
 static void hub_enumerate(edev_t *hub, int depth) {
@@ -550,24 +617,39 @@ static void enum_device(int speed, uint8_t tt_hub, uint8_t tt_port,
         return;
     }
 
-    /* Find a HID boot keyboard/mouse interface and its interrupt-IN endpoint. */
+    /* Find the HID interfaces and their interrupt-IN endpoints: a boot
+     * keyboard or mouse, or a game controller. kind says which the interface
+     * so far looks like. */
+    enum { K_NONE, K_BOOT, K_PAD, K_XINPUT } kind = K_NONE;
     int off = 0, iface = -1, proto = 0;
+    uint16_t rdesc_len = 0;
     while (off + 2 <= total) {
         int blen = cfg[off], btype = cfg[off + 1];
         if (blen < 2 || off + blen > total)
             break;
         if (btype == USB_DT_INTERFACE) {
+            iface = -1;
+            kind = K_NONE;
+            rdesc_len = 0;
             if (cfg[off + 5] == USB_CLASS_HID && cfg[off + 6] == 1 /* boot */) {
                 iface = cfg[off + 2];
                 proto = cfg[off + 7];
-            } else {
-                iface = -1;
+                kind = K_BOOT;
+            } else if (cfg[off + 5] == USB_CLASS_HID) {
+                iface = cfg[off + 2];
+                kind = K_PAD;
+            } else if (USB_IS_XINPUT(cfg[off + 5], cfg[off + 6], cfg[off + 7])) {
+                iface = cfg[off + 2];
+                kind = K_XINPUT;
             }
+        } else if (btype == USB_DT_HID && iface >= 0 && blen >= 9 &&
+                   cfg[off + 6] == USB_DT_HID_REPORT) {
+            rdesc_len = (uint16_t)(cfg[off + 7] | (cfg[off + 8] << 8));
         } else if (btype == USB_DT_ENDPOINT && iface >= 0) {
             int attr = cfg[off + 3], eaddr = cfg[off + 2];
             if ((attr & 3) == 3 && (eaddr & 0x80)) {
                 int emps = cfg[off + 4] | (cfg[off + 5] << 8);
-                if (proto == 1 || proto == 2) {
+                if (kind == K_BOOT && (proto == 1 || proto == 2)) {
                     hid_boot(d, iface);
                     int s = int_claim(d, (uint8_t)eaddr, emps ? emps : 8,
                                       proto);
@@ -578,8 +660,13 @@ static void enum_device(int speed, uint8_t tt_hub, uint8_t tt_port,
                     if (proto == 1 && s >= 0)
                         islot[s].layout.report_id =
                             hid_report_id_layout(d, iface);
+                    return;
                 }
-                return;
+                if (kind == K_PAD || kind == K_XINPUT) {
+                    claim_pad(d, iface, (uint8_t)eaddr, emps, rdesc_len,
+                              vid, pid, kind == K_XINPUT);
+                    iface = -1;      /* one endpoint per interface */
+                }
             }
         }
         off += blen;

@@ -32,6 +32,7 @@
 #include <rtc.h>
 #include <keyboard.h>
 #include <usb_hid.h>
+#include <gamepad.h>
 #include <percpu.h>
 #include <commands.h>
 #include <coreutils.h>
@@ -630,6 +631,80 @@ static void console_hid(void) {
 }
 
 /**
+ * @brief List the game controllers and show what they are doing ("pad").
+ *
+ * The button numbers it prints are the numbers a program gets from `getpad`, so
+ * this is what to run to find out which button of a given pad is which --
+ * there is no table of that, and the mapping in a game (apps/doom) is written
+ * in these numbers. "pad dump" logs the raw reports instead, for a pad whose
+ * descriptor was read wrongly.
+ */
+static void console_pad(char *arg) {
+    if(strcmp(arg, "dump") == 0) {
+        static int dumping;
+        dumping = !dumping;
+        gamepad_set_watch(dumping);
+        printf("pad: report dump %s.\n", dumping ? "on -- type 'pad dump' to stop" : "off");
+        return;
+    }
+
+    char line[128];
+    int n = 0;
+    for(int i = 0; i < GAMEPAD_MAX; i++)
+        if(gamepad_describe(i, line, sizeof(line))) {
+            printf("%s\n", line);
+            n++;
+        }
+    if(!n) {
+        printf("pad: no game controller found.\n");
+        return;
+    }
+
+    printf("pad: move the sticks and press buttons -- Esc stops.\n"
+           "     sticks are -32768..32767 (up and left negative), triggers 0..255.\n");
+    keyboard_raw_mode(1);
+    gamepad_state_t last[GAMEPAD_MAX];
+    memset(last, 0xFF, sizeof(last));   /* differs from anything real: print once */
+    for(;;) {
+        int ev = keyboard_raw_get();
+        if((ev & KBD_RAW_VALID) && !(ev & KBD_RAW_E0) && !(ev & KBD_RAW_BREAK) &&
+           (ev & 0x7F) == 0x01)         /* Esc pressed */
+            break;
+
+        for(int i = 0; i < GAMEPAD_MAX; i++) {
+            gamepad_state_t s;
+            if(!gamepad_get(i, &s))
+                continue;
+            /* The sticks jitter by a few counts; show a change when one moves
+             * by a visible amount, not every time one wobbles. */
+            gamepad_state_t q = s, p = last[i];
+            q.lx >>= 10; q.ly >>= 10; q.rx >>= 10; q.ry >>= 10;
+            p.lx >>= 10; p.ly >>= 10; p.rx >>= 10; p.ry >>= 10;
+            if(memcmp(&q, &p, sizeof(q)) == 0)
+                continue;
+            last[i] = s;
+
+            char btn[96];
+            int o = 0;
+            btn[0] = 0;
+            for(int b = 0; b < 32; b++)
+                if(s.buttons & (1u << b))
+                    o += snprintf(btn + o, sizeof(btn) - o, "%s%d", o ? " " : "", b + 1);
+            printf("pad %d: L(%6d,%6d) R(%6d,%6d) T(%3d,%3d) dpad %c%c%c%c  buttons: %s\n",
+                   i, s.lx, s.ly, s.rx, s.ry, s.lt, s.rt,
+                   (s.dpad & GAMEPAD_DPAD_UP) ? 'U' : '-',
+                   (s.dpad & GAMEPAD_DPAD_DOWN) ? 'D' : '-',
+                   (s.dpad & GAMEPAD_DPAD_LEFT) ? 'L' : '-',
+                   (s.dpad & GAMEPAD_DPAD_RIGHT) ? 'R' : '-',
+                   o ? btn : "-");
+        }
+        sleep(10);
+    }
+    keyboard_raw_mode(0);
+    printf("pad: done.\n");
+}
+
+/**
  * @brief Play a short square-wave tone through the AC97 codec ("beep").
  */
 static void console_beep(void) {
@@ -924,6 +999,7 @@ void console_exec(char *buf) {
                "beep     - plays a tone\n"
                "sound    - sound [on|off|0-100] (MOD playback)\n"
                "keys     - print raw key scancodes until Esc (keyboard check)\n"
+               "pad      - list game controllers and show their buttons/sticks until Esc\n"
                "pci      - lists PCI devices\n"
                "net      - network interface status\n"
                "nfs      - NFSv4.1 client mount status\n"
@@ -988,6 +1064,8 @@ void console_exec(char *buf) {
         console_keys();
     } else if(strcmp(buf, "hid") == 0) {
         console_hid();
+    } else if(strcmp(buf, "pad") == 0 || strcmp(buf, "pad dump") == 0) {
+        console_pad(buf[3] ? buf + 4 : buf + 3);
     } else if(strncmp(buf, "beep", 4) == 0) {
         console_beep();
     } else if(coreutils_try(buf)) {

@@ -23,6 +23,7 @@
 #include <pci.h>
 #include <usb.h>
 #include <usb_hid.h>
+#include <gamepad.h>
 #include <bcm5974.h>
 
 #include <mm.h>
@@ -90,6 +91,7 @@ static void rtw(uint32_t off, uint32_t v);   /* fwd */
 #define TRB_STATUS        4
 #define TRB_LINK          6
 #define TRB_ENABLE_SLOT   9
+#define TRB_DISABLE_SLOT  10
 #define TRB_ADDRESS_DEV   11
 #define TRB_CONFIG_EP     12
 #define TRB_EVAL_CTX      13
@@ -114,7 +116,7 @@ typedef struct { uint32_t d[4]; } trb_t;
 /* ------------------------------------------------------------------ *
  *  Static DMA structures (identity-mapped .bss)                       *
  * ------------------------------------------------------------------ */
-#define MAX_SLOTS 4
+#define MAX_SLOTS 8       /* slot ids 1..7: keyboard + mouse + a pad or two */
 #define MAX_INT_EP 2      /* HID interfaces per device: e.g. an Apple topcase */
                           /* reports a boot keyboard AND a BCM5974 trackpad.  */
 
@@ -130,7 +132,10 @@ static uint8_t  dev_ctx  [MAX_SLOTS][32 * 64] __attribute__((aligned(64)));
 static uint8_t  in_ctx   [MAX_SLOTS][33 * 64] __attribute__((aligned(64)));
 static trb_t    ep0_ring [MAX_SLOTS][RING_SZ] __attribute__((aligned(64)));
 static trb_t    int_ring [MAX_SLOTS][MAX_INT_EP][RING_SZ] __attribute__((aligned(64)));
-static uint8_t  xfer_buf [MAX_SLOTS][256] __attribute__((aligned(64)));
+/* Control-transfer staging, one per slot. A game pad's HID report descriptor is
+ * the biggest thing read through it (a DualShock 4's is ~500 bytes). */
+#define XFER_BUF_SZ 1024
+static uint8_t  xfer_buf [MAX_SLOTS][XFER_BUF_SZ] __attribute__((aligned(64)));
 /* One HID report staging buffer per interrupt endpoint. 512 bytes covers the
  * largest BCM5974 multi-touch package (type-3 header + 16 finger blocks). */
 static uint8_t  hid_buf  [MAX_SLOTS][MAX_INT_EP][512] __attribute__((aligned(64)));
@@ -159,7 +164,9 @@ typedef struct {
     int      n_iep;             /* # of configured interrupt IN endpoints    */
     int      iep_dci[MAX_IEP_PER_DEV];   /* DCI of the interrupt endpoint         */
     int      iep_iface[MAX_IEP_PER_DEV]; /* owning interface number               */
-    int      iep_proto[MAX_IEP_PER_DEV]; /* 1 = keyboard, 2 = mouse, 3 = BCM5974  */
+    int      iep_proto[MAX_IEP_PER_DEV]; /* 1 = keyboard, 2 = mouse, 3 = BCM5974,
+                                          * 4 = game pad (HID), 5 = Xbox 360 pad  */
+    int      iep_pad[MAX_IEP_PER_DEV];   /* gamepad.c index, for proto 4 and 5    */
     int      iep_len[MAX_IEP_PER_DEV];   /* bytes requested per transfer          */
     uint32_t ep0_enq, ep0_cycle;
     uint32_t iep_enq[MAX_IEP_PER_DEV], iep_cycle[MAX_IEP_PER_DEV];
@@ -276,7 +283,7 @@ static int cmd_exec(trb_t t, trb_t *result) {
 static int ctrl_xfer(int idx, const usb_setup_t *s, void *data, int len, int in) {
     xdev_t *d = &xdev[idx];
     if (data && len > 0 && !in)
-        memcpy(xfer_buf[idx], (void *)data, len > 256 ? 256 : len);
+        memcpy(xfer_buf[idx], (void *)data, len > XFER_BUF_SZ ? XFER_BUF_SZ : len);
 
     trb_t setup = {{ 0 }};
     memcpy(&setup.d[0], (void *)s, 8);
@@ -289,7 +296,7 @@ static int ctrl_xfer(int idx, const usb_setup_t *s, void *data, int len, int in)
     if (len > 0) {
         trb_t dt = {{ 0 }};
         dt.d[0] = (uint32_t)&xfer_buf[idx][0];
-        dt.d[2] = (len > 256 ? 256 : len);
+        dt.d[2] = (len > XFER_BUF_SZ ? XFER_BUF_SZ : len);
         dt.d[3] = TRB_TYPE(TRB_DATA) | (in ? (1u << 16) : 0) | TRB_ISP;
         data_ptr = (uint32_t)&ep0_ring[idx][d->ep0_enq];
         ring_push(ep0_ring[idx], &d->ep0_enq, &d->ep0_cycle, dt);
@@ -308,7 +315,7 @@ static int ctrl_xfer(int idx, const usb_setup_t *s, void *data, int len, int in)
     if (cc < 0) cc = evt_wait(TRB_XFER_EVENT, 0, &ev);   /* accept short pkt */
     if (cc == CC_SUCCESS || cc == 13 /* short packet */) {
         if (data && len > 0 && in)
-            memcpy(data, xfer_buf[idx], len > 256 ? 256 : len);
+            memcpy(data, xfer_buf[idx], len > XFER_BUF_SZ ? XFER_BUF_SZ : len);
         return len;
     }
     return -1;
@@ -644,6 +651,7 @@ static int enumerate_port(int port) {
     int current_proto = 0;
     int found_keyboard = 0;
     int found_trackpad = 0;
+    uint16_t rdesc_len = 0;     /* the current interface's report descriptor size */
 
     while (off + 2 <= total) {
         int blen = cfg[off], btype = cfg[off + 1];
@@ -651,6 +659,7 @@ static int enumerate_port(int port) {
 
         if (btype == USB_DT_INTERFACE) {
             current_iface = cfg[off + 2];
+            rdesc_len = 0;
             uint8_t iclass = cfg[off + 5];
             uint8_t isubclass = cfg[off + 6];
             uint8_t iproto = cfg[off + 7];
@@ -671,13 +680,21 @@ static int enumerate_port(int port) {
                     /* Apple BCM5974 trackpad: subclass 0, protocol 0, not boot */
                     current_proto = 3;  /* Custom proto for BCM5974 */
                 } else {
-                    current_proto = 0;
+                    /* Any other HID interface might be a game controller; its
+                     * report descriptor decides, read once the endpoint turns
+                     * up below. */
+                    current_proto = 4;
                 }
                 klogf(LOG_INFO, "xhci: iface %d HID class %d/%d/%d -> proto %d\n",
                       current_iface, iclass, isubclass, iproto, current_proto);
+            } else if (USB_IS_XINPUT(iclass, isubclass, iproto)) {
+                current_proto = 5;      /* Xbox 360 controller */
             } else {
                 current_proto = 0;
             }
+        } else if (btype == USB_DT_HID && current_iface >= 0 && blen >= 9 &&
+                   cfg[off + 6] == USB_DT_HID_REPORT) {
+            rdesc_len = (uint16_t)(cfg[off + 7] | (cfg[off + 8] << 8));
         } else if (btype == USB_DT_ENDPOINT && current_iface >= 0 && current_proto > 0) {
             int attr = cfg[off + 3], addr = cfg[off + 2];
             if ((attr & 3) == 3 && (addr & 0x80)) {
@@ -725,6 +742,42 @@ static int enumerate_port(int port) {
                                   0x83, ep_mps, ep_ival);
                     bcm5974_init();
                     found_trackpad = 1;
+                } else if (current_proto == 4 || current_proto == 5) {
+                    int pad = -1;
+                    if (current_proto == 5) {
+                        pad = gamepad_attach_xinput(dd.idVendor, dd.idProduct);
+                    } else {
+                        /* As much of the descriptor as the interface says there
+                         * is; a half-read one parses as a pad with half its
+                         * buttons. */
+                        int want = rdesc_len ? rdesc_len : 256;
+                        if (want > XFER_BUF_SZ)
+                            want = XFER_BUF_SZ;
+                        if (want > GAMEPAD_RDESC_MAX)
+                            want = GAMEPAD_RDESC_MAX;
+                        uint8_t *rdesc = gamepad_rdesc_buf();
+                        int rn = get_hid_report_descriptor(idx, current_iface,
+                                                          rdesc, want);
+                        if (rn > 0) {
+                            pad = gamepad_attach(dd.idVendor, dd.idProduct,
+                                                 rdesc, rn);
+                            if (pad < 0)
+                                klogf(LOG_INFO, "xhci: iface %d is not a game "
+                                      "controller, ignored\n", current_iface);
+                        } else {
+                            klogf(LOG_INFO, "xhci: iface %d has no report "
+                                  "descriptor\n", current_iface);
+                        }
+                    }
+                    if (pad >= 0) {
+                        if (configure_iep(idx, slot_id, psi, port, current_iface,
+                                          current_proto, addr, ep_mps,
+                                          ep_ival) == 0)
+                            d->iep_pad[d->n_iep - 1] = pad;
+                        else
+                            gamepad_detach(pad);
+                    }
+                    current_proto = 0;   /* one endpoint per interface */
                 }
             }
         }
@@ -917,6 +970,34 @@ int xhci_init(void) {
 #include <bcm5974.h>
 
 /* ------------------------------------------------------------------ *
+ *  Unplug                                                             *
+ * ------------------------------------------------------------------ */
+/**
+ * @brief Forget the device in slot @p idx: stop its pads, give the slot back.
+ *
+ * Without the Disable Slot the controller keeps the slot enabled and the next
+ * Enable Slot hands out a higher number, so a device plugged and unplugged a
+ * few times would use up every slot there is. It also frees the port for the
+ * hot-plug scan, which treats a port with a tracked device as already done.
+ */
+static void release_device(int idx) {
+    xdev_t *d = &xdev[idx];
+    int slot_id = d->slot_id;
+
+    for (int i = 0; i < d->n_iep; i++)
+        if (d->iep_proto[i] == 4 || d->iep_proto[i] == 5)
+            gamepad_detach(d->iep_pad[i]);
+    klogf(LOG_INFO, "xhci: slot %d (port %d) unplugged\n", slot_id, d->port);
+
+    d->in_use = 0;                 /* the poll loop drops events for it from here */
+    trb_t r;
+    trb_t ds = {{ 0, 0, 0, TRB_TYPE(TRB_DISABLE_SLOT) | (slot_id << 24) }};
+    cmd_exec(ds, &r);
+    dcbaa[slot_id] = 0;
+    memset(d, 0, sizeof(*d));
+}
+
+/* ------------------------------------------------------------------ *
  *  Poll                                                               *
  * ------------------------------------------------------------------ */
 void xhci_poll(void) {
@@ -970,6 +1051,8 @@ void xhci_poll(void) {
                                              &d->hid_layout);
                 } else if (proto == 2) {
                     usb_hid_report_mouse(buf, n);
+                } else if (proto == 4 || proto == 5) {
+                    gamepad_report(d->iep_pad[iep_idx], buf, n);
                 } else if (proto == 3) {
                     /* The trackpad is asked for the report protocol at setup,
                      * but honour whatever it actually sends: a packet too short
@@ -1005,7 +1088,15 @@ void xhci_poll(void) {
             opw(OP_PORTSC(p - 1), (v & ~PORTSC_RW1C) | PORTSC_CSC);
             int already = 0;
             for (int i = 1; i < MAX_SLOTS; i++)
-                if (xdev[i].in_use && xdev[i].port == p) already = 1;
+                if (xdev[i].in_use && xdev[i].port == p) already = i;
+            /* A connect-change with nothing connected is an unplug. (One with a
+             * device still there and one already tracked is left alone: a port
+             * raises that spuriously while its link comes up.) */
+            if (!(v & PORTSC_CCS)) {
+                if (already)
+                    release_device(already);
+                continue;
+            }
             if ((v & PORTSC_CCS) && !already) {
                 reset_port(p);
                 if (opr(OP_PORTSC(p - 1)) & PORTSC_PED)

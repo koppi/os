@@ -70,6 +70,7 @@ int usb_set_configuration(usb_device_t *dev, uint8_t cfg) {
 static void parse_config(usb_device_t *dev, uint8_t *cfg, int total) {
     int off = 0;
     usb_iface_desc_t *iface = 0;
+    uint16_t rdesc_len = 0;   /* the interface's HID descriptor says how long its report descriptor is */
     while(off + 2 <= total) {
         uint8_t blen = cfg[off];
         uint8_t btype = cfg[off + 1];
@@ -78,6 +79,10 @@ static void parse_config(usb_device_t *dev, uint8_t *cfg, int total) {
 
         if(btype == USB_DT_INTERFACE) {
             iface = (usb_iface_desc_t *)(cfg + off);
+            rdesc_len = 0;
+        } else if(btype == USB_DT_HID && iface && blen >= 9 &&
+                  cfg[off + 6] == USB_DT_HID_REPORT) {
+            rdesc_len = (uint16_t)(cfg[off + 7] | (cfg[off + 8] << 8));
         } else if(btype == USB_DT_ENDPOINT && iface) {
             usb_endpoint_desc_t *ep = (usb_endpoint_desc_t *)(cfg + off);
             int is_int = (ep->bmAttributes & 0x03) == 0x03;
@@ -85,7 +90,13 @@ static void parse_config(usb_device_t *dev, uint8_t *cfg, int total) {
             if(iface->bInterfaceClass == USB_CLASS_HID && is_int && is_in) {
                 usb_hid_attach(dev, iface->bInterfaceNumber,
                                iface->bInterfaceProtocol,
-                               ep->bEndpointAddress, ep->wMaxPacketSize);
+                               ep->bEndpointAddress, ep->wMaxPacketSize,
+                               rdesc_len);
+            } else if(is_int && is_in && USB_IS_XINPUT(iface->bInterfaceClass,
+                                                       iface->bInterfaceSubClass,
+                                                       iface->bInterfaceProtocol)) {
+                usb_hid_attach_xinput(dev, iface->bInterfaceNumber,
+                                      ep->bEndpointAddress, ep->wMaxPacketSize);
             }
         }
         off += blen;

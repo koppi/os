@@ -1,12 +1,14 @@
 /**
  * @file xhci.h
- * @brief xHCI (USB 3.x) host-controller driver — polled, HID boot devices only.
+ * @brief xHCI (USB 3.x) host-controller driver — polled, HID devices only.
  *
  * Every recent laptop is xHCI-only (no UHCI/EHCI), the ThinkPad X250 included.
  * Its internal keyboard/TrackPoint are PS/2, so this exists for *external* USB
  * keyboards and mice: it enumerates attached devices, forces the HID boot
  * protocol and feeds reports into the same input hooks the PS/2 and UHCI
- * drivers use. No mass storage (the internal disk is AHCI), no interrupts.
+ * drivers use. Also game controllers (@ref gamepad.h), and a device unplugged
+ * from a root port is released (Disable Slot) so the port can be used again.
+ * No mass storage (the internal disk is AHCI), no hubs, no interrupts.
  */
 #pragma once
 
