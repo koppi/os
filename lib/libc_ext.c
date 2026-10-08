@@ -113,11 +113,88 @@ unsigned long getauxval(unsigned long type) {
 unsigned int geteuid(void) { return 0; }
 unsigned int getuid(void) { return 0; }
 
-/* No real environment-variable storage on this kernel (same choice
- * third_party/qt6/koppios/qt_libc_compat.c already made). */
+/* A small process-local environment: a fixed table of "NAME=value" strings. There is no inherited
+ * environment on this kernel (a program starts with an empty one), but a program can set
+ * variables for its own libraries to read -- Qt looks at several QT_* ones. Not thread-safe for
+ * concurrent writers; programs set what they need at start-up. */
+#define ENV_MAX 32
+static char *g_env[ENV_MAX];
+
+extern int strncmp(const char *a, const char *b, unsigned int n);
+extern char *strcpy(char *dest, const char *src);
+
+static int env_find(const char *name, unsigned int n) {
+    for (int i = 0; i < ENV_MAX; i++) {
+        if (g_env[i] && strncmp(g_env[i], name, n) == 0 && g_env[i][n] == '=')
+            return i;
+    }
+    return -1;
+}
+
 char *getenv(const char *name) {
-    (void) name;
+    if (!name || !*name)
+        return 0;
+    int i = env_find(name, strlen(name));
+    return i < 0 ? 0 : g_env[i] + strlen(name) + 1;
+}
+
+int setenv(const char *name, const char *value, int overwrite) {
+    if (!name || !*name || strchr(name, '=')) {
+        errno = EINVAL;
+        return -1;
+    }
+    unsigned int n = strlen(name);
+    int i = env_find(name, n);
+    if (i >= 0 && !overwrite)
+        return 0;
+    char *e = malloc(n + strlen(value) + 2);
+    if (!e) {
+        errno = ENOMEM;
+        return -1;
+    }
+    memcpy(e, name, n);
+    e[n] = '=';
+    strcpy(e + n + 1, value);
+    if (i < 0) {
+        for (i = 0; i < ENV_MAX && g_env[i]; i++) {}
+        if (i == ENV_MAX) {
+            free(e);
+            errno = ENOMEM;
+            return -1;
+        }
+    } else {
+        free(g_env[i]);
+    }
+    g_env[i] = e;
     return 0;
+}
+
+int unsetenv(const char *name) {
+    if (!name || !*name || strchr(name, '=')) {
+        errno = EINVAL;
+        return -1;
+    }
+    int i = env_find(name, strlen(name));
+    if (i >= 0) {
+        free(g_env[i]);
+        g_env[i] = 0;
+    }
+    return 0;
+}
+
+int putenv(char *string) {
+    char *eq = strchr(string, '=');
+    if (!eq)
+        return unsetenv(string);
+    char name[128];
+    unsigned int n = (unsigned int) (eq - string);
+    if (n >= sizeof name) {
+        errno = EINVAL;
+        return -1;
+    }
+    memcpy(name, string, n);
+    name[n] = 0;
+    return setenv(name, eq + 1, 1);
 }
 
 /* No real POSIX scheduling priority range implemented yet -- one fixed
