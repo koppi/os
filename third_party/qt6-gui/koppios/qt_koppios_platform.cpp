@@ -31,8 +31,6 @@
 #include <QtCore/qbytearray.h>
 #include <QtCore/qlist.h>
 #include <QtCore/qtimer.h>
-#include <QtCore/qthreadpool.h>
-#include <QtCore/private/qthreadpool_p.h>
 #include <algorithm>
 
 #ifndef KOPPIOS_SCREEN_WIDTH
@@ -66,11 +64,10 @@ unsigned g_palette[256];
 unsigned char g_lut[32768];
 unsigned char g_frame[W * H];       // quantized screen, without pointer
 unsigned char g_shown[W * H];       // g_frame + pointer, what gfx_blit gets
-int g_paletteAge = 1 << 30;         // flushes since the palette was built
 
 struct Box { int lo, hi; };
 
-void buildPalette(const QImage &image)
+__attribute__((optimize("O3"))) void buildPalette(const QImage &image)
 {
     static unsigned samples[16384];
     int n = 0;
@@ -137,10 +134,36 @@ void buildPalette(const QImage &image)
         g_lut[idx] = static_cast<unsigned char>(bestI);
     }
     syscall3(24, unsigned(reinterpret_cast<quintptr>(g_palette)), 0, 0);   // gfx_palette
-    g_paletteAge = 0;
 }
 
-void quantize(const QImage &image, bool rebuild)
+// How badly does the current palette represent the picture? Mean squared RGB distance over a sparse
+// sample of the pixels; it jumps when colours appear that the palette was not built for (a popup, a
+// style switch, a highlight) and stays low while the picture merely changes.
+unsigned paletteError(const QImage &image)
+{
+    unsigned long long err = 0;
+    unsigned n = 0;
+    for (int y = 0; y < H; y += 8) {
+        const QRgb *line = reinterpret_cast<const QRgb *>(image.constScanLine(y));
+        for (int x = 0; x < W; x += 8) {
+            const QRgb c = line[x];
+            const unsigned p = g_palette[g_lut[(qRed(c) >> 3) << 10 | (qGreen(c) >> 3) << 5 | (qBlue(c) >> 3)]];
+            const int dr = qRed(c) - int((p >> 16) & 255), dg = qGreen(c) - int((p >> 8) & 255), db = qBlue(c) - int(p & 255);
+            err += unsigned(dr * dr + dg * dg + db * db);
+            n++;
+        }
+    }
+    return n ? unsigned(err / n) : 0;
+}
+
+constexpr unsigned kPaletteMinGapMs = 300;    // between rebuilds: one costs tens of milliseconds
+unsigned g_paletteBuiltAt = 0;                // clock (ms) of the last rebuild
+unsigned g_paletteBaseline = 0;               // paletteError() of the frame the palette was built from
+// What a smooth gradient costs a 256-colour palette is a floor no rebuild can lower, so "too coarse"
+// means clearly worse than the palette was when it was built, not worse than some fixed number.
+inline bool paletteWorn(unsigned error) { return error > g_paletteBaseline + g_paletteBaseline / 2 + 24; }
+
+__attribute__((optimize("O3"))) void quantize(const QImage &image, bool rebuild)
 {
     if (!g_gfxOpen) {
         if (!syscall3(22, W, H, 0))                                   // gfx_open
@@ -148,8 +171,18 @@ void quantize(const QImage &image, bool rebuild)
         g_gfxOpen = true;
         rebuild = true;
     }
-    if (rebuild || ++g_paletteAge > 90)
+    if (!rebuild) {
+        // Cheap enough (a few thousand pixels) to ask on every flush; only the rebuild is expensive.
+        const unsigned e = paletteError(image);
+        const unsigned now = syscall3(15, 0, 0, 0);                   // ms since boot
+        if (paletteWorn(e) && now - g_paletteBuiltAt >= kPaletteMinGapMs)
+            rebuild = true;
+    }
+    if (rebuild) {
         buildPalette(image);
+        g_paletteBuiltAt = syscall3(15, 0, 0, 0);
+        g_paletteBaseline = paletteError(image);
+    }
     static const signed char bayer[4][4] = {
         {-4,  0, -3,  1}, { 2, -2,  3, -1}, {-3,  1, -4,  0}, { 3, -1,  2, -2}};
     unsigned char *out = g_frame;
@@ -460,16 +493,6 @@ public:
     {
         static QKoppiosInput *input = new QKoppiosInput;   // needs the event dispatcher, so not in the ctor
         Q_UNUSED(input);
-        // The GUI thread pool (parallel image fills and conversions) keeps its worker for good. An
-        // expired worker is restarted as a brand-new kernel thread, and the kernel hands out a limited
-        // number of thread slots per process and never recycles them, so letting an idle worker
-        // expire every 30 s would slowly use them all up.
-        static bool poolConfigured = [] {
-            if (QThreadPool *pool = QThreadPoolPrivate::qtGuiInstance())
-                pool->setExpiryTimeout(-1);
-            return true;
-        }();
-        Q_UNUSED(poolConfigured);
         QPlatformWindow *w = new QKoppiosPlatformWindow(window);
         w->requestActivateWindow();
         return w;
@@ -484,6 +507,12 @@ public:
 } // namespace
 
 QPlatformIntegration *qt_koppios_create_platform_integration() {
+    // Qt hands big image fills and conversions to a GUI thread pool so several cores can share them.
+    // Here every thread of a process runs on that process's one CPU, so there is no parallelism to
+    // win, and every hand-off costs a scheduler tick: a full-window repaint took 50-90 ms with the
+    // pool instead of 9-12 ms without it. Upstream's own switch makes the image code take its
+    // serial path (QThread and QThreadPool for application code are unaffected).
+    qputenv("QT_NO_GUI_THREADPOOL", "1");
     return new QKoppiosIntegration(QStringList() << QStringLiteral("enable_fonts"));
 }
 

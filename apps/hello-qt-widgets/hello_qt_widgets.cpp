@@ -45,6 +45,7 @@
 #include <QtCore/qrunnable.h>
 #include <QtCore/private/qthreadpool_p.h>
 #include <QTimer>
+#include <QElapsedTimer>
 
 extern "C" unsigned _write(const void *buf, unsigned len);
 void qt_koppios_install_file_engine_handler();
@@ -361,8 +362,8 @@ int main()
     window.setGeometry(QRect(QPoint(0, 0), QGuiApplication::primaryScreen()->size()));
     window.show();
 
-    // Qt hands big image fills and conversions to its own GUI thread pool; once the first frames are
-    // painted it must have started a worker (this machine reports one ideal thread, so exactly one).
+    // Qt's own GUI thread pool (parallel image fills) is off on this OS: a process's threads share
+    // one CPU, so it can only add scheduler hand-offs. -1 means "no pool".
     QTimer::singleShot(300, &window, [] {
         QThreadPool *gui = QThreadPoolPrivate::qtGuiInstance();
         int workers = -1;
@@ -372,6 +373,17 @@ int main()
             workers = int(d->allThreads.size());
         }
         say(QStringLiteral("threads: GUI pool workers=%1").arg(workers));
+    });
+
+    // How fast does the window repaint? Ten full repaints, flush to the framebuffer included. A
+    // regression here (a slow scheduler hand-off, an expensive fill) is what makes the app feel
+    // sluggish, so test/qt-widgets-boot.sh bounds it.
+    QTimer::singleShot(1500, &window, [&window] {
+        QElapsedTimer t;
+        t.start();
+        for (int i = 0; i < 10; i++)
+            window.repaint();
+        say(QStringLiteral("perf: 10 full repaints took %1 ms").arg(int(t.elapsed())));
     });
 
     say(QStringLiteral("ready style=%1 tabs=%2").arg(QApplication::style()->objectName()).arg(tabs->count()));

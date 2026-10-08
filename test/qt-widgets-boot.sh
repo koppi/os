@@ -285,6 +285,21 @@ sys.exit(0 if good else 1)
 PY
 }
 
+# perfbound <scenario> <what> <max_ms>   the app's "perf: 10 full repaints took N ms" must have N <= max_ms
+# (about 90-120 ms here; with Qt's GUI thread pool on, or with sleeping threads holding their CPUs, it
+# was 500-900 ms and the app felt sluggish)
+perfbound() {
+    python3 - "$OUT/$1/serial.log" "$2" "$3" <<'PY'
+import sys, re
+path, what, limit = sys.argv[1:]
+vals = [int(m.group(1)) for l in open(path, errors="replace")
+        for m in [re.search(r"perf: 10 full repaints took (\d+) ms", l)] if m]
+good = bool(vals) and vals[-1] <= int(limit)
+print(f"    {what}: {vals[-1] if vals else 'no measurement'} ms (want <= {limit}): {'ok' if good else 'FAIL'}")
+sys.exit(0 if good else 1)
+PY
+}
+
 # Every control shows one value, so the last number of each kind must agree.
 agree() {
     python3 - "$OUT/$1/serial.log" "$2" <<'PY'
@@ -318,7 +333,13 @@ do_start() {
     has start "QThread ran on its own thread with its own thread_local" \
         "threads: QThread done=1 sum=4950 own_thread=1 its_tl=100 main_tl=1000" || rc=1
     has start "QThreadPool ran 8 jobs on at least two threads" "threads: QThreadPool jobs=8 sum=36 parallel=1" || rc=1
-    has start "Qt's own GUI thread pool started its worker while painting" "threads: GUI pool workers=1" || rc=1
+    has start "Qt's GUI thread pool is off (a process has one CPU: parallel fills only add hand-offs)" \
+        "threads: GUI pool workers=-1" || rc=1
+    if [ -n "$KVM" ]; then
+        perfbound start "ten full repaints" 250 || rc=1
+    else
+        echo "    ten full repaints: not judged without KVM"
+    fi
     has start "a queued signal from the worker reached the main thread" \
         "threads: finished signal reached the main thread" || rc=1
     verdict "start" $rc

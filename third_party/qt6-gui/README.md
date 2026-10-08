@@ -36,7 +36,6 @@ Every change is marked inline (`grep -r "koppios addition" qtbase`):
 | `src/widgets/kernel/qwidget.cpp` | `QWidgetPrivate::flagsForDumping()` builds its geometry string with `QByteArray` (`tools/patch_widgets.py`) | The original uses `std::stringstream`; there are no libstdc++ iostreams here. |
 | `src/gui/kernel/qguiapplication.cpp` | `init_platform()` calls `qt_koppios_create_platform_integration()` | There is no `dlopen()` plugin loader. |
 | `src/plugins/platforms/minimal/qminimalintegration.cpp` | `fontDatabase()` returns `qt_koppios_create_font_database()` | Qt's own minimal platform plugin has no usable font database without fontconfig. |
-| `src/corelib/thread/qthreadpool.cpp` | `QThreadPoolPrivate::qtGuiInstance()` always returns null (Qt's own `QT_NO_GUI_THREADPOOL` path) | Qt parallelizes big image fills/conversions through its GUI thread pool, and the port keeps that pool off: image code falls back to the serial path. (It was originally also a dodge for the kernel's thread stack/heap overlap, which PR #9 fixed.) |
 
 Qt's own `thread_local` is used as-is, unchanged: the kernel sets up a
 per-thread `%gs` segment for ring 3 (syscall 38, `set_thread_area`),
@@ -144,11 +143,14 @@ from it.
   resources. Fusion and Windows are the only styles.
 * Output is the kernel's 8-bit indexed `gfx_blit`, so colour is limited to one
   256-entry palette per frame sequence (built from the first frame).
-* **No Qt worker threads.** The `qthreadpool.cpp` patch above keeps Qt's GUI
-  thread pool off, so image code runs its serial path. Real `thread_local`
-  storage is in place, so `QThreadData` and the rest of Qt's per-thread state
-  are correct; whatever still keeps the pool off is no longer Qt's own
-  bookkeeping.
+* **Qt's GUI thread pool is off; threads themselves work.** Real `thread_local`, `QThread`,
+  `QThreadPool` for application code and queued cross-thread signals all run (see the kernel
+  README's **Thread-local storage**). The pool Qt keeps for itself, which spreads big image fills
+  and conversions over several cores, is switched off with Qt's own `QT_NO_GUI_THREADPOOL`, set by
+  the platform glue (`qt_koppios_create_platform_integration`): the kernel runs all threads of a
+  process on one CPU, so there is nothing to gain, and every hand-off costs a scheduler tick. With
+  the pool a full-window repaint of `apps/hello-qt-widgets` took 50-90 ms; without it, 7-12 ms
+  (`test/qt-widgets-boot.sh` bounds it). Revisit once a process can use more than one CPU.
 
 ## Licences
 
