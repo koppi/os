@@ -40,6 +40,37 @@ void device_register(device_t *dev) {
     }
 }
 
+/** Devices that exist only for the raw block syscalls: no mount name, no VFS
+ *  path. The installer's payload is the one user. */
+static device_t *raw_devices[2];
+
+/**
+ * @brief Record @p dev for the raw block syscalls only: no VFS mount, and no
+ *        path or id lookup reaches it.
+ */
+void device_attach_raw(device_t *dev) {
+    for(int i = 0; i < 2; i++) {
+        if(raw_devices[i] == NULL) {
+            raw_devices[i] = dev;
+            return;
+        }
+    }
+}
+
+/**
+ * @brief The @p index'th block device, in a fixed order: the VFS slots 0..7, then
+ *        the raw-only ones. Gaps are NULL, so callers walk the whole range.
+ */
+device_t *device_at(int index) {
+    if(index < 0)
+        return NULL;
+    if(index < 8)
+        return devices[index];
+    if(index < 8 + 2)
+        return raw_devices[index - 8];
+    return NULL;
+}
+
 /**
  * @brief Find a device whose mount name matches the first 3 chars of @p name.
  * @param name Path, optionally with a leading '/'.

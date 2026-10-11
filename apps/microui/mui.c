@@ -604,8 +604,16 @@ static const keydef g_keys[0x54] = {
 };
 
 static int g_shift, g_caps, g_quit, g_buttons;
+static int (*g_quit_guard)(void);
 
 void mui_quit(void) { g_quit = 1; }
+void mui_set_quit_guard(int (*may_quit)(void)) { g_quit_guard = may_quit; }
+
+/** @brief Esc or the window's close box was used: quit, unless the program's guard says not now. */
+static void request_quit(void) {
+    if (!g_quit_guard || g_quit_guard())
+        g_quit = 1;
+}
 
 /**
  * @brief Turn one raw key event into microui input.
@@ -635,7 +643,7 @@ static void translate_key(mu_Context *ctx, unsigned raw) {
 
     if (sc == 0x01) {                             /* Esc: leave */
         if (!release)
-            g_quit = 1;
+            request_quit();
         return;
     }
     if (sc == 0x3A) {                             /* Caps Lock */
@@ -735,7 +743,7 @@ static void pump_window(mu_Context *ctx) {
             break;
         case WMEV_WINDOW:
             if ((ev & 0xFF) == WMEV_WIN_CLOSE)
-                g_quit = 1;
+                request_quit();
             break;
         default:
             break;

@@ -200,17 +200,33 @@ static int nvme_write_sector(int lba) {
     if (nvme_cmd(&io_q, cmd, 0) != 0)
         return 0;
 
+    /* A bulk writer (blk.c) defers this and flushes once through the flush hook. */
+    if (!blk_defer_flush) {
+        uint32_t fl[16] = { 0 };
+        fl[0] = IO_FLUSH;
+        fl[1] = ns_nsid[cur_ns];
+        nvme_cmd(&io_q, fl, 0);
+    }
+    return 1;
+}
+
+static int nvme_flush_ns(int ns) {
     uint32_t fl[16] = { 0 };
     fl[0] = IO_FLUSH;
-    fl[1] = ns_nsid[cur_ns];
-    nvme_cmd(&io_q, fl, 0);
-    return 1;
+    fl[1] = ns_nsid[ns];
+    return nvme_cmd(&io_q, fl, 0) == 0;
 }
 
 static char *rd0(int lba) { cur_ns = 0; return nvme_read_sector(lba); }
 static int   wr0(int lba) { cur_ns = 0; return nvme_write_sector(lba); }
 static char *rd1(int lba) { cur_ns = 1; return nvme_read_sector(lba); }
 static int   wr1(int lba) { cur_ns = 1; return nvme_write_sector(lba); }
+static char *nvme_scratch(void) { return (char *) sect_scratch; }
+static int   fl0(void)    { return nvme_flush_ns(0); }
+static int   fl1(void)    { return nvme_flush_ns(1); }
+
+/** The controller's model string (IDENTIFY controller), for the namespaces' devices. */
+static char nvme_model[41];
 
 /* ------------------------------------------------------------------ *
  *  PCI bind hook                                                      *
@@ -259,6 +275,13 @@ static void mount_namespace(uint32_t nsid, uint64_t nsze, uint32_t bs) {
     dev->mount[3] = 0;
     dev->read  = idx == 0 ? rd0 : rd1;
     dev->write = idx == 0 ? wr0 : wr1;
+    dev->flush = idx == 0 ? fl0 : fl1;
+    dev->scratch = nvme_scratch;
+    dev->kind = BLK_KIND_NVME;
+    /* This driver treats a block as 512 bytes; a namespace formatted otherwise
+     * is reported with no size, which the installer takes as "not usable". */
+    dev->sectors = bs == 512 ? (nsze > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t) nsze) : 0;
+    strcpy(dev->model, nvme_model);
     fat_init(&dev->fs);
     device_register(dev);
     n_ns++;
@@ -387,7 +410,7 @@ void nvme_init(void) {
         return;
     }
     {
-        char mn[41];
+        char *mn = nvme_model;
         memcpy(mn, dma4k + 24, 40);
         mn[40] = 0;
         for (int i = 39; i >= 0 && (mn[i] == ' ' || mn[i] == 0); i--)

@@ -57,6 +57,83 @@ static int bpb_looks_like_fat(const bootsector_t *bs) {
     return 1;
 }
 
+/** @return the little-endian u32 at @p p. */
+static uint32_t le32(const uint8_t *p) {
+    return (uint32_t) p[0] | ((uint32_t) p[1] << 8) | ((uint32_t) p[2] << 16) | ((uint32_t) p[3] << 24);
+}
+
+/** @return non-zero if sector @p lba of the *whole device* starts a FAT volume. */
+static int raw_sector_is_fat(device_t *dev, uint32_t lba) {
+    return bpb_looks_like_fat((const bootsector_t *) dev->read((int) lba));
+}
+
+/**
+ * @brief Find a FAT volume inside a partitioned disk.
+ * @param dev The whole disk.
+ * @return The volume's first sector, or 0 if the disk has no partition that
+ *         starts with a FAT boot sector.
+ *
+ * Understands a classic MBR and a GPT behind its protective MBR (which is what
+ * the installer, apps/install, writes). It does not trust the partition type:
+ * the installer's volume is an EFI System Partition, which also holds FAT, and a
+ * data partition may be typed any number of ways. What counts is that the first
+ * sector passes the same plausibility check a bare FAT disk has to, so the first
+ * partition that is FAT wins.
+ */
+static uint32_t find_fat_partition(device_t *dev) {
+    uint8_t mbr[SECTOR_SIZE];
+    memcpy(mbr, dev->read(0), SECTOR_SIZE);
+    if (mbr[510] != 0x55 || mbr[511] != 0xAA)
+        return 0;
+
+    int protective = 0;
+    uint32_t cand[4];
+    int ncand = 0;
+    for (int i = 0; i < 4; i++) {
+        const uint8_t *e = mbr + 446 + 16 * i;
+        uint32_t start = le32(e + 8);
+        if (e[4] == 0xEE)
+            protective = 1;
+        else if (e[4] && e[4] != 0x05 && e[4] != 0x0F && start)   /* not extended */
+            cand[ncand++] = start;
+    }
+
+    if (!protective) {
+        for (int i = 0; i < ncand; i++)
+            if (raw_sector_is_fat(dev, cand[i]))
+                return cand[i];
+        return 0;
+    }
+
+    uint8_t hdr[SECTOR_SIZE];
+    memcpy(hdr, dev->read(1), SECTOR_SIZE);
+    if (memcmp(hdr, "EFI PART", 8) != 0)
+        return 0;
+    uint32_t entries = le32(hdr + 72), count = le32(hdr + 80), size = le32(hdr + 84);
+    if (size < 128 || size > SECTOR_SIZE || (size & (size - 1)))
+        return 0;
+    if (count > 16)                           /* the first sixteen entries are plenty */
+        count = 16;
+    uint32_t per = SECTOR_SIZE / size;
+    uint8_t sec[SECTOR_SIZE];
+    for (uint32_t i = 0; i < count; i++) {
+        if (i % per == 0)
+            memcpy(sec, dev->read((int) (entries + i / per)), SECTOR_SIZE);
+        const uint8_t *e = sec + (i % per) * size;
+        int used = 0;
+        for (int k = 0; k < 16; k++)
+            if (e[k]) { used = 1; break; }
+        uint32_t first = le32(e + 32);
+        if (!used || !first)
+            continue;
+        if (raw_sector_is_fat(dev, first))
+            return first;
+        /* the check above reused the shared buffer; reload this entry's sector */
+        memcpy(sec, dev->read((int) (entries + i / per)), SECTOR_SIZE);
+    }
+    return 0;
+}
+
 /**
  * @brief Parse a volume's BPB into @c device_t::minfo.
  * @param dev The block device to probe.
@@ -68,10 +145,17 @@ static int bpb_looks_like_fat(const bootsector_t *bs) {
  * failure signal; nothing is returned and nothing is printed.
  */
 void fat_mount(device_t *dev) {
-    // Trying with bootsector
+    // Trying with bootsector: a bare FAT disk first, then a FAT partition.
+    dev->lba_base = 0;
+    memset(&dev->minfo, 0, sizeof(dev->minfo));     /* a re-mount must not keep the old one */
     bootsector_t *bs = (bootsector_t *) dev->read(0);
-    if (!bpb_looks_like_fat(bs))
-        return;                 /* minfo stays zeroed, minfo.mounted == 0 */
+    if (!bpb_looks_like_fat(bs)) {
+        uint32_t base = find_fat_partition(dev);
+        if (!base)
+            return;             /* minfo stays zeroed, minfo.mounted == 0 */
+        dev->lba_base = base;
+        bs = (bootsector_t *) dev_read(dev, 0);
+    }
 
     dev->minfo.n_sectors = (bs->bpb.n_sectors == 0) ? bs->bpb.long_sectors : bs->bpb.n_sectors;
     dev->minfo.fat_offset = bs->bpb.reserved_sectors;
@@ -90,6 +174,7 @@ void fat_mount(device_t *dev) {
      * checks and still be nonsense). */
     if (dev->minfo.first_data_sector >= dev->minfo.n_sectors) {
         memset(&dev->minfo, 0, sizeof(dev->minfo));
+        dev->lba_base = 0;
         return;
     }
     dev->minfo.data_sectors = dev->minfo.n_sectors - dev->minfo.first_data_sector;
@@ -206,7 +291,7 @@ uint32_t get_phys_sector(file *f) {
  * anything — which is why @ref fat_write_all re-fetches the entry after
  * scanning the FAT. And the sector it was found in is left in the file-scope
  * @c offset, which callers need in order to write the entry back with
- * @c dev->write(root_offset + offset); calling anything else that searches
+ * @c dev_write(dev, root_offset + offset); calling anything else that searches
  * the directory in between overwrites it.
  *
  * Root directory only: there is no path walk here.
@@ -224,7 +309,7 @@ directory_t *fat_get_dir(file *f) {
         return 0;
 
     for(uint32_t i = 0; i < dev->minfo.root_size; i++) {
-        directory_t *dir = (directory_t *) dev->read(dev->minfo.root_offset + i);
+        directory_t *dir = (directory_t *) dev_read(dev, dev->minfo.root_offset + i);
         for(int j = 0; j < 16; j++, dir++) {
             if(strncmp(dos_file_name, (char *) dir->filename, NAME_LEN) == 0) {
                 offset = i;
@@ -264,7 +349,7 @@ int fat_touch(char *name) {
         return 0;
     
     for(uint32_t i = 0; i < dev->minfo.root_size; i++) {
-        directory_t *dir = (directory_t *) dev->read(dev->minfo.root_offset + i);
+        directory_t *dir = (directory_t *) dev_read(dev, dev->minfo.root_offset + i);
         for(int j = 0; j < 16; j++, dir++) {
             if(dir->filename[0] == 0) {
                 /* filename[8] and extension[3] are contiguous in the packed
@@ -272,7 +357,7 @@ int fat_touch(char *name) {
                 memcpy(dir->filename, dos_file_name, NAME_LEN);
                 dir->file_size = 0;
                 dir->first_cluster = 0;
-                dev->write(dev->minfo.root_offset + i);
+                dev_write(dev, dev->minfo.root_offset + i);
                 kfree(dos_file_name);
                 return 1;
             }
@@ -306,7 +391,7 @@ void fat_read(file *f, char *buf) {
      * is not to be trusted. */
     if(!dev)
         return;
-    unsigned char *sector = (unsigned char *) dev->read(get_phys_sector(f));
+    unsigned char *sector = (unsigned char *) dev_read(dev, get_phys_sector(f));
     memcpy(buf, sector, SECTOR_SIZE);
     
     uint32_t fat_offset = 0;
@@ -326,9 +411,9 @@ void fat_read(file *f, char *buf) {
     }
     uint32_t fat_sector = dev->minfo.fat_offset + (fat_offset / SECTOR_SIZE);
     uint32_t entry_offset = fat_offset % SECTOR_SIZE;
-    sector = (unsigned char *) dev->read(fat_sector);
+    sector = (unsigned char *) dev_read(dev, fat_sector);
     memcpy(FAT, sector, SECTOR_SIZE);
-    sector = (unsigned char *) dev->read(fat_sector + 1);
+    sector = (unsigned char *) dev_read(dev, fat_sector + 1);
     memcpy(FAT + SECTOR_SIZE, sector, SECTOR_SIZE);
     
     if(dev->minfo.type == FAT12) {
@@ -408,10 +493,10 @@ static uint32_t fat_get_entry(device_t *dev, uint32_t cl) {
         uint32_t fo = cl + (cl / 2);
         uint32_t sec = dev->minfo.fat_offset + fo / SECTOR_SIZE;
         uint32_t off = fo % SECTOR_SIZE;
-        uint8_t *b = (uint8_t *) dev->read(sec);
+        uint8_t *b = (uint8_t *) dev_read(dev, sec);
         uint16_t lo = b[off];
         uint16_t hi = (off == SECTOR_SIZE - 1)
-                          ? ((uint8_t *) dev->read(sec + 1))[0]
+                          ? ((uint8_t *) dev_read(dev, sec + 1))[0]
                           : b[off + 1];
         uint16_t v = (uint16_t) (lo | (hi << 8));
         return (cl & 1) ? (uint32_t) (v >> 4) : (uint32_t) (v & 0x0FFF);
@@ -419,7 +504,7 @@ static uint32_t fat_get_entry(device_t *dev, uint32_t cl) {
     uint32_t fo = cl * 2;
     uint32_t sec = dev->minfo.fat_offset + fo / SECTOR_SIZE;
     uint32_t off = fo % SECTOR_SIZE;
-    uint8_t *b = (uint8_t *) dev->read(sec);
+    uint8_t *b = (uint8_t *) dev_read(dev, sec);
     return (uint32_t) (b[off] | (b[off + 1] << 8));
 }
 
@@ -440,7 +525,7 @@ static void fat_set_entry(device_t *dev, uint32_t cl, uint32_t val) {
             uint32_t fo = cl + (cl / 2);
             uint32_t sec = base + fo / SECTOR_SIZE;
             uint32_t off = fo % SECTOR_SIZE;
-            uint8_t *b = (uint8_t *) dev->read(sec);
+            uint8_t *b = (uint8_t *) dev_read(dev, sec);
             uint8_t next0 = (off == SECTOR_SIZE - 1) ? 0 : b[off + 1];
             if(cl & 1) {
                 b[off] = (uint8_t) ((b[off] & 0x0F) | ((val << 4) & 0xF0));
@@ -450,22 +535,22 @@ static void fat_set_entry(device_t *dev, uint32_t cl, uint32_t val) {
                 next0 = (uint8_t) ((next0 & 0xF0) | ((val >> 8) & 0x0F));
             }
             if(off == SECTOR_SIZE - 1) {
-                dev->write(sec);
-                uint8_t *b2 = (uint8_t *) dev->read(sec + 1);
+                dev_write(dev, sec);
+                uint8_t *b2 = (uint8_t *) dev_read(dev, sec + 1);
                 b2[0] = next0;
-                dev->write(sec + 1);
+                dev_write(dev, sec + 1);
             } else {
                 b[off + 1] = next0;
-                dev->write(sec);
+                dev_write(dev, sec);
             }
         } else {
             uint32_t fo = cl * 2;
             uint32_t sec = base + fo / SECTOR_SIZE;
             uint32_t off = fo % SECTOR_SIZE;
-            uint8_t *b = (uint8_t *) dev->read(sec);
+            uint8_t *b = (uint8_t *) dev_read(dev, sec);
             b[off] = (uint8_t) (val & 0xFF);
             b[off + 1] = (uint8_t) ((val >> 8) & 0xFF);
-            dev->write(sec);
+            dev_write(dev, sec);
         }
     }
 }
@@ -514,7 +599,7 @@ static uint32_t fat_scan_free(device_t *dev, uint32_t want, uint32_t *out) {
         return got;
     }
     for(uint32_t sec = 0; sec < dev->minfo.fat_size && got < want; sec++) {
-        uint8_t *b = (uint8_t *) dev->read(dev->minfo.fat_offset + sec);
+        uint8_t *b = (uint8_t *) dev_read(dev, dev->minfo.fat_offset + sec);
         for(uint32_t e = 0; e < SECTOR_SIZE / 2 && got < want; e++) {
             uint32_t cl = sec * (SECTOR_SIZE / 2) + e;
             if(cl < 2 || cl >= total)
@@ -587,7 +672,7 @@ void fat_write_all(file *f, char *buf, uint32_t len) {
             for(uint32_t s = 0; s < spc; s++) {
                 uint32_t lba = fat_cluster_lba(dev, cl[i]) + s;
                 uint32_t doff = i * bytes_per_cluster + s * SECTOR_SIZE;
-                uint8_t *sec = (uint8_t *) dev->read(lba);
+                uint8_t *sec = (uint8_t *) dev_read(dev, lba);
                 uint32_t n = (doff < len) ? (len - doff) : 0;
                 if(n > SECTOR_SIZE)
                     n = SECTOR_SIZE;
@@ -595,7 +680,7 @@ void fat_write_all(file *f, char *buf, uint32_t len) {
                     memset(sec, 0, SECTOR_SIZE);
                 if(n)
                     memcpy(sec, buf + doff, n);
-                dev->write(lba);
+                dev_write(dev, lba);
             }
         }
         first_cluster = cl[0];
@@ -609,7 +694,7 @@ void fat_write_all(file *f, char *buf, uint32_t len) {
         dir->first_cluster = (uint16_t) (first_cluster & 0xFFFF);
         dir->first_cluster_high_bytes = (uint16_t) (first_cluster >> 16);
         dir->file_size = len;
-        dev->write(dev->minfo.root_offset + offset);
+        dev_write(dev, dev->minfo.root_offset + offset);
     }
     f->len = len;
     f->current_cluster = first_cluster;
@@ -647,7 +732,7 @@ int fat_delete(char *name) {
     directory_t *dir = fat_get_dir(&f);
     if(dir) {
         memset(dir, 0, sizeof(directory_t));
-        dev->write(dev->minfo.root_offset + offset);
+        dev_write(dev, dev->minfo.root_offset + offset);
         return 1;
     }
     return 0;
@@ -823,7 +908,7 @@ void fat_ls(char *dir) {
     // TODO nested folder
     device_t *dev = get_dev_by_name(dir);
     for(uint32_t i = 0; i < dev->minfo.root_size; i++) {
-        directory_t *direc = (directory_t *) dev->read(dev->minfo.root_offset + i);
+        directory_t *direc = (directory_t *) dev_read(dev, dev->minfo.root_offset + i);
         for(int j = 0; j < 16; j++, direc++) {
             if(((char *) direc->filename)[0] == 0)
                 continue;
@@ -858,7 +943,7 @@ int fat_listdir(char *dir, char *out, uint32_t outsz) {
     uint32_t w = 0;
     int count = 0;
     for(uint32_t i = 0; i < dev->minfo.root_size; i++) {
-        directory_t *e = (directory_t *) dev->read(dev->minfo.root_offset + i);
+        directory_t *e = (directory_t *) dev_read(dev, dev->minfo.root_offset + i);
         for(int j = 0; j < 16; j++, e++) {
             uint8_t c0 = e->filename[0];
             if(c0 == 0x00 || c0 == 0xE5)               /* free / deleted */
@@ -989,8 +1074,8 @@ static int dfg_owner(uint32_t **chain, const uint32_t *clen, uint32_t m,
 static void dfg_copy(device_t *dev, uint32_t from, uint32_t to) {
     uint32_t a = fat_cluster_lba(dev, from), b = fat_cluster_lba(dev, to);
     for(uint32_t s = 0; s < dev->minfo.cluster_sectors; s++) {
-        dev->read(a + s);        /* fills the shared sector buffer ... */
-        dev->write(b + s);       /* ... which write() flushes straight back out */
+        dev_read(dev, a + s);        /* fills the shared sector buffer ... */
+        dev_write(dev, b + s);       /* ... which write() flushes straight back out */
     }
 }
 
@@ -1003,10 +1088,10 @@ static void dfg_copy(device_t *dev, uint32_t from, uint32_t to) {
 static void dfg_set_first(device_t *dev, uint32_t idx, uint32_t first) {
     uint32_t per = SECTOR_SIZE / 32;
     uint32_t sec = dev->minfo.root_offset + idx / per;
-    directory_t *d = (directory_t *) dev->read(sec);
+    directory_t *d = (directory_t *) dev_read(dev, sec);
     d[idx % per].first_cluster = (uint16_t) (first & 0xFFFF);
     d[idx % per].first_cluster_high_bytes = (uint16_t) (first >> 16);
-    dev->write(sec);
+    dev_write(dev, sec);
 }
 
 /**
@@ -1057,7 +1142,7 @@ void fat_defrag(device_t *dev) {
     if(mi->type == FAT16) {
         for(uint32_t s = 0; s < mi->fat_size; s++) {
             uint8_t sec[SECTOR_SIZE];
-            memcpy(sec, dev->read(mi->fat_offset + s), SECTOR_SIZE);
+            memcpy(sec, dev_read(dev, mi->fat_offset + s), SECTOR_SIZE);
             for(uint32_t e = 0; e < SECTOR_SIZE / 2; e++) {
                 uint32_t c = s * (SECTOR_SIZE / 2) + e;
                 if(c < 2 || c >= ccount)
@@ -1084,7 +1169,7 @@ void fat_defrag(device_t *dev) {
     int bad = 0, ended = 0;
     for(uint32_t s = 0; s < mi->root_size && !ended && !bad; s++) {
         uint8_t sec[SECTOR_SIZE];
-        memcpy(sec, dev->read(mi->root_offset + s), SECTOR_SIZE);
+        memcpy(sec, dev_read(dev, mi->root_offset + s), SECTOR_SIZE);
         directory_t *d = (directory_t *) sec;
         for(uint32_t j = 0; j < per; j++) {
             uint8_t c0 = d[j].filename[0];
@@ -1117,7 +1202,7 @@ void fat_defrag(device_t *dev) {
     uint32_t eoc_lo = (mi->type == FAT12) ? 0x0FF8 : 0xFFF8;
     for(uint32_t s = 0; s < mi->root_size && !ended && !bad; s++) {
         uint8_t sec[SECTOR_SIZE];
-        memcpy(sec, dev->read(mi->root_offset + s), SECTOR_SIZE);
+        memcpy(sec, dev_read(dev, mi->root_offset + s), SECTOR_SIZE);
         directory_t *d = (directory_t *) sec;
         for(uint32_t j = 0; j < per && !bad; j++) {
             uint8_t c0 = d[j].filename[0];
@@ -1255,7 +1340,7 @@ void fat_defrag(device_t *dev) {
     if(mi->type == FAT16) {
         for(uint32_t s = 0; s < mi->fat_size; s++) {
             uint8_t sec[SECTOR_SIZE];
-            memcpy(sec, dev->read(mi->fat_offset + s), SECTOR_SIZE);
+            memcpy(sec, dev_read(dev, mi->fat_offset + s), SECTOR_SIZE);
             for(uint32_t e = 0; e < SECTOR_SIZE / 2; e++) {
                 uint32_t c = s * (SECTOR_SIZE / 2) + e;
                 if(c < 2 + tot || c >= ccount)

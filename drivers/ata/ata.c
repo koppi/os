@@ -23,6 +23,23 @@ static device_t dev_info[4];
  *  @c dma_buffer (see fat_touch()). */
 static uint8_t ata_buf[512];
 
+/** A sector's worth of 16-bit port reads/writes in one instruction. In a virtual machine every
+ *  port access is a trap to the hypervisor, so 256 `inw`s per sector cost 256 exits where `rep
+ *  insw` costs about one -- the difference between a minute and a quarter of an hour to write a
+ *  RAM disk image to a disk. */
+static inline void insw_sector(uint32_t port, void *buf) {
+    void *d = buf;
+    uint32_t n = 256;
+    __asm__ volatile ("cld; rep insw" : "+D"(d), "+c"(n) : "d"((uint16_t) port) : "memory");
+}
+static inline void outsw_sector(uint32_t port, const void *buf) {
+    const void *sp = buf;
+    uint32_t n = 256;
+    __asm__ volatile ("cld; rep outsw" : "+S"(sp), "+c"(n) : "d"((uint16_t) port) : "memory");
+}
+
+static char *ata_scratch(void) { return (char *) ata_buf; }
+
 extern void ata_int();
 
 void ata_init() {
@@ -52,6 +69,11 @@ void ata_init() {
             }
             dev_info[i].id = id;
             dev_info[i].type = 1;
+            dev_info[i].kind = BLK_KIND_ATA;
+            dev_info[i].sectors = temp_info->total_sectors_28;
+            strcpy(dev_info[i].model, temp_info->model);
+            dev_info[i].flush = &ata_flush;
+            dev_info[i].scratch = &ata_scratch;
             strcpy(dev_info[i].mount, "hd");
             dev_info[i].mount[2] = 'a' + hd_letter++;
             dev_info[i].mount[3] = 0;
@@ -132,7 +154,15 @@ void identify(drive_t *drive) {
             }
             {
                 drive->present = 1;
+                memset(drive->model, 0, sizeof(drive->model));
                 for(int i = 0; i < 256; i++) {
+                    if(i >= 27 && i <= 46) {
+                        /* The model string: two characters a word, high byte first. */
+                        uint16_t w = inportw(drive->data_reg);
+                        drive->model[(i - 27) * 2]     = (char) (w >> 8);
+                        drive->model[(i - 27) * 2 + 1] = (char) (w & 0xFF);
+                        continue;
+                    }
                     switch(i) {
                         case 83:
                             if(inportw(drive->data_reg) & 0x400)
@@ -140,30 +170,29 @@ void identify(drive_t *drive) {
                             else
                                 drive->lba_mode = 0;
                             break;
+                        /* IDENTIFY gives a 32- or 64-bit count as consecutive 16-bit
+                         * words, least significant first. */
                         case 60:
                             drive->total_sectors_28 = inportw(drive->data_reg);
-                            drive->total_sectors_28 <<= 16;
                             break;
                         case 61:
-                            drive->total_sectors_28 |= inportw(drive->data_reg);
+                            drive->total_sectors_28 |= (uint32_t) inportw(drive->data_reg) << 16;
                             break;
                         case 100:
                             drive->total_sectors_48 = inportw(drive->data_reg);
-                            drive->total_sectors_48 <<= 16;
                             break;
                         case 101:
                         case 102:
-                            drive->total_sectors_48 |= inportw(drive->data_reg);
-                            drive->total_sectors_48 <<= 16;
-                            break;
                         case 103:
-                            drive->total_sectors_48 |= inportw(drive->data_reg);
+                            drive->total_sectors_48 |= (uint64_t) inportw(drive->data_reg) << (16 * (i - 100));
                             break;
                         default:
                             inportw(drive->data_reg);
                             break;
                     }
                 }
+                for(int i = 39; i >= 0 && (drive->model[i] == ' ' || drive->model[i] == 0); i--)
+                    drive->model[i] = 0;
             }
         }
     }
@@ -218,9 +247,7 @@ char *ata_read_sector(int lba) {
         return (char *) ata_buf;
     }
 
-    for(int i = 0; i < 256; i++) {
-        ((uint16_t *) ata_buf)[i] = inportw(ata_info.cur_hdd.data_reg);
-    }
+    insw_sector(ata_info.cur_hdd.data_reg, ata_buf);
     delay_400ns();
     return (char *) ata_buf;
 }
@@ -238,20 +265,24 @@ int ata_write_sector(int lba) {
     if (!ata_wait_drq())
         return 0;
 
-    for(int i = 0; i < 256; i++) {
-        outportw(ata_info.cur_hdd.data_reg, ((uint16_t *) ata_buf)[i]);
-    }
+    outsw_sector(ata_info.cur_hdd.data_reg, ata_buf);
     delay_400ns();
 
     if (!ata_wait_ready())
         return 0;
 
     // FLUSH CACHE, so the write actually reaches the (virtual) platter
-    // before a caller assumes it's durable.
-    outportb(ata_info.cur_hdd.status_reg, 0xE7);
-    delay_400ns();
-    ata_wait_ready();
+    // before a caller assumes it's durable. A bulk writer (blk.c) sets
+    // blk_defer_flush and flushes once at the end through ata_flush().
+    if (!blk_defer_flush)
+        ata_flush();
 
     return 1;
+}
+
+int ata_flush(void) {
+    outportb(ata_info.cur_hdd.status_reg, 0xE7);
+    delay_400ns();
+    return ata_wait_ready();
 }
 

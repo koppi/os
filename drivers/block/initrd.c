@@ -39,6 +39,37 @@
 
 uint32_t initrd_mod_start = 0, initrd_mod_end = 0;
 uint32_t initrd_phys_start = 0, initrd_phys_end = 0;
+uint32_t payload_mod_start = 0, payload_mod_end = 0;
+uint32_t payload_phys_start = 0, payload_phys_end = 0;
+
+/** @return non-zero if @p cmdline has @p word as a whole space-separated word. */
+static int has_word(const char *cmdline, const char *word) {
+    size_t n = strlen((char *) word);
+    for (const char *p = cmdline; p && *p; ) {
+        while (*p == ' ')
+            p++;
+        const char *e = p;
+        while (*e && *e != ' ')
+            e++;
+        if ((size_t) (e - p) == n && strncmp((char *) p, (char *) word, n) == 0)
+            return 1;
+        p = e;
+    }
+    return 0;
+}
+
+void initrd_note_module(uint32_t start, uint32_t end, const char *cmdline) {
+    if (has_word(cmdline, "payload")) {
+        if (!payload_mod_start) {
+            payload_mod_start = start;
+            payload_mod_end   = end;
+        }
+    } else if (!initrd_mod_start) {
+        /* The first module that is not the payload is the boot RAM disk. */
+        initrd_mod_start = start;
+        initrd_mod_end   = end;
+    }
+}
 
 /** @return non-zero if [@p base, @p end) lies wholly inside one E820 RAM range. */
 static int ram_covers(uint32_t base, uint32_t end) {
@@ -76,12 +107,35 @@ void initrd_relocate(void) {
     initrd_phys_end   = dst + asize;
     klogf(LOG_INFO, "initrd: %u KiB module 0x%x -> 0x%x\n",
           size / 1024, initrd_mod_start, dst);
+
+    /* The installer's payload, if the loader supplied one, goes right behind it:
+     * one block of high memory, so the page-directory range cloned into every
+     * process (initrd_pde_hi) stays a single span. Both sources lie below the
+     * destination, so moving the RAM disk first cannot overwrite the payload. */
+    if (payload_mod_start && payload_mod_end > payload_mod_start) {
+        uint32_t psize  = payload_mod_end - payload_mod_start;
+        uint32_t pasize = ALIGN_UP(psize, PAGE_SIZE);
+        uint32_t pdst   = initrd_phys_end;
+
+        if (payload_mod_end > INITRD_RELOC_BASE || !ram_covers(pdst, pdst + pasize)) {
+            klogf(LOG_ERR, "initrd: %u KiB payload won't fit at 0x%x; ignoring it\n",
+                  psize / 1024, pdst);
+        } else {
+            memmove((void *) pdst, (void *) payload_mod_start, psize);
+            payload_phys_start = pdst;
+            payload_phys_end   = pdst + pasize;
+            klogf(LOG_INFO, "initrd: %u KiB payload module 0x%x -> 0x%x\n",
+                  psize / 1024, payload_mod_start, pdst);
+        }
+    }
 }
 
 void initrd_map(void) {
     if (!initrd_phys_start)
         return;
     for (uint32_t va = initrd_phys_start; va < initrd_phys_end; va += PAGE_SIZE)
+        vmm_map_phys(get_kern_directory(), va, va, PAGE_PRESENT | PAGE_RW);
+    for (uint32_t va = payload_phys_start; va < payload_phys_end; va += PAGE_SIZE)
         vmm_map_phys(get_kern_directory(), va, va, PAGE_PRESENT | PAGE_RW);
 }
 
@@ -90,7 +144,10 @@ int initrd_pde_lo(void) {
 }
 
 int initrd_pde_hi(void) {
-    return initrd_phys_start ? (int) ((initrd_phys_end - 1) >> 22) : -1;
+    if (!initrd_phys_start)
+        return -1;
+    uint32_t end = payload_phys_end ? payload_phys_end : initrd_phys_end;
+    return (int) ((end - 1) >> 22);
 }
 
 /* ------------------------------------------------------------------ *
@@ -129,6 +186,8 @@ void ramdisk_init(void) {
 
     rd_dev.id   = 0;
     rd_dev.type = 1;
+    rd_dev.kind = BLK_KIND_RAMDISK;
+    rd_dev.sectors = rd_nsect;
     strcpy(rd_dev.mount, "rd");
     rd_dev.read  = &ramdisk_read;
     rd_dev.write = &ramdisk_write;
@@ -137,4 +196,46 @@ void ramdisk_init(void) {
 
     klogf(LOG_INFO, "initrd: %u KiB RAM disk mounted as rd\n",
           rd_nsect / 2);
+}
+
+/* ------------------------------------------------------------------ *
+ *  The installer's payload                                            *
+ * ------------------------------------------------------------------ */
+
+static uint8_t  pl_scratch[SECTOR_SIZE];
+static uint32_t pl_base, pl_nsect;
+static device_t pl_dev;
+
+static char *payload_read(int lba) {
+    if ((uint32_t) lba >= pl_nsect)
+        memset(pl_scratch, 0, SECTOR_SIZE);
+    else
+        memcpy(pl_scratch, (void *) (pl_base + (uint32_t) lba * SECTOR_SIZE), SECTOR_SIZE);
+    return (char *) pl_scratch;
+}
+
+/** The payload is read-only: whatever the loader gave us is what gets installed. */
+static int payload_write(int lba) {
+    (void) lba;
+    return 0;
+}
+
+void payload_init(void) {
+    if (!payload_phys_start)
+        return;
+
+    pl_base  = payload_phys_start;
+    pl_nsect = (payload_mod_end - payload_mod_start) / SECTOR_SIZE;
+
+    pl_dev.id   = 0;                    /* not in the VFS table: unused */
+    pl_dev.type = 1;
+    strcpy(pl_dev.mount, "pl");
+    pl_dev.kind    = BLK_KIND_PAYLOAD;
+    pl_dev.sectors = pl_nsect;
+    pl_dev.read  = &payload_read;
+    pl_dev.write = &payload_write;
+    device_attach_raw(&pl_dev);
+
+    klogf(LOG_INFO, "initrd: %u KiB installation payload present (block device pl)\n",
+          pl_nsect / 2);
 }

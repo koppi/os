@@ -203,7 +203,9 @@ static int ahci_write_sector(int lba) {
     memcpy(dma_buf[d], sect_scratch[d], 512);
     if (port_exec(d, ATA_CMD_WRITE_DMA_EX, (uint32_t) lba, 1, 512) != 0)
         return 0;
-    port_exec(d, ATA_CMD_FLUSH_EXT, 0, 0, 0);
+    /* A bulk writer (blk.c) defers this and flushes once through the flush hook. */
+    if (!blk_defer_flush)
+        port_exec(d, ATA_CMD_FLUSH_EXT, 0, 0, 0);
     return 1;
 }
 
@@ -213,6 +215,10 @@ static char *rd0(int lba) { cur_disk = 0; return ahci_read_sector(lba); }
 static int   wr0(int lba) { cur_disk = 0; return ahci_write_sector(lba); }
 static char *rd1(int lba) { cur_disk = 1; return ahci_read_sector(lba); }
 static int   wr1(int lba) { cur_disk = 1; return ahci_write_sector(lba); }
+static char *sc0(void)    { return (char *) sect_scratch[0]; }
+static char *sc1(void)    { return (char *) sect_scratch[1]; }
+static int   fl0(void)    { return port_exec(0, ATA_CMD_FLUSH_EXT, 0, 0, 0) == 0; }
+static int   fl1(void)    { return port_exec(1, ATA_CMD_FLUSH_EXT, 0, 0, 0) == 0; }
 
 /* ------------------------------------------------------------------ *
  *  Bring-up                                                           *
@@ -302,6 +308,21 @@ void ahci_init(void) {
         }
         uint16_t *id = (uint16_t *) dma_buf[idx];
         uint32_t sectors = id[60] | ((uint32_t) id[61] << 16);
+        /* LBA48 drives report their real size in words 100..103; this driver's
+         * sector numbers are 32-bit, so anything past 2 TiB is clipped. */
+        if (id[83] & (1u << 10)) {
+            uint64_t s48 = (uint64_t) id[100] | ((uint64_t) id[101] << 16) |
+                           ((uint64_t) id[102] << 32) | ((uint64_t) id[103] << 48);
+            sectors = s48 > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t) s48;
+        }
+        char model[41];
+        for (int w = 0; w < 20; w++) {          /* words 27..46, high byte first */
+            model[w * 2]     = (char) (id[27 + w] >> 8);
+            model[w * 2 + 1] = (char) (id[27 + w] & 0xFF);
+        }
+        model[40] = 0;
+        for (int k = 39; k >= 0 && (model[k] == ' ' || model[k] == 0); k--)
+            model[k] = 0;
 
         device_t *dev = &dev_info[idx];
         memset(dev, 0, sizeof(*dev));
@@ -315,6 +336,11 @@ void ahci_init(void) {
         dev->mount[3] = 0;
         dev->read  = idx == 0 ? rd0 : rd1;
         dev->write = idx == 0 ? wr0 : wr1;
+        dev->flush = idx == 0 ? fl0 : fl1;
+        dev->scratch = idx == 0 ? sc0 : sc1;
+        dev->kind = BLK_KIND_AHCI;
+        dev->sectors = sectors;
+        strcpy(dev->model, model);
         fat_init(&dev->fs);
         device_register(dev);
         n_disks++;

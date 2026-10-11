@@ -52,6 +52,9 @@ static void fs_leave(int prev) {
     spin_unlock(&fs_lock, fs_saved_flags);
 }
 
+int vfs_lock(void) { return fs_enter(); }
+void vfs_unlock(int prev) { fs_leave(prev); }
+
 /** @brief Clear the mount table. No filesystem is visible until @ref vfs_mount. */
 void vfs_init() {
     for(int i = 0; i < MAX_DEVICES; i++)

@@ -52,11 +52,9 @@ static void multiboot2_cmdline(const multiboot2_cmdline_t *cmd) {
 }
 
 static void multiboot2_module(const multiboot2_module_t *module) {
-    /* First module only — it is the boot RAM disk (grub.cfg / initrd.img). */
-    if (!initrd_mod_start) {
-        initrd_mod_start = module->start;
-        initrd_mod_end   = module->end;
-    }
+    /* The first module is the boot RAM disk (grub.cfg / initrd.img); one called
+     * "payload" is the installer's (see initrd_note_module). */
+    initrd_note_module(module->start, module->end, module->string);
 }
 
 /** Highest usable RAM address seen in the memory map (bytes), capped at 4 GiB.

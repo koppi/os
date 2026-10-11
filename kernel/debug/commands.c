@@ -35,6 +35,7 @@
 #include <linux/gamepad.h>
 #include <asm/percpu.h>
 #include <linux/commands.h>
+#include <linux/blk.h>
 #include <linux/coreutils.h>
 
 /** Scratch buffer used to assemble an absolute path before a VFS call. */
@@ -1001,6 +1002,7 @@ void console_exec(char *buf) {
                "keys     - print raw key scancodes until Esc (keyboard check)\n"
                "pad      - list game controllers and show their buttons/sticks until Esc\n"
                "pci      - lists PCI devices\n"
+               "lsblk    - lists the block devices (raw disks, the RAM disk)\n"
                "net      - network interface status\n"
                "nfs      - NFSv4.1 client mount status\n"
                "ssh      - in-kernel SSH server status\n"
@@ -1012,6 +1014,8 @@ void console_exec(char *buf) {
                "poweroff - powers the machine off (ACPI)\n"
                "reboot   - reboots the machine\n");
         coreutils_help();
+    } else if(strcmp(buf, "lsblk") == 0) {
+        blk_print();
     } else if(strcmp(buf, "pci") == 0) {
         console_pci();
     } else if(strcmp(buf, "net") == 0) {

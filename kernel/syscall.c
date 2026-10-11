@@ -28,10 +28,11 @@
 #include <asm/gdt.h>
 #include <linux/wm.h>
 #include <linux/gamepad.h>
+#include <linux/blk.h>
 #include <linux/string.h>
 
 /** One past the highest valid call number. */
-#define MAX_SYSCALL 46
+#define MAX_SYSCALL 50
 
 /** Set to 1 to log every syscall on the console (default 0: off). */
 #define SYSCALL_TRACE 0
@@ -496,7 +497,11 @@ static uintptr_t syscalls[] = {
     (uintptr_t) sys_wm_palette,      // wm_palette   42
     (uintptr_t) sys_wm_event,        // wm_event     43  (key/pointer/window, non-blocking)
     (uintptr_t) sys_spawn_bg,        // spawn_bg     44  (spawn without waiting; `cmd &`)
-    (uintptr_t) sys_getpad           // getpad       45  (game controller state, non-blocking)
+    (uintptr_t) sys_getpad,          // getpad       45  (game controller state, non-blocking)
+    (uintptr_t) blk_sys_info,        // blk_info     46  (raw block devices, block/blk.c)
+    (uintptr_t) blk_sys_read,        // blk_read     47
+    (uintptr_t) blk_sys_write,       // blk_write    48
+    (uintptr_t) blk_sys_ctl          // blk_ctl      49
 };
 
 /**

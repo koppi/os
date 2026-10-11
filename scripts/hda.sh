@@ -92,6 +92,11 @@ mcopy -i "$IMG" -D o drivers/video/mouse.bmp ::mouse.bmp
 mcopy -i "$IMG" -D o apps/calc/calc       ::calc
 mcopy -i "$IMG" -D o apps/clock/clock     ::clock
 
+# The graphical installer. It needs the installation payload (payload.img) as a second
+# Multiboot module, which only the "Install" entry of the boot menu loads; started
+# without it, it says so and quits.
+mcopy -i "$IMG" -D o apps/install/install ::install
+
 # ChipNomad. The tracker plus the bundled content it is useless without: a
 # colour theme, the AY instrument presets, the pitch tables and two of
 # upstream's demo songs. Names are 8.3 because the FAT driver is (see

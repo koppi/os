@@ -476,6 +476,7 @@ int floppy_detect_drives() {
     if(strcmp(drive_types[drives >> 4], "1.44MB 3.5") == 0) {
         dev_info[0].id = 4;
         dev_info[0].type = 0;
+        dev_info[0].kind = BLK_KIND_FLOPPY;
         strcpy(dev_info[0].mount, "fd");
         dev_info[0].mount[2] = 'a';
         dev_info[0].mount[3] = 0;
@@ -489,6 +490,7 @@ int floppy_detect_drives() {
     if(strcmp(drive_types[drives & 0xF], "1.44MB 3.5") == 0) {
         dev_info[1].id = 5;
         dev_info[1].type = 0;
+        dev_info[1].kind = BLK_KIND_FLOPPY;
         strcpy(dev_info[1].mount, "fd");
         dev_info[1].mount[2] = 'b';
         dev_info[1].mount[3] = 0;

@@ -143,10 +143,18 @@ initrd.img: scripts/hda.sh apps $(wildcard doom1.wad)
 	@echo "  IMG initrd.img"
 	@IMG=initrd.img ./scripts/hda.sh >/dev/null
 
-iso: $(KERNEL) initrd.img
+# What the installer carries to a disk besides the RAM disk: the kernel image, GRUB for
+# BIOS and UEFI, the boot menu. A second Multiboot module, loaded only by the "Install"
+# menu entry (arch/x86/boot/grub/grub.cfg). See scripts/payload.sh.
+payload.img: scripts/payload.sh $(KERNEL) arch/x86/boot/grub/grub.cfg arch/x86/boot/grub/embed.cfg
+	@echo "  IMG payload.img"
+	@./scripts/payload.sh >/dev/null
+
+iso: $(KERNEL) initrd.img payload.img
 	@mkdir -p iso/boot/grub
 	@cp $(KERNEL) iso/boot/$(KERNEL)
 	@cp initrd.img iso/boot/initrd.img
+	@cp payload.img iso/boot/payload.img
 	@cp arch/x86/boot/grub/grub.cfg iso/boot/grub/grub.cfg
 	@grub-mkrescue -o os.iso iso 1>&2 2>/dev/null
 
@@ -157,6 +165,23 @@ qemu-kernel: $(KERNEL) initrd.img
 qemu-iso: iso
 	@echo "QEMU .."
 	@$(QEMU) $(QEMUFLAGS) -boot d,menu=off -serial 'mon:stdio'
+
+# Try the installer: boot os.iso with a blank scratch disk and, at the boot menu, choose
+# "Install koppi's os to a disk". Afterwards `make qemu-installed` starts from that disk.
+#   make qemu-install [INSTALL_DISK=install-target.img] [INSTALL_SIZE=1G]
+INSTALL_DISK ?= install-target.img
+INSTALL_SIZE ?= 1G
+qemu-install: iso
+	@[ -f $(INSTALL_DISK) ] || qemu-img create -f raw $(INSTALL_DISK) $(INSTALL_SIZE) >/dev/null
+	@echo "QEMU .. (at the boot menu choose: Install koppi's os to a disk)"
+	@$(MAKE) --no-print-directory qemu-iso DISK=$(INSTALL_DISK)
+
+# Start from the disk the installer wrote, with no installation medium: what a real
+# machine does after the first restart.
+qemu-installed:
+	@[ -f $(INSTALL_DISK) ] || { echo "no $(INSTALL_DISK): run make qemu-install first"; exit 1; }
+	@echo "QEMU .."
+	@$(QEMU) $(filter-out -drive file=os.iso%,$(QEMUFLAGS)) -drive file=$(INSTALL_DISK),format=raw,if=ide,index=0,media=disk -serial 'mon:stdio'
 
 qemu-nox: iso
 	@echo "QEMU .."
@@ -294,8 +319,8 @@ clean::
 	@$(MAKE) -C usr/lib clean
 	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) $(OBJS:.o=.d) arch/x86/realmode/ap_boot.bin \
-	    arch/x86/realmode/ap_boot.tmp.* *~ os.iso iso initrd.img docs
+	    arch/x86/realmode/ap_boot.tmp.* *~ os.iso iso initrd.img payload.img docs
 
-.PHONY: all libc apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-pad test-gamepad qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets qemu-qt-lua cloc docs clean
+.PHONY: all libc apps iso qemu-kernel qemu-iso qemu-install qemu-installed qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-pad test-gamepad qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets qemu-qt-lua cloc docs clean
 
 -include $(OBJS:.o=.d)

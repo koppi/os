@@ -20,6 +20,7 @@ all:
 	$(MAKE) -C zsh
 	$(MAKE) -C calc
 	$(MAKE) -C clock
+	$(MAKE) -C install
 	$(MAKE) -C doom
 	$(MAKE) -C chipnomad
 
@@ -45,6 +46,7 @@ clean:
 	$(MAKE) -C zsh clean
 	$(MAKE) -C calc clean
 	$(MAKE) -C clock clean
+	$(MAKE) -C install clean
 	$(MAKE) -C doom clean
 	$(MAKE) -C chipnomad clean
 

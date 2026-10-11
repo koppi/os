@@ -133,6 +133,16 @@ int mui_windowed(void);
 /** @brief Ask the loop to stop after this frame. */
 void mui_quit(void);
 
+/**
+ * @brief Let the program veto Esc and the window's close box.
+ *
+ * By default either one ends the loop. A program that must not be interrupted -- the
+ * installer, while it is writing a disk -- installs a guard: @p may_quit is asked each
+ * time, and returning 0 swallows the request. It does not affect @ref mui_quit, which
+ * is the program's own decision. Pass NULL to take the guard off.
+ */
+void mui_set_quit_guard(int (*may_quit)(void));
+
 /** @name Clocks (the `clock` and `time` syscalls) */
 ///@{
 unsigned mui_ms(void);     /**< Milliseconds of uptime. */

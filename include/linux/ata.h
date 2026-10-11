@@ -51,6 +51,7 @@ typedef struct ata_drive {
     int lba_mode;             /**< 1 = LBA48 supported, else LBA28. */
     uint32_t total_sectors_28; /**< LBA28 capacity. */
     uint64_t total_sectors_48; /**< LBA48 capacity. */
+    char model[41];           /**< IDENTIFY model string (words 27..46), trimmed. */
 } drive_t;
 
 /** The four possible drives plus a pointer to the one currently selected. */
@@ -62,6 +63,8 @@ typedef struct ata_drives {
     drive_t secondary_slave;
 } ata_drives_t;
 
+/** @brief FLUSH CACHE on the selected drive. @return 1 when it completed. */
+int ata_flush(void);
 /** @brief Probe both channels and register any FAT-formatted drive with the VFS. */
 void ata_init();
 /** @brief Block until the ATA IRQ fires (currently unused; reads poll). */

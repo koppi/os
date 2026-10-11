@@ -41,6 +41,7 @@
 #include <linux/ahci.h>
 #include <linux/nvme.h>
 #include <linux/initrd.h>
+#include <linux/cmdline.h>
 #include <linux/usb.h>
 #include <linux/e1000.h>
 #include <linux/net.h>
@@ -147,6 +148,23 @@ void demo_thread() {
 }
 
 /**
+ * @brief Run the ring-3 program at @p path to its end, serving its `spawn` requests.
+ *
+ * What main_proc does for the shell, and now for the installer too. Returns at once
+ * if the image is missing or will not load.
+ */
+static void run_to_completion(char *path, char *args) {
+    int p = start_proc(path, args);
+    if(p == PROC_STOPPED)
+        return;
+    while(proc_state(p) != PROC_STOPPED) {
+        console_spawn_service();   /* run programs it asks us to */
+        asm volatile("pause");
+    }
+    remove_proc(p);
+}
+
+/**
  * @brief The body of process 1, entered by @ref sched_init's final `iret`.
  *
  * Everything that needs a running scheduler and enabled interrupts happens
@@ -163,6 +181,7 @@ void demo_thread() {
 void main_proc() {
     //enable_int();
     ramdisk_init(); // mounts the boot RAM disk from os.iso as "rd"
+    payload_init(); // the installer's payload module, if GRUB loaded one (raw block device)
     floppy_init(); // requires irqs to be enabled
     ata_init();    // probes the legacy IDE channels and mounts hd{a,b,...}
     ahci_init();   // probes SATA ports (the disk path on an X250-era laptop)
@@ -183,20 +202,22 @@ void main_proc() {
     //start_kernel_proc("uart_read", &uart_read_proc);
 
     /*
+     * The "Install" boot entry (grub.cfg) passes `install`: the graphical installer
+     * (apps/install, full screen) runs first. It restarts the machine itself when the
+     * installation is done; if it ends any other way, the shell follows, so leaving
+     * the installer never strands anyone on a dead screen.
+     */
+    if(cmdline_has("install"))
+        run_to_completion("/rd/install", "-f");
+
+    /*
      * Hand control to the user-space shell (apps/zsh, staged on the "rd" RAM
      * disk that GRUB loaded from os.iso). It owns line editing, history and
      * completion and reaches every command in commands.c through the `run`
      * syscall. Fall back to the in-kernel debug console if the shell image is
      * missing or fails to load, and again once the shell exits (Ctrl-D / `exit`).
      */
-    int sh = start_proc("/rd/zsh", "");
-    if(sh != PROC_STOPPED) {
-        while(proc_state(sh) != PROC_STOPPED) {
-            console_spawn_service();   /* run programs the shell asks us to */
-            asm volatile("pause");
-        }
-        remove_proc(sh);
-    }
+    run_to_completion("/rd/zsh", "");
 
     // Rescue console (does not return).
     kmain_console();

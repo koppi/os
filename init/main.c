@@ -287,6 +287,8 @@ void kernel_main(unsigned long magic, unsigned long addr)
     /* Keep the relocated RAM disk out of the frame allocator's reach. */
     if (initrd_phys_start)
         pmm_deinit_reg(initrd_phys_start, initrd_phys_end - initrd_phys_start);
+    if (payload_phys_start)
+        pmm_deinit_reg(payload_phys_start, payload_phys_end - payload_phys_start);
 
     pmm_init2();
     /* Reserve the kernel-heap window so pmm_malloc() never hands out a frame

@@ -76,5 +76,14 @@ void vfs_file_close_user(file *f);
 int vfs_get_dev(char *name);
 /** @brief Mount the filesystem on device @p name. */
 void vfs_mount(char *name);
+/**
+ * @brief Hold the filesystem lock, for code that drives a block device's shared sector
+ *        buffer directly (the raw block syscalls, block/blk.c) and so must not
+ *        interleave with a filesystem operation on the same device.
+ * @return The previous scheduler state, for @ref vfs_unlock.
+ */
+int vfs_lock(void);
+/** @brief Release what @ref vfs_lock took. */
+void vfs_unlock(int prev);
 /** @brief Unmount device @p name. */
 void vfs_unmount(char *name);

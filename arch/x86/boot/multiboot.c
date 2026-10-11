@@ -38,11 +38,11 @@ void multiboot_extract_argument(char *buf, size_t size, const char *cmd_line) {
 }
 
 static void multiboot_modules(uint32_t count, multiboot_module_t *mods) {
-    /* First module only — the boot RAM disk (grub.cfg / initrd.img). */
-    if (count > 0 && !initrd_mod_start) {
-        initrd_mod_start = mods[0].start;
-        initrd_mod_end   = mods[0].end;
-    }
+    /* The first module is the boot RAM disk (grub.cfg / initrd.img); one called
+     * "payload" is the installer's (see initrd_note_module). */
+    for (uint32_t i = 0; i < count; i++)
+        initrd_note_module(mods[i].start, mods[i].end,
+                           mods[i].string ? (const char *) MULTIBOOT_PTR(mods[i].string) : "");
 }
 
 static void multiboot_memmap(uint32_t length, multiboot_memmap_t *memmap)
