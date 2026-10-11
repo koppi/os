@@ -26,7 +26,7 @@ QTINC = -I $(QT6)/koppios -I $(QT6)/koppios/QtCore \
   -I $(QT6)/mkspecs/common/posix
 
 # -fno-exceptions -fno-rtti: no unwinder/typeinfo runtime exists for this
-# target (lib/cxxabi.cpp, shared with every C++ app). -ffunction-sections +
+# target (usr/lib/cxxabi.cpp, shared with every C++ app). -ffunction-sections +
 # --gc-sections (LDFLAGS below) drop the parts of vendored Qt's own real
 # dependency closure this app never calls (QRegularExpression, most of
 # QLocale's calendar backends, ...) rather than needing all of it to link.
@@ -74,8 +74,8 @@ all:
 	@$(CXX) $(CXXFLAGS) -c $(QT6)/src/corelib/time/qlocaltime.cpp -o qlocaltime.o
 	@$(CXX) $(CXXFLAGS) -c $(QT6)/src/corelib/time/qtimezone.cpp -o qtimezone.o
 	@$(CC) $(CFLAGS) -c $(QT6)/koppios/qt_libc_compat.c -o qt_libc_compat.o
-	@$(LD) $(LDFLAGS) -o helloqt ../../lib/cxx_start.o main.o $(QTOBJS) qt_libc_compat.o \
-		../../lib/cxxabi.o ../../lib/stdio.o ../../lib/string.o ../../lib/system_calls.o ../../lib/stdlib.o \
+	@$(LD) $(LDFLAGS) -o helloqt ../../usr/lib/cxx_start.o main.o $(QTOBJS) qt_libc_compat.o \
+		../../usr/lib/cxxabi.o ../../usr/lib/stdio.o ../../usr/lib/string.o ../../usr/lib/system_calls.o ../../usr/lib/stdlib.o \
 		$(LIBGCC)
 
 clean:

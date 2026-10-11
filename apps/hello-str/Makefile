@@ -11,7 +11,7 @@ LDFLAGS += -melf_i386 -T hello_str.lds -Map hello_str.map
 
 all:
 	@$(CXX) $(CXXFLAGS) -c main.cpp
-	@$(LD) $(LDFLAGS) -o hellostr ../../lib/cxx_start.o main.o ../../lib/cxxabi.o ../../lib/stdio.o ../../lib/string.o ../../lib/system_calls.o ../../lib/stdlib.o
+	@$(LD) $(LDFLAGS) -o hellostr ../../usr/lib/cxx_start.o main.o ../../usr/lib/cxxabi.o ../../usr/lib/stdio.o ../../usr/lib/string.o ../../usr/lib/system_calls.o ../../usr/lib/stdlib.o
 
 clean:
 	@rm -f hellostr hello_str.map *.o

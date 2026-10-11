@@ -27,7 +27,7 @@ code, unmodified except where this file says otherwise.
 | `../../third_party/chipnomad/` | the vendored tracker and engine (see its `VENDORED-COMMIT`) |
 | `bridge/` | the part of upstream's own C++ migration that branch has not finished |
 | `koppios/` | this port: `Gfx`, `AudioDevice`, `InputUtils`, `MainLoop`, `FileSystem`, `Assets` |
-| `shim/` | the C library surface the tracker needs beyond `lib/` |
+| `shim/` | the C library surface the tracker needs beyond `usr/lib/` |
 | `main_koppios.cpp` | entry point, replacing upstream's SDL-only `platforms/shared/main.cpp` |
 
 ChipNomad abstracts its platform behind six small classes in
@@ -124,7 +124,7 @@ array with the `quality` field, which the migration turned into an
 `instrumentLoad()`. Nothing else in the tree throws.
 
 Real exceptions *do* link against this kernel. `libsupc++.a` and
-`libgcc_eh.a` resolve cleanly against `lib/`'s runtime once the image's
+`libgcc_eh.a` resolve cleanly against `usr/lib/`'s runtime once the image's
 `.eh_frame` is handed to `__register_frame_info()` and `_dl_find_object()`
 answers "no shared objects"; a test program built that way reaches `main`.
 What it does not survive is the first `throw`: the distribution's
@@ -132,14 +132,14 @@ What it does not survive is the first `throw`: the distribution's
 and `class_type_info` read their canary from `%gs:0x14`. The kernel now hands
 out a per-thread `%gs` (syscall 38, see the top-level README's **Thread-local
 storage**) whose thread control block holds a per-thread random canary at
-exactly that offset (`lib/tls.c`, checked by `apps/hello-tls`), so the load no
+exactly that offset (`usr/lib/tls.c`, checked by `apps/hello-tls`), so the load no
 longer faults and the entry/exit comparison sees a stable value. A program
 that wants it has to link `lib/tls.o` and a linker script with the TLS segment
 symbols, as `apps/hello-tls` does; none of the rest of the unwinder has been
 tried.
 
 So the app is built `-fno-exceptions` and `project_io.cpp` uses
-`setjmp`/`longjmp` (both real, in `lib/libc_ext.c`). The substitution is
+`setjmp`/`longjmp` (both real, in `usr/lib/libc_ext.c`). The substitution is
 faithful here because every throw carries a `const char*`, every one is caught
 by one of those two handlers, and neither the throwing helpers nor the frames
 between them have a local with a destructor — POD structs and `FILE*` only —
@@ -191,7 +191,7 @@ there is a disk and `/rd` when there is not.
 **C library.** The app is built against the real system headers and linked
 against this kernel's runtime, never host glibc — the same arrangement as
 `apps/hello-qt`, and necessary here because `waveform_display.cpp` uses
-`std::function`. `shim/` supplies what `lib/` does not:
+`std::function`. `shim/` supplies what `usr/lib/` does not:
 
 - `stdio_koppios.c` — seekable `FILE` streams over whole-file syscalls, the
   same three-stream design as `apps/doom/shim/stdio.c`. Nothing a write stream
@@ -200,7 +200,7 @@ against this kernel's runtime, never host glibc — the same arrangement as
 - `scanf_koppios.c` — a real `sscanf`. The project format needs `%x`, `%f`,
   the `hh`/`h` length modifiers (`"- Tone on: %hhu"` stores through a
   `uint8_t*`; four bytes there would corrupt the next field) and `%[^\n]`,
-  none of which `lib/libc_ext.c`'s has.
+  none of which `usr/lib/libc_ext.c`'s has.
 - `misc_koppios.c` — `strtod`, the ctype and string entries C++ needs as real
   symbols, `rand`, `clock`, `fabsf`, and the standard spellings of the
   vendored mpaland `printf` (`apps/doom/shim/printf.c`, compiled into this
@@ -208,7 +208,7 @@ against this kernel's runtime, never host glibc — the same arrangement as
   entirely — `%02X` comes out as `A` — and the tracker's whole 40×20 grid is
   built out of those.
 
-`lib/libc_ext.c` gained a `KOPPIOS_APP_STDIO` guard so an app can bring its
+`usr/lib/libc_ext.c` gained a `KOPPIOS_APP_STDIO` guard so an app can bring its
 own stdio without colliding with the stand-ins; nothing else that links it is
 affected.
 
@@ -224,26 +224,26 @@ the tracker rather than looked for:
   through `to_dos_file_name()`), and `ls`, the shell's completion and any
   program reading a directory all showed it wrong. The dot belongs at the
   fixed boundary between the two fields.
-- **`lib/libc_ext.c: qsort()`** staged each element through a `char tmp[256]`.
+- **`usr/lib/libc_ext.c: qsort()`** staged each element through a `char tmp[256]`.
   The file browser sorts `FileEntry`, which is 260 bytes, so every swap wrote
   four bytes past the end of that buffer onto its own frame. No temporary is
   needed at all.
 
 ## Testing
 
-`test/chipnomad-boot.sh` boots `os.iso` headless and drives the tracker
+`tools/testing/chipnomad-boot.sh` boots `os.iso` headless and drives the tracker
 through QEMU's monitor — real scancodes, make and break, the same way
-`test/doom-boot.sh` drives Doom. Every step leaves a PNG behind, and the
+`tools/testing/doom-boot.sh` drives Doom. Every step leaves a PNG behind, and the
 `play` scenario captures the audio to a WAV and reports peak and RMS per
 second.
 
 ```
-make iso && test/chipnomad-boot.sh all
+make iso && tools/testing/chipnomad-boot.sh all
 ```
 
 ## Content
 
-`hda.sh` stages a theme, eight AY instrument presets, the PT3 pitch tables,
+`scripts/hda.sh` stages a theme, eight AY instrument presets, the PT3 pitch tables,
 three wavetables and three of upstream's demo songs, renamed to 8.3:
 
 | on disk | upstream |

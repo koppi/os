@@ -12,32 +12,32 @@ computed from the last commit (`ver.h`, `main.c`, `Makefile`).
 
 ### Boot
 * Boots via **GRUB** as a **Multiboot 1** *and* **Multiboot 2** image
-  ([`boot.S`](boot.S), [`multiboot.c`](multiboot.c),
-  [`multiboot2.c`](multiboot2.c)). The bootloader menu ([`grub.cfg`](grub.cfg))
+  ([`arch/x86/boot/boot.S`](arch/x86/boot/boot.S), [`arch/x86/boot/multiboot.c`](arch/x86/boot/multiboot.c),
+  [`arch/x86/boot/multiboot2.c`](arch/x86/boot/multiboot2.c)). The bootloader menu ([`arch/x86/boot/grub/grub.cfg`](arch/x86/boot/grub/grub.cfg))
   offers GUI (framebuffer) and console entries.
 * `os.iso` is **self-contained**: GRUB also loads `initrd.img` (the userland,
   as a FAT16 image) as a Multiboot module, so the OS boots to a shell off a CD
   or USB stick with no hard disk or floppy attached. See
-  [`initrd.c`](initrd.c) and **Storage & block devices**. A machine with a
+  [`drivers/block/initrd.c`](drivers/block/initrd.c) and **Storage & block devices**. A machine with a
   little over 136 MiB of RAM is needed (the module is relocated to 128 MiB);
   a smaller box falls back to booting from a real FAT disk.
 * Physical memory is discovered from the BIOS **e820** map / multiboot memory
   info.
 
 ### Memory management
-* Physical memory manager (bitmap allocator) — [`mm.c`](mm.c)
-* Paging / virtual memory manager — [`paging.c`](paging.c), [`vmm.c`](vmm.c)
-* Kernel heap — [`kheap.c`](kheap.c), [`heap.c`](heap.c)
+* Physical memory manager (bitmap allocator) — [`mm/mm.c`](mm/mm.c)
+* Paging / virtual memory manager — [`arch/x86/mm/paging.c`](arch/x86/mm/paging.c), [`arch/x86/mm/vmm.c`](arch/x86/mm/vmm.c)
+* Kernel heap — [`mm/kheap.c`](mm/kheap.c), [`mm/heap.c`](mm/heap.c)
 
 ### CPU / interrupts
-* GDT — [`gdt.c`](gdt.c) / [`gdt_asm.S`](gdt_asm.S)
-* IDT + exception handlers — [`idt.c`](idt.c), [`exception.c`](exception.c)
-* 8259 PIC remap — [`pic.c`](pic.c)
-* TSS for ring-3 → ring-0 transitions — [`tss.c`](tss.c)
-* x87 FPU init — [`fpu.c`](fpu.c)
+* GDT — [`arch/x86/kernel/gdt.c`](arch/x86/kernel/gdt.c) / [`arch/x86/kernel/gdt_asm.S`](arch/x86/kernel/gdt_asm.S)
+* IDT + exception handlers — [`arch/x86/kernel/idt.c`](arch/x86/kernel/idt.c), [`arch/x86/kernel/exception.c`](arch/x86/kernel/exception.c)
+* 8259 PIC remap — [`arch/x86/kernel/pic.c`](arch/x86/kernel/pic.c)
+* TSS for ring-3 → ring-0 transitions — [`arch/x86/kernel/tss.c`](arch/x86/kernel/tss.c)
+* x87 FPU init — [`arch/x86/kernel/fpu.c`](arch/x86/kernel/fpu.c)
 * Fault isolation — a ring-3 exception (#GP, #PF, #UD, #DE, #BP, #OF, #BR,
   #NM, #TS, #NP, #SS, #MF, #AC, #XM) kills only the faulting process via
-  `return_exception()`; kernel-mode faults still panic — [`exception.c`](exception.c).
+  `return_exception()`; kernel-mode faults still panic — [`arch/x86/kernel/exception.c`](arch/x86/kernel/exception.c).
 
 ### SMP / multi-core
 QEMU is launched with `-smp 4` and **all four cores run kernel threads and
@@ -45,24 +45,24 @@ ring-3 processes in parallel** — `ps` and the `cpus` command show which core
 each is on.
 
 * Per-CPU state (`cpu_t`): its own current thread/process, page directory, TSS,
-  idle thread, LAPIC timer and preemption gate — [`percpu.h`](percpu.h),
-  [`smp.c`](smp.c). `this_cpu()` resolves it from the local APIC id.
-* **AP bring-up**: the BSP parses the ACPI **MADT** ([`acpi.c`](acpi.c)),
-  maps + calibrates the Local APIC ([`apic.c`](apic.c)), copies a real-mode
-  trampoline to `0x8000` ([`ap_boot.S`](ap_boot.S)) and raises
+  idle thread, LAPIC timer and preemption gate — [`arch/x86/include/asm/percpu.h`](arch/x86/include/asm/percpu.h),
+  [`arch/x86/kernel/smp.c`](arch/x86/kernel/smp.c). `this_cpu()` resolves it from the local APIC id.
+* **AP bring-up**: the BSP parses the ACPI **MADT** ([`drivers/acpi/acpi.c`](drivers/acpi/acpi.c)),
+  maps + calibrates the Local APIC ([`arch/x86/kernel/apic.c`](arch/x86/kernel/apic.c)), copies a real-mode
+  trampoline to `0x8000` ([`arch/x86/realmode/ap_boot.S`](arch/x86/realmode/ap_boot.S)) and raises
   INIT-SIPI-SIPI. Each AP loads the kernel page tables, sets up its APIC / FPU /
   TSS in `ap_main` and parks until `sched_init` releases it into the scheduler.
   The RSDP that starts that chain is **copied out** of GRUB's boot-information
-  structure while it is being parsed ([`multiboot2.c`](multiboot2.c)), rather
+  structure while it is being parsed ([`arch/x86/boot/multiboot2.c`](arch/x86/boot/multiboot2.c)), rather
   than pointed at: the page-table storage window begins at the end of the
   kernel image and, once the image had grown enough, landed exactly on where
   GRUB had put that structure. The first page table erased the RSDP, no MADT
   was found, and the machine came up on one core — a silent four-fold
   slowdown whose only trace was one warning line. Both parsers now also hand
   the loader's structures to `paging_reserve_range`
-  ([`paging.c`](paging.c)), which holds the overlapping blocks back and says
+  ([`arch/x86/mm/paging.c`](arch/x86/mm/paging.c)), which holds the overlapping blocks back and says
   so, rather than leaving the collision to chance.
-* **SMP scheduler** ([`sched.c`](sched.c)): one global run queue (the process
+* **SMP scheduler** ([`kernel/sched.c`](kernel/sched.c)): one global run queue (the process
   ring) under `sched_lock`; each core tracks its own current thread and a
   `process_t::cpu` field keeps a process from running on two cores at once.
   Preemption is driven by each core's LAPIC timer (vector `0xEF`) — no global
@@ -71,17 +71,17 @@ each is on.
   local interrupts off (never preempted mid-section) but *spins* with them on,
   so a lock waiter still services TLB-shootdown IPIs. One lock per subsystem:
   physical allocator, page-table window, kernel heap, VMM, scheduler, process
-  lifecycle, VFS and the console — [`spinlock.h`](spinlock.h). System-call
+  lifecycle, VFS and the console — [`include/linux/spinlock.h`](include/linux/spinlock.h). System-call
   entry is a **trap gate** so a syscall blocked on a lock stays interruptible.
 * **TLB-shootdown IPIs** (vector `0xFD`): every `vmm_unmap*` / kernel-mapping
   change flushes locally, broadcasts via `lapic_ipi_allbutself` and waits for
-  the other cores to acknowledge — [`apic.c`](apic.c). Degrades to a plain
+  the other cores to acknowledge — [`arch/x86/kernel/apic.c`](arch/x86/kernel/apic.c). Degrades to a plain
   `invlpg` on `-smp 1`.
 * **Reschedule IPIs** (vector `0xFC`) kick the other cores through `schedule()`
   when a new or boosted thread appears.
 * The page-table storage window moved from a fixed `0x200000` (which the
   linked-in 1.3 MiB font blob had grown the kernel image straight through) to
-  just past `kernel_end` — [`paging.c`](paging.c).
+  just past `kernel_end` — [`arch/x86/mm/paging.c`](arch/x86/mm/paging.c).
 * The **userspace return trampoline** moved for the same reason, and had been
   silently broken for a while. `RETURN_ADDR` was `0x400000`, from when the
   kernel image ended below 4 MiB and that was the first free page above it; the
@@ -94,18 +94,18 @@ each is on.
   the machine hung at the scheduler with no output at all — which is how it was
   found. It now sits at `0x7FF000`, one page below `KERNEL_SPACE_END` and on
   the far side of everything that grows with the kernel, and
-  [`kernel.lds`](kernel.lds) asserts at link time that the image cannot reach
-  it or the kernel-thread stacks. [`vmm.c`](vmm.c) carries the up-to-date map
+  [`arch/x86/kernel/kernel.lds`](arch/x86/kernel/kernel.lds) asserts at link time that the image cannot reach
+  it or the kernel-thread stacks. [`arch/x86/mm/vmm.c`](arch/x86/mm/vmm.c) carries the up-to-date map
   of the identity-mapped low region.
 
 ### Scheduling & processes
 * Preemptive weighted fixed-priority round-robin scheduler with real-time
-  policies (`SCHED_OTHER` / `SCHED_RR` / `SCHED_FIFO`) — [`sched.c`](sched.c).
+  policies (`SCHED_OTHER` / `SCHED_RR` / `SCHED_FIFO`) — [`kernel/sched.c`](kernel/sched.c).
   Each core's LAPIC timer runs `schedule()`: each thread carries a `weight`
   and its quantum is `WEIGHT_BASE * weight` ticks; it runs the highest-priority
   ready thread, round-robins equal priorities by quantum, and lets a higher
   priority preempt within a tick. SMP-aware — see **SMP / multi-core** above.
-* **A sleeping thread gives its CPU away.** `sleep()` ([`io.c`](io.c); the
+* **A sleeping thread gives its CPU away.** `sleep()` ([`arch/x86/kernel/io.c`](arch/x86/kernel/io.c); the
   `msleep` syscall, every kernel service's poll delay and Qt's event loop sit
   in it) used to halt *while still the running thread*, holding its CPU for the
   whole quantum. With seven polling kernel processes on four cores, every other
@@ -116,17 +116,17 @@ each is on.
   (`thread_runnable()`, `proc_pick_thread()`), so the CPU goes to someone else or
   idles, and the thread is picked up again within a tick of the deadline. The
   timer now fires every 8.1 ms.
-* Processes (flat binaries loaded from the filesystem) — [`proc.c`](proc.c)
-* Threads — [`thread.c`](thread.h)
+* Processes (flat binaries loaded from the filesystem) — [`kernel/proc.c`](kernel/proc.c)
+* Threads — [`thread.c`](include/linux/thread.h)
 * **Userspace threading**: `thread_create`/`thread_join`/`thread_yield`
-  (syscalls 32-34, `create_user_thread()` in [`proc.c`](proc.c)) expose the
+  (syscalls 32-34, `create_user_thread()` in [`kernel/proc.c`](kernel/proc.c)) expose the
   process/thread-ring split above to ring 3 — a process was already "an
   address space plus a ring of threads" and the scheduler already
   round-robins that ring, so a second thread just needed a frame built the
-  same way [`stack_fill()`](proc.c) builds the main thread's (matched
+  same way [`stack_fill()`](kernel/proc.c) builds the main thread's (matched
   byte-for-byte against the real context-switch pop order in
-  [`smp_asm.S`](smp_asm.S), not the separate one-time boot path in
-  [`sched_run_thread()`](sched.c)) and splicing into the ring under
+  [`arch/x86/kernel/smp_asm.S`](arch/x86/kernel/smp_asm.S), not the separate one-time boot path in
+  [`sched_run_thread()`](kernel/sched.c)) and splicing into the ring under
   `sched_lock`. `build_stack()`/`build_heap()` were already
   `nthreads`-parameterized for exactly this (every thread gets its own
   stack *and* its own heap arena, offset by a fixed per-thread span so they
@@ -150,13 +150,13 @@ each is on.
   them (real Qt6 hit it: a 518 KB `QImage`, then a `QThreadPool` worker, then a
   not-present fault re-reading the image). Secondary threads now get a *slot*
   in a reserved per-process region, `[100 MiB, 128 MiB)` (`UTHREAD_REGION_*` in
-  [`mm.h`](mm.h)) — above the highest address the main heap can reach (it is
+  [`mm.h`](include/linux/mm.h)) — above the highest address the main heap can reach (it is
   clamped to the kernel heap at 96 MiB), below the boot RAM disk. A slot is
   guard / 256 KiB user stack / guard / 16 KiB kernel stack / guard / a 512 KiB
-  heap window (`PROC_THREAD_*` in [`proc.h`](proc.h)), 36 of them per process.
+  heap window (`PROC_THREAD_*` in [`include/linux/proc.h`](include/linux/proc.h)), 36 of them per process.
   **One heap per process, not one per thread.** Every `malloc`/`free`/
   `realloc` and `fopen` handle of a process resolves to the *main* thread's
-  arena (`proc_heap_thread()` in [`proc.h`](proc.h)): memory one thread
+  arena (`proc_heap_thread()` in [`include/linux/proc.h`](include/linux/proc.h)): memory one thread
   allocates has to be usable and freeable by another, and has to outlive the
   thread that allocated it, which a per-thread arena cannot promise. Each
   thread still has its own private arena inside its slot; it is simply no
@@ -171,15 +171,15 @@ each is on.
   **Caveat**: `process_t::cpu` claims one CPU per *process*, not per thread
   — sibling threads are preemptively interleaved on whichever core is
   currently running that process, not truly parallel across cores, without
-  deeper scheduler surgery. A ring-3 mutex ([`lib/mutex.c`](lib/mutex.c),
+  deeper scheduler surgery. A ring-3 mutex ([`usr/lib/mutex.c`](usr/lib/mutex.c),
   the same `__sync_lock_test_and_set`/`__sync_lock_release` GCC builtins
   `spinlock.c` uses — they compile to a plain unprivileged `xchg`, no
   `cli`/`sti` needed, so they work unmodified outside ring 0) backs
   [`apps/hello-thread`](apps/hello-thread): 4 threads each do 25,000
   mutex-protected increments of a shared counter; joined, it must read
   exactly 100,000 or the mutex is broken. `PASS`, 5 separate boot runs.
-* **A pthread-shaped API** ([`lib/pthread.h`](include/lib/pthread.h) /
-  [`lib/pthread.c`](lib/pthread.c)) over the same syscalls and mutex
+* **A pthread-shaped API** ([`usr/include/lib/pthread.h`](usr/include/lib/pthread.h) /
+  [`usr/lib/pthread.c`](usr/lib/pthread.c)) over the same syscalls and mutex
   primitive — `pthread_create`/`join`/`self`/`equal`, mutexes, condition
   variables (including `pthread_cond_timedwait`, at whole-second resolution
   — this kernel's `time()` syscall has no finer clock), and
@@ -219,7 +219,7 @@ each is on.
     (`set_thread_area`) allocates (first call) or re-points (later calls) a
     GDT descriptor after the TSS slots — a flat ring-3 read/write data
     segment whose base is the thread pointer (`gdt_tls_alloc`/`_set_base`/
-    `_free` in [`gdt.c`](gdt.c)) and returns its selector, which libc loads
+    `_free` in [`arch/x86/kernel/gdt.c`](arch/x86/kernel/gdt.c)) and returns its selector, which libc loads
     into `%gs`. The interrupt and syscall stubs already save and restore `%gs`
     with the rest of the frame, so every thread keeps its own base across
     context switches; a slot is released when the thread exits
@@ -229,9 +229,9 @@ each is on.
     [`qt_app.lds`](third_party/qt6-gui/koppios/qt_app.lds) and
     [`hello_tls.lds`](apps/hello-tls/hello_tls.lds). `.tbss` takes no address
     space of its own, and the segment alignment must stay 16 (what
-    [`lib/tls.c`](lib/tls.c) lays the per-thread block out for; the script
+    [`usr/lib/tls.c`](usr/lib/tls.c) lays the per-thread block out for; the script
     asserts it).
-  * [`lib/tls.c`](lib/tls.c) builds one copy per thread as
+  * [`usr/lib/tls.c`](usr/lib/tls.c) builds one copy per thread as
     `[ .tdata | .tbss ][ TCB ]` (variant II: the linker computes offsets
     *below* the thread pointer), sets `%gs`, and runs the destructors that
     `__cxa_thread_atexit` registers, newest first, when the thread ends —
@@ -246,14 +246,14 @@ each is on.
   from `.tdata` and one from `.tbss`, a `thread_local` object with a
   constructor and a destructor, per-thread copies that survive context
   switches, and thread slots created and reclaimed repeatedly.
-* `int 0x72` syscall gate — [`syscall.c`](syscall.c). Implemented calls:
+* `int 0x72` syscall gate — [`kernel/syscall.c`](kernel/syscall.c). Implemented calls:
   `printf`, `gets`/`scanf`, `fork`, `exit`, process return, `fopen`, `fclose`,
   `malloc`, `free`, `realloc`, `write`, `fread`, `time`, `clock`, `spit`
   (whole-file write).
 
 ### Filesystems
-* Virtual filesystem layer — [`vfs.c`](vfs.c)
-* **FAT** (FAT12/16) driver — [`fat.c`](fat.c). Reads the layout from the BPB
+* Virtual filesystem layer — [`fs/vfs.c`](fs/vfs.c)
+* **FAT** (FAT12/16) driver — [`fs/fat/fat.c`](fs/fat/fat.c). Reads the layout from the BPB
   (reserved sectors, FAT count/size, root-dir size), so it is not tied to
   1.44M floppy geometry — but it still assumes one sector per cluster.
   **Writes** are supported on FAT16: `fat_write_all()` reallocates a file's
@@ -261,18 +261,18 @@ each is on.
   writes the data and updates the directory entry — enough for a program on the
   OS to save a multi-KB output. `vfs_spit()` (create/truncate + write) is
   exposed to userspace as syscall #16.
-* ELF loading helpers — [`elf.c`](elf.c)
+* ELF loading helpers — [`fs/elf.c`](fs/elf.c)
 
 ### USB
 A small polled USB stack, driven from a kernel thread (no USB interrupts).
 Whichever host controller the machine has is brought up — the three cover
 every PC from the QEMU `pc` machine to a modern ThinkPad:
 
-* **UHCI** (USB 1.1) — [`uhci.c`](uhci.c). Found on the PCI bus, reset and
+* **UHCI** (USB 1.1) — [`drivers/usb/host/uhci.c`](drivers/usb/host/uhci.c). Found on the PCI bus, reset and
   started; its 1024-entry frame list, queue heads, transfer descriptors and
   data buffers are static and live in the identity-mapped low memory so
   `&x == phys(x)`.
-* **EHCI** (USB 2.0) — [`ehci.c`](ehci.c). The controller on a Sandy/Ivy
+* **EHCI** (USB 2.0) — [`drivers/usb/host/ehci.c`](drivers/usb/host/ehci.c). The controller on a Sandy/Ivy
   Bridge ThinkPad (X220), which has no xHCI. BIOS→OS handoff via `USBLEGSUP`,
   an async schedule for control transfers and a periodic schedule for
   interrupt-IN, plus one or two levels of hub with the split-transaction
@@ -280,23 +280,23 @@ every PC from the QEMU `pc` machine to a modern ThinkPad:
   **Opt-in** (`ehci` on the boot line): the handoff can disturb a real
   ThinkPad's PS/2 keyboard, so it stays off unless asked for. See
   **Booting on real hardware (ThinkPad X220 and similar)**.
-* **xHCI** (USB 3.x) — [`xhci.c`](xhci.c). The only controller on a recent
+* **xHCI** (USB 3.x) — [`drivers/usb/host/xhci.c`](drivers/usb/host/xhci.c). The only controller on a recent
   laptop (X250 / T470s / MacBook Air 2013). Controller bring-up, root-port
   reset, Enable Slot / Address Device / Configure Endpoint, then polled
   interrupt-IN. Endpoint 0's max packet size is corrected from
   `bMaxPacketSize0` with an Evaluate Context before the full device descriptor
   is read, and a composite device can have several interrupt endpoints
   configured at once — which is how the MacBook Air's keyboard and its
-  multi-touch trackpad ([`bcm5974.c`](bcm5974.c)), one device with two
+  multi-touch trackpad ([`drivers/input/mouse/bcm5974.c`](drivers/input/mouse/bcm5974.c)), one device with two
   interfaces, are driven together. EHCI and xHCI both do their own enumeration
   and feed reports straight to the HID driver rather than going through
   `usb.c`.
-* **USB core** — [`usb.c`](usb.c). Synchronous EP0 control transfers, port
+* **USB core** — [`drivers/usb/core/usb.c`](drivers/usb/core/usb.c). Synchronous EP0 control transfers, port
   reset, and single-device-per-port enumeration (device descriptor →
   `SET_ADDRESS` → configuration → `SET_CONFIGURATION`). The same routine
   enumerates devices on a root port and behind a hub; a device's USB address is
   its slot index, so an address is reused once the device is unplugged.
-* **Hub driver** — [`usb_hub.c`](usb_hub.c). A device that enumerates as class 9
+* **Hub driver** — [`drivers/usb/core/usb_hub.c`](drivers/usb/core/usb_hub.c). A device that enumerates as class 9
   is registered here: the driver reads the hub descriptor, powers every
   downstream port and recursively enumerates whatever is attached (up to three
   hubs deep). On each USB service pass it re-reads every downstream port's
@@ -304,13 +304,13 @@ every PC from the QEMU `pc` machine to a modern ThinkPad:
   running is enumerated or torn down on the fly — **hot-plug behind a hub
   works**. Detection is GET_STATUS polling; the hub's status-change interrupt
   endpoint is not used.
-* **HID boot driver** — [`usb_hid.c`](usb_hid.c). Forces the HID *boot*
+* **HID boot driver** — [`drivers/hid/usb_hid.c`](drivers/hid/usb_hid.c). Forces the HID *boot*
   protocol (no report-descriptor parsing): a keyboard's fixed 8-byte report is
   translated from HID usage codes to ASCII and pushed into the same ring buffer
   the console reads, and a mouse's `[buttons, dx, dy]` report updates the shared
   pointer state — so real USB keyboards and mice work alongside the PS/2 ones.
   A HID device unplugged from a hub releases its interrupt endpoint.
-* **Game controllers** — [`gamepad.c`](gamepad.c). A pad is HID but not
+* **Game controllers** — [`drivers/input/joystick/gamepad.c`](drivers/input/joystick/gamepad.c). A pad is HID but not
   boot-protocol: it describes its own reports, so this one *does* parse the
   report descriptor (an item walker for Usage Page / Logical Min–Max / Report
   Size, ID and Count / Push–Pop, keeping the bit offsets of the buttons, axes,
@@ -319,7 +319,7 @@ every PC from the QEMU `pc` machine to a modern ThinkPad:
   the way the *device* numbers them, two sticks scaled to ±32767, two
   triggers, and a D-pad whether it was a hat or four buttons. The three host
   controllers only fetch the descriptor and hand over reports
-  ([`usb_hid.c`](usb_hid.c) for UHCI, [`ehci.c`](ehci.c), [`xhci.c`](xhci.c)).
+  ([`drivers/hid/usb_hid.c`](drivers/hid/usb_hid.c) for UHCI, [`drivers/usb/host/ehci.c`](drivers/usb/host/ehci.c), [`drivers/usb/host/xhci.c`](drivers/usb/host/xhci.c)).
   An **Xbox 360 wired controller** (vendor class, no descriptor) is
   recognised by its interface class and its fixed 20-byte report translated
   into the same state, with buttons numbered like a DualShock's. Ring-3 reads
@@ -339,22 +339,22 @@ ports are still probed just once at boot. Try it from the QEMU monitor:
 `device_add usb-kbd,bus=usb-bus.0,port=2.2` then `device_del <id>`.
 
 ### Storage & block devices
-`main_proc` ([`sched.c`](sched.c)) brings the block devices up at boot:
-* **Boot RAM disk** — [`initrd.c`](initrd.c), mounted as `rd`. GRUB loads
+`main_proc` ([`kernel/sched.c`](kernel/sched.c)) brings the block devices up at boot:
+* **Boot RAM disk** — [`drivers/block/initrd.c`](drivers/block/initrd.c), mounted as `rd`. GRUB loads
   `initrd.img` (a FAT16 image with the whole userland) from `os.iso` as a
   Multiboot module; the kernel relocates it to high memory and serves it as a
   read/write block device. **This is the root filesystem** — `/rd/zsh`,
   `/rd/cc`, … — and it needs no attached disk, so `os.iso` boots on its own
   from a CD or a USB stick. Writes to `/rd` are RAM-backed and lost on reboot.
-* **Floppy** — [`floppy.c`](floppy.c) + [`dma.c`](dma.c), mounted as `fda`
+* **Floppy** — [`drivers/block/floppy.c`](drivers/block/floppy.c) + [`arch/x86/kernel/dma.c`](arch/x86/kernel/dma.c), mounted as `fda`
   (and `fdb` if present).
-* **IDE / ATA hard disks** — [`ata.c`](ata.c), each detected drive mounted as
+* **IDE / ATA hard disks** — [`drivers/ata/ata.c`](drivers/ata/ata.c), each detected drive mounted as
   `hda`, `hdb`, … `identify()` bounds every status poll, so an empty or absent
   IDE channel (the common case on real hardware, and when booting `os.iso`
   with no disk) is detected instead of hanging the boot.
-* **AHCI / SATA** — [`ahci.c`](ahci.c), polled, one command in flight; the M.2
+* **AHCI / SATA** — [`drivers/ata/ahci.c`](drivers/ata/ahci.c), polled, one command in flight; the M.2
   SATA SSD on an X250-class laptop, mounted as the next free `hd{a,b,…}`.
-* **NVMe** — [`nvme.c`](nvme.c), polled, one admin + one I/O queue; the M.2
+* **NVMe** — [`drivers/nvme/nvme.c`](drivers/nvme/nvme.c), polled, one admin + one I/O queue; the M.2
   PCIe SSD on a Kaby Lake laptop (T470s), mounted as the next free `hd{a,b,…}`.
   See **Booting on real hardware (ThinkPad T470s …)** below.
 
@@ -366,42 +366,42 @@ the RAM disk or a real disk. `make qemu-iso` boots `os.iso` alone;
 up as `/hda`), and `FLOPPY=floppy.img` likewise (`/fda`).
 
 ### PCI
-[`pci.c`](pci.c) walks every bus/slot/function once at boot into a device table
+[`drivers/pci/pci.c`](drivers/pci/pci.c) walks every bus/slot/function once at boot into a device table
 (honouring the multifunction bit), names each one from a small class-code and
-vendor/device table ([`pci_ids.c`](pci_ids.c)), decodes its BARs and IRQ line,
+vendor/device table ([`drivers/pci/pci_ids.c`](drivers/pci/pci_ids.c)), decodes its BARs and IRQ line,
 then hands each record to the first matching entry of a driver table. Every PCI
 function the QEMU `pc` machine exposes has a handler, so nothing logs as
 "unknown":
 
 | Device | Driver | What it does |
 | --- | --- | --- |
-| 82441FX host bridge | [`pci_piix.c`](pci_piix.c) | identify |
-| 82371SB PIIX3 ISA bridge | [`pci_piix.c`](pci_piix.c) | log PIRQ[A-D] routing + ELCR |
-| 82371SB PIIX3 IDE | [`pci_piix.c`](pci_piix.c) | enable I/O + bus master, log IDETIM (transfers stay in [`ata.c`](ata.c)) |
-| 82371SB PIIX3 USB (UHCI) | [`uhci.c`](uhci.c) | brought up later from the `usb` kernel thread |
-| 82371AB PIIX4 ACPI | [`pci_acpi.c`](pci_acpi.c) | latch the PM I/O base; back `poweroff` / `reboot` |
-| QEMU/Bochs standard VGA | [`pci_vga.c`](pci_vga.c) | record the framebuffer BAR, report the DISPI mode |
-| virtio-gpu (`-vga virtio`) | [`virtio_gpu.c`](virtio_gpu.c) | modern virtio-pci 2D scanout off the framebuffer shadow; follows host window resizes |
-| 82540EM gigabit Ethernet | [`e1000.c`](e1000.c) | polled link layer; IPv4/DHCP on top — see below |
-| 82801AA AC'97 audio | [`pci_ac97.c`](pci_ac97.c) | codec bring-up + BDL playback |
+| 82441FX host bridge | [`drivers/pci/pci_piix.c`](drivers/pci/pci_piix.c) | identify |
+| 82371SB PIIX3 ISA bridge | [`drivers/pci/pci_piix.c`](drivers/pci/pci_piix.c) | log PIRQ[A-D] routing + ELCR |
+| 82371SB PIIX3 IDE | [`drivers/pci/pci_piix.c`](drivers/pci/pci_piix.c) | enable I/O + bus master, log IDETIM (transfers stay in [`drivers/ata/ata.c`](drivers/ata/ata.c)) |
+| 82371SB PIIX3 USB (UHCI) | [`drivers/usb/host/uhci.c`](drivers/usb/host/uhci.c) | brought up later from the `usb` kernel thread |
+| 82371AB PIIX4 ACPI | [`drivers/acpi/pci_acpi.c`](drivers/acpi/pci_acpi.c) | latch the PM I/O base; back `poweroff` / `reboot` |
+| QEMU/Bochs standard VGA | [`drivers/video/pci_vga.c`](drivers/video/pci_vga.c) | record the framebuffer BAR, report the DISPI mode |
+| virtio-gpu (`-vga virtio`) | [`drivers/gpu/virtio_gpu.c`](drivers/gpu/virtio_gpu.c) | modern virtio-pci 2D scanout off the framebuffer shadow; follows host window resizes |
+| 82540EM gigabit Ethernet | [`drivers/net/e1000.c`](drivers/net/e1000.c) | polled link layer; IPv4/DHCP on top — see below |
+| 82801AA AC'97 audio | [`sound/pci_ac97.c`](sound/pci_ac97.c) | codec bring-up + BDL playback |
 
 An unrecognised device (e.g. `-device rtl8139`) is still enumerated and named;
 it just logs "has no driver". `pci` at the console reprints the table.
 
-**ACPI power** ([`pci_acpi.c`](pci_acpi.c)): the PIIX4 PM register block has a
+**ACPI power** ([`drivers/acpi/pci_acpi.c`](drivers/acpi/pci_acpi.c)): the PIIX4 PM register block has a
 fixed layout, so no AML is needed — `poweroff` enters S5 with a single word
 write to `PM1_CNT` (`exit_qemu(0)` uses this for a clean guest-initiated
 shutdown), and `reboot` pulses the 0xCF9 reset-control port.
 
 ### Networking
 
-The **e1000** driver ([`e1000.c`](e1000.c)) is the link layer only: it maps the
+The **e1000** driver ([`drivers/net/e1000.c`](drivers/net/e1000.c)) is the link layer only: it maps the
 MMIO register BAR 1:1 into the kernel (it sits above the low-4 MiB identity map),
 resets the card, brings the link up, reads the MAC from the EEPROM and sets up
 static RX/TX descriptor rings in the identity-mapped `.bss`. It exposes
 `e1000_send()` / `e1000_rx_poll()`.
 
-On top of that, [`net.c`](net.c) is a very small IPv4 stack — Ethernet framing,
+On top of that, [`net/net.c`](net/net.c) is a very small IPv4 stack — Ethernet framing,
 an 8-entry **ARP** cache (replies to who-has for our address, resolves next
 hops), **IPv4** (20-byte header, checksum, on-link vs. gateway routing) and
 **UDP** (checksum omitted, a tiny port→handler table). No fragmentation, no
@@ -409,26 +409,26 @@ options. Everything runs on the `net` kernel thread, so there is no locking; the
 console's `ping` / `dns` / `http` / `ntpdate` commands submit their work to it
 with `net_exec()` and block until it finishes.
 
-* **DHCP** ([`dhcp.c`](dhcp.c)): on boot the `net` thread runs
+* **DHCP** ([`net/dhcp.c`](net/dhcp.c)): on boot the `net` thread runs
   `DISCOVER → OFFER → REQUEST → ACK` against QEMU's SLIRP server and the machine
   comes up with an address (`10.0.2.15/24 via 10.0.2.2` by default), renewed at
   T1. Logged as `net: 10.0.2.15/24 via 10.0.2.2, dns 10.0.2.3, lease 86400s`.
-* **ICMP** ([`icmp.c`](icmp.c)): replies to inbound echo requests (the guest is
+* **ICMP** ([`net/icmp.c`](net/icmp.c)): replies to inbound echo requests (the guest is
   pingable) and backs the `ping <host> [count]` command, which prints per-packet
   RTTs from the free-running `pit_ms()` clock.
-* **DNS** ([`dns.c`](dns.c)): a single-query A-record resolver over UDP to the
+* **DNS** ([`net/dns.c`](net/dns.c)): a single-query A-record resolver over UDP to the
   DHCP-supplied server, honouring name compression. `dns <name>` prints the
   addresses; `ping` / `http` resolve names through it.
-* **NTP** ([`ntp.c`](ntp.c)): once DHCP has a lease the `net` thread does a
+* **NTP** ([`net/ntp.c`](net/ntp.c)): once DHCP has a lease the `net` thread does a
   one-shot SNTP query (resolving `pool.ntp.org`, falling back to a fixed
   address) and writes the answer to the CMOS clock — `ntp: RTC set to
   Mon 2026-08-31 15:46:49 UTC`. The RTC is treated as UTC from then on;
   `ntpdate` re-syncs on demand and `date` prints it.
-* **TCP** ([`tcp.c`](tcp.c)): minimal client — active open, stop-and-wait send,
+* **TCP** ([`net/tcp.c`](net/tcp.c)): minimal client — active open, stop-and-wait send,
   in-order receive, MSS option, a 1 s retransmit timer, up to four connections.
   No listen/accept, no congestion control. `http <host> [path]` (or
   `http http://host/path`) does an HTTP/1.0 GET and prints the response.
-* **NFSv4.1** ([`nfs.c`](nfs.c)): an in-kernel NFS client hung off the VFS. Once
+* **NFSv4.1** ([`fs/nfs/nfs.c`](fs/nfs/nfs.c)): an in-kernel NFS client hung off the VFS. Once
   DHCP has an address the `net` thread auto-mounts `cube00.fritz.box:/nfs`
   at `/nfs` (retrying every 10 s until the server answers), logged as
   `nfs: mounted ... at /nfs`. It speaks ONC-RPC (AUTH_SYS, from a reserved
@@ -441,7 +441,7 @@ with `net_exec()` and block until it finishes.
   `nfs` prints the mount status. The server must permit the client's address
   (the client uses a privileged source port, so a default `sec`/`secure`
   export is fine).
-* **SSHv2 server** ([`ssh.c`](ssh.c)): a small in-kernel sshd, enough for a
+* **SSHv2 server** ([`net/ssh.c`](net/ssh.c)): a small in-kernel sshd, enough for a
   stock OpenSSH client to log in and reach the same command shell as the
   local console. Algorithms: curve25519-sha256 key exchange, ssh-ed25519 host
   key (hex-encoded at `/rd/sshkey` — on the RAM disk it is regenerated each
@@ -451,7 +451,7 @@ with `net_exec()` and block until it finishes.
   already offers, so no client-side flags are needed beyond accepting the
   host key on first connect. Authentication is a single fixed
   username/password (`koppi` / `os` — see `SSH_USERNAME`/`SSH_PASSWORD` in
-  [`ssh.c`](ssh.c)), since there is no user database in this OS. A `shell`
+  [`net/ssh.c`](net/ssh.c)), since there is no user database in this OS. A `shell`
   channel request bridges to `console_exec()` — the exact same command table
   as the physical keyboard console — echoing keystrokes and mirroring output
   both locally and over the channel; an `exec` request runs one command and
@@ -464,7 +464,7 @@ with `net_exec()` and block until it finishes.
   even though the peer is a real terminal that would understand more: every
   byte written to the channel also goes to the machine's local console, where
   an escape sequence it cannot act on would be left sitting in the log as its
-  own text. [`test/ssh-boot.sh`](test/ssh-boot.sh) (`make qemu-ssh`) logs in
+  own text. [`tools/testing/ssh-boot.sh`](tools/testing/ssh-boot.sh) (`make qemu-ssh`) logs in
   with a stock OpenSSH client and checks the editor, including a sequence
   split across two packets. Like NFS, this runs entirely on the `net` thread: `ssh_tick()` polls
   the listening socket and, once accepted, runs the whole session to
@@ -472,10 +472,10 @@ with `net_exec()` and block until it finishes.
   and other `net`-thread work pauses for its duration. `ssh` prints the
   listener status. The underlying crypto (SHA-256/512, a small 256-bit
   bignum, Curve25519, Ed25519, AES-128) is hand-rolled in
-  [`bignum256.c`](bignum256.c), [`sha2.c`](sha2.c),
-  [`curve25519.c`](curve25519.c), [`ed25519.c`](ed25519.c) and
-  [`aes128.c`](aes128.c) — there is no OpenSSL/libsodium here — seeded by a
-  best-effort timing-jitter CSPRNG ([`csprng.c`](csprng.c)); treat it as a
+  [`crypto/bignum256.c`](crypto/bignum256.c), [`crypto/sha2.c`](crypto/sha2.c),
+  [`crypto/curve25519.c`](crypto/curve25519.c), [`crypto/ed25519.c`](crypto/ed25519.c) and
+  [`crypto/aes128.c`](crypto/aes128.c) — there is no OpenSSL/libsodium here — seeded by a
+  best-effort timing-jitter CSPRNG ([`crypto/csprng.c`](crypto/csprng.c)); treat it as a
   hobby-OS demo, not an audited implementation.
 
 `ipv4_send()` / `udp_send()` and `tcp_connect/send/recv/close()` are the hooks
@@ -484,54 +484,54 @@ for anything more (there is no TLS or resolver cache).
 ### Drivers
 | Area | Files |
 | --- | --- |
-| Boot RAM disk (Multiboot module, mounted `/rd`) | [`initrd.c`](initrd.c) |
-| ATA / IDE disk (PIO, probed at boot) | [`ata.c`](ata.c), [`ata_asm.S`](ata_asm.S) |
-| Floppy disk (+ DMA) | [`floppy.c`](floppy.c), [`dma.c`](dma.c) |
-| PS/2 keyboard (IRQ-driven, ring-buffered) | [`keyboard.c`](keyboard.c), [`keyboard_asm.S`](keyboard_asm.S) |
-| PS/2 mouse | [`mouse.c`](mouse.c), [`mouse_asm.S`](mouse_asm.S) |
-| USB host controllers, polled (UHCI 1.1 / EHCI 2.0 / xHCI 3.x) | [`uhci.c`](uhci.c), [`ehci.c`](ehci.c), [`xhci.c`](xhci.c) |
-| USB core (enumeration, control/interrupt transfers) | [`usb.c`](usb.c) |
-| USB hub (recursive enumeration + hot-plug polling) | [`usb_hub.c`](usb_hub.c) |
-| USB HID boot devices (keyboard, mouse) | [`usb_hid.c`](usb_hid.c) |
-| USB game controllers (HID report-descriptor parser, Xbox 360) | [`gamepad.c`](gamepad.c) |
-| Apple BCM5974 multi-touch trackpad (MacBook Air topcase) | [`bcm5974.c`](bcm5974.c) |
-| PCI bus (enumeration, naming, driver binding) | [`pci.c`](pci.c), [`pci_ids.c`](pci_ids.c) |
-| i440FX / PIIX3 chipset (host bridge, ISA bridge, IDE) | [`pci_piix.c`](pci_piix.c) |
-| PIIX4 ACPI power management (poweroff / reboot) | [`pci_acpi.c`](pci_acpi.c) |
-| Intel 82540EM gigabit NIC ("e1000", polled) | [`e1000.c`](e1000.c) |
-| IPv4 stack (Ethernet, ARP, IPv4, UDP, ICMP) | [`net.c`](net.c), [`icmp.c`](icmp.c) |
-| DHCP client / DNS resolver | [`dhcp.c`](dhcp.c), [`dns.c`](dns.c) |
-| SNTP client (sets the RTC at boot) | [`ntp.c`](ntp.c) |
-| Minimal TCP (client + passive-open listen/accept) | [`tcp.c`](tcp.c) |
-| In-kernel NFSv4.1 client (auto-mounts `/nfs`) | [`nfs.c`](nfs.c) |
-| In-kernel SSHv2 server (port 22) | [`ssh.c`](ssh.c) |
-| Crypto primitives (SHA-2, bignum, Curve25519, Ed25519, AES-128, CSPRNG) | [`sha2.c`](sha2.c), [`bignum256.c`](bignum256.c), [`curve25519.c`](curve25519.c), [`ed25519.c`](ed25519.c), [`aes128.c`](aes128.c), [`csprng.c`](csprng.c) |
-| QEMU / Bochs standard VGA (DISPI mode control) | [`pci_vga.c`](pci_vga.c) |
-| virtio-gpu 2D scanout + live window-resize (`-vga virtio`) | [`virtio_gpu.c`](virtio_gpu.c) |
-| AC97 audio | [`pci_ac97.c`](pci_ac97.c), [`sb16.c`](sb16.c) |
-| PC speaker | [`pcspk.c`](pcspk.c) |
-| VGA / VBE framebuffer | [`vga.c`](vga.c), [`video.c`](video.c), [`graphics.c`](graphics.c) |
-| PIT timer (1 kHz tick) | [`pit.c`](pit.c) |
-| RTC / CMOS clock (Unix-time conversion, NTP-settable) | [`rtc.c`](rtc.c) |
-| Serial UART (kernel console / log) | [`uart.c`](uart.c) |
+| Boot RAM disk (Multiboot module, mounted `/rd`) | [`drivers/block/initrd.c`](drivers/block/initrd.c) |
+| ATA / IDE disk (PIO, probed at boot) | [`drivers/ata/ata.c`](drivers/ata/ata.c), [`drivers/ata/ata_asm.S`](drivers/ata/ata_asm.S) |
+| Floppy disk (+ DMA) | [`drivers/block/floppy.c`](drivers/block/floppy.c), [`arch/x86/kernel/dma.c`](arch/x86/kernel/dma.c) |
+| PS/2 keyboard (IRQ-driven, ring-buffered) | [`drivers/input/keyboard/keyboard.c`](drivers/input/keyboard/keyboard.c), [`drivers/input/keyboard/keyboard_asm.S`](drivers/input/keyboard/keyboard_asm.S) |
+| PS/2 mouse | [`drivers/input/mouse/mouse.c`](drivers/input/mouse/mouse.c), [`drivers/input/mouse/mouse_asm.S`](drivers/input/mouse/mouse_asm.S) |
+| USB host controllers, polled (UHCI 1.1 / EHCI 2.0 / xHCI 3.x) | [`drivers/usb/host/uhci.c`](drivers/usb/host/uhci.c), [`drivers/usb/host/ehci.c`](drivers/usb/host/ehci.c), [`drivers/usb/host/xhci.c`](drivers/usb/host/xhci.c) |
+| USB core (enumeration, control/interrupt transfers) | [`drivers/usb/core/usb.c`](drivers/usb/core/usb.c) |
+| USB hub (recursive enumeration + hot-plug polling) | [`drivers/usb/core/usb_hub.c`](drivers/usb/core/usb_hub.c) |
+| USB HID boot devices (keyboard, mouse) | [`drivers/hid/usb_hid.c`](drivers/hid/usb_hid.c) |
+| USB game controllers (HID report-descriptor parser, Xbox 360) | [`drivers/input/joystick/gamepad.c`](drivers/input/joystick/gamepad.c) |
+| Apple BCM5974 multi-touch trackpad (MacBook Air topcase) | [`drivers/input/mouse/bcm5974.c`](drivers/input/mouse/bcm5974.c) |
+| PCI bus (enumeration, naming, driver binding) | [`drivers/pci/pci.c`](drivers/pci/pci.c), [`drivers/pci/pci_ids.c`](drivers/pci/pci_ids.c) |
+| i440FX / PIIX3 chipset (host bridge, ISA bridge, IDE) | [`drivers/pci/pci_piix.c`](drivers/pci/pci_piix.c) |
+| PIIX4 ACPI power management (poweroff / reboot) | [`drivers/acpi/pci_acpi.c`](drivers/acpi/pci_acpi.c) |
+| Intel 82540EM gigabit NIC ("e1000", polled) | [`drivers/net/e1000.c`](drivers/net/e1000.c) |
+| IPv4 stack (Ethernet, ARP, IPv4, UDP, ICMP) | [`net/net.c`](net/net.c), [`net/icmp.c`](net/icmp.c) |
+| DHCP client / DNS resolver | [`net/dhcp.c`](net/dhcp.c), [`net/dns.c`](net/dns.c) |
+| SNTP client (sets the RTC at boot) | [`net/ntp.c`](net/ntp.c) |
+| Minimal TCP (client + passive-open listen/accept) | [`net/tcp.c`](net/tcp.c) |
+| In-kernel NFSv4.1 client (auto-mounts `/nfs`) | [`fs/nfs/nfs.c`](fs/nfs/nfs.c) |
+| In-kernel SSHv2 server (port 22) | [`net/ssh.c`](net/ssh.c) |
+| Crypto primitives (SHA-2, bignum, Curve25519, Ed25519, AES-128, CSPRNG) | [`crypto/sha2.c`](crypto/sha2.c), [`crypto/bignum256.c`](crypto/bignum256.c), [`crypto/curve25519.c`](crypto/curve25519.c), [`crypto/ed25519.c`](crypto/ed25519.c), [`crypto/aes128.c`](crypto/aes128.c), [`crypto/csprng.c`](crypto/csprng.c) |
+| QEMU / Bochs standard VGA (DISPI mode control) | [`drivers/video/pci_vga.c`](drivers/video/pci_vga.c) |
+| virtio-gpu 2D scanout + live window-resize (`-vga virtio`) | [`drivers/gpu/virtio_gpu.c`](drivers/gpu/virtio_gpu.c) |
+| AC97 audio | [`sound/pci_ac97.c`](sound/pci_ac97.c), [`sound/sb16.c`](sound/sb16.c) |
+| PC speaker | [`sound/pcspk.c`](sound/pcspk.c) |
+| VGA / VBE framebuffer | [`drivers/video/vga.c`](drivers/video/vga.c), [`drivers/video/video.c`](drivers/video/video.c), [`drivers/video/graphics.c`](drivers/video/graphics.c) |
+| PIT timer (1 kHz tick) | [`drivers/clocksource/pit.c`](drivers/clocksource/pit.c) |
+| RTC / CMOS clock (Unix-time conversion, NTP-settable) | [`drivers/rtc/rtc.c`](drivers/rtc/rtc.c) |
+| Serial UART (kernel console / log) | [`drivers/tty/serial/uart.c`](drivers/tty/serial/uart.c) |
 
 ### Graphics / UI
-* [`microui.c`](microui.c) immediate-mode UI + [`renderer.c`](renderer.c)
-* [`ssfn.h`](ssfn.h) Scalable Screen Font renderer; the GNU Unifont
-  ([`unifont.sfn`](unifont.sfn)) is linked into the kernel as `font.o`.
-* BMP loader — [`bmp.c`](bmp.c) (e.g. [`mouse.bmp`](mouse.bmp) cursor)
+* [`lib/microui.c`](lib/microui.c) immediate-mode UI + [`drivers/video/renderer.c`](drivers/video/renderer.c)
+* [`include/linux/ssfn.h`](include/linux/ssfn.h) Scalable Screen Font renderer; the GNU Unifont
+  ([`lib/fonts/unifont.sfn`](lib/fonts/unifont.sfn)) is linked into the kernel as `font.o`.
+* BMP loader — [`drivers/video/bmp.c`](drivers/video/bmp.c) (e.g. [`drivers/video/mouse.bmp`](drivers/video/mouse.bmp) cursor)
 * **Full-screen grab** — a ring-3 program can take the whole display away from
-  the compositor ([`video.c`](video.c): `video_grab` / `video_blit8` /
+  the compositor ([`drivers/video/video.c`](drivers/video/video.c): `video_grab` / `video_blit8` /
   `video_ungrab`, syscalls 22-25). It pushes **8-bpp indexed** frames plus a
   256-entry palette; the kernel does the palette lookup and scales the image
   by the largest whole number that fits, centred on black. Indexed rather than
   true-colour because the frame crosses a syscall boundary every tick — a
   320x200 game screen is 64 KiB paletted against 256 KiB at 32 bpp. The
   compositor parks itself while a grab is held, and `remove_proc`
-  ([`proc.c`](proc.c)) drops the grab when it reaps the process, so a program
+  ([`kernel/proc.c`](kernel/proc.c)) drops the grab when it reaps the process, so a program
   that faults mid-frame cannot freeze the display. This is what
   [`apps/doom`](apps/doom) renders through.
-* **Window manager** — [`wm.c`](wm.c) / [`wm.h`](wm.h): the same 8-bpp surface,
+* **Window manager** — [`drivers/video/wm.c`](drivers/video/wm.c) / [`include/linux/wm.h`](include/linux/wm.h): the same 8-bpp surface,
   composited into a window on the running desktop instead of taking the screen.
   See below.
 
@@ -541,7 +541,7 @@ microui was always most of one — it drags windows, keeps a z-order, draws a
 title bar with a close box — but two things were missing before a ring-3
 program could be a window on this desktop.
 
-**Clipping.** `r_set_clip_rect` in [`renderer.c`](renderer.c) was a no-op, so
+**Clipping.** `r_set_clip_rect` in [`drivers/video/renderer.c`](drivers/video/renderer.c) was a no-op, so
 microui's clip commands were thrown away and a window's contents painted
 wherever the widget happened to land: a scrolled log ran outside its panel, and
 a window in front could not cover the one behind. The renderer now honours the
@@ -563,7 +563,7 @@ their own window's body, rather than paint over the top afterwards. Up to four
 windows at a time; each frame costs w*h bytes of the kernel heap.
 
 Input is routed, not shared. Clicking a window gives it the keyboard, and
-[`keyboard.c`](keyboard.c) then stops decoding the machine's keystrokes into
+[`drivers/input/keyboard/keyboard.c`](drivers/input/keyboard/keyboard.c) then stops decoding the machine's keystrokes into
 the shell's ring and sends the raw scancodes to that window instead — the
 serial console deliberately keeps its own path, so a remote operator and the
 boot tests are never locked out by a window on someone else's screen. The
@@ -579,17 +579,17 @@ asks for a window first and falls back to the grab, so the same binary works on
 a machine with no desktop (`calc -f` forces it).
 
 ### Audio
-* [`hxcmod.c`](hxcmod.c) Amiga MOD player; sample module in
-  [`mods/01.mod`](mods/01.mod).
+* [`sound/hxcmod.c`](sound/hxcmod.c) Amiga MOD player; sample module in
+  [`sound/mods/01.mod`](sound/mods/01.mod).
 * Audio output goes through whichever card is present: the AC97 codec
-  ([`pci_ac97.c`](pci_ac97.c)), a Sound Blaster 16 via [`sb16.c`](sb16.c),
-  or — on the laptops — Intel HD Audio ([`hda.c`](hda.c)), with MOD playback
+  ([`sound/pci_ac97.c`](sound/pci_ac97.c)), a Sound Blaster 16 via [`sound/sb16.c`](sound/sb16.c),
+  or — on the laptops — Intel HD Audio ([`sound/hda.c`](sound/hda.c)), with MOD playback
   routed through the Azalia codec when one is present. The PS/2 keyboard's
   **volume-up / volume-down / mute** keys drive the master level: they step
   the SB16 mixer inline from the IRQ and flag the HD Audio thread to re-apply
-  the codec's output amp ([`sb16.c`](sb16.c), [`hda.c`](hda.c),
-  [`keyboard.c`](keyboard.c)).
-* **PCM from ring 3** — [`snd.c`](snd.c) is a ring buffer between a userspace
+  the codec's output amp ([`sound/sb16.c`](sound/sb16.c), [`sound/hda.c`](sound/hda.c),
+  [`drivers/input/keyboard/keyboard.c`](drivers/input/keyboard/keyboard.c)).
+* **PCM from ring 3** — [`sound/snd.c`](sound/snd.c) is a ring buffer between a userspace
   program that produces audio on its own schedule and a card that consumes it
   at a fixed rate: `snd_open`/`snd_avail`/`snd_write`/`snd_close`
   (syscalls 28-31), interleaved stereo 16-bit at 44.1 kHz. Both back ends
@@ -601,28 +601,28 @@ a machine with no desktop (`calc -f` forces it).
   hears its own gunfire on time.
 
 ### Support libraries (freestanding, in-tree)
-* [`printf.c`](printf.c) (eyalroz/printf), [`ctype.c`](ctype.c),
-  [`qsort.c`](qsort.c) / [`qsort_r.c`](qsort_r.c), [`rand.c`](rand.c),
-  [`arith64.c`](arith64.c) (64-bit soft arithmetic),
-  [`hash_string.c`](hash_string.c)
-* Data structures: [`list.h`](list.h), [`rbtree.h`](rbtree.h),
-  [`hashtable.h`](hashtable.h), [`queue.h`](queue.h), [`stack.h`](stack.h)
+* [`lib/printf.c`](lib/printf.c) (eyalroz/printf), [`lib/ctype.c`](lib/ctype.c),
+  [`lib/qsort.c`](lib/qsort.c) / [`lib/qsort_r.c`](lib/qsort_r.c), [`lib/rand.c`](lib/rand.c),
+  [`arch/x86/lib/arith64.c`](arch/x86/lib/arith64.c) (64-bit soft arithmetic),
+  [`lib/hash_string.c`](lib/hash_string.c)
+* Data structures: [`include/linux/list.h`](include/linux/list.h), [`include/linux/rbtree.h`](include/linux/rbtree.h),
+  [`include/linux/hashtable.h`](include/linux/hashtable.h), [`include/linux/queue.h`](include/linux/queue.h), [`include/linux/stack.h`](include/linux/stack.h)
 
 ### Userspace
-* Minimal C library in [`lib/`](lib) (`stdio`, `stdlib`, `string`, `unistd`,
+* Minimal C library in [`usr/lib/`](usr/lib) (`stdio`, `stdlib`, `string`, `unistd`,
   `system_calls`, plus the C++ runtime described below); headers in
-  [`include/lib/`](include/lib), with `extern "C"` guards so C++ apps can
+  [`usr/include/lib/`](usr/include/lib), with `extern "C"` guards so C++ apps can
   include them directly. Programs are built position-dependent
   (`-fno-pic -fno-pie`): the `int 0x72` ABI passes the first argument in
   `%ebx`, which PIC code reserves for the GOT. `memcpy` and `ptrdiff_t`
-  (in [`include/types.h`](include/types.h)) were made to actually match the
+  (in [`include/linux/types.h`](include/linux/types.h)) were made to actually match the
   standard signature/width GCC assumes (returns `dest`; `__PTRDIFF_TYPE__`)
   once libstdc++ headers started exposing the mismatch — harmless for the
   existing C code (every call site already discarded the old `void` return).
-* Per-process user heap ([`heap.c`](heap.c)) backing the `malloc`/`free`/
+* Per-process user heap ([`mm/heap.c`](mm/heap.c)) backing the `malloc`/`free`/
   `realloc` syscalls: a first-fit free list that starts at 4 pages and
-  [grows on demand](heap.c) (`heap_grow`) up to 64 MiB. Each process also gets
-  a **256 KiB** user stack and a 16 KiB ring-0 stack ([`proc.c`](proc.c)).
+  [grows on demand](mm/heap.c) (`heap_grow`) up to 64 MiB. Each process also gets
+  a **256 KiB** user stack and a 16 KiB ring-0 stack ([`kernel/proc.c`](kernel/proc.c)).
 * `int 0x72` calls: `printf`(0), `gets`(1), `fork`(3), `exit`(4), return(5),
   `fopen`(6), `fclose`(7), `malloc`(9), `free`(10), `realloc`(11),
   `write`(12, length-delimited), `fread`(13, 512-byte block),
@@ -644,20 +644,20 @@ a machine with no desktop (`calc -f` forces it).
   is built on it) and `set_thread_area`(38, a per-thread ring-3 `%gs` segment
   for ELF thread-local storage; returns the selector to load — see
   **Thread-local storage**) —
-  see [`syscall.c`](syscall.c). `write_file()` in [`lib/`](lib) wraps #16;
+  see [`kernel/syscall.c`](kernel/syscall.c). `write_file()` in [`usr/lib/`](usr/lib) wraps #16;
   17-21 back [`apps/zsh`](apps/zsh), 22-31 back [`apps/doom`](apps/doom), and
   32-35 back [`apps/hello-thread`](apps/hello-thread) /
   [`apps/hello-pthread`](apps/hello-pthread), 36-37 back
   [`apps/hello-qt-widgets`](apps/hello-qt-widgets) and 38 back
   [`apps/hello-tls`](apps/hello-tls). 39-43 are the **window manager**
-  ([`wm.h`](wm.h)): `wm_open`/`wm_close`/`wm_blit`/`wm_palette`/`wm_event`, a
+  ([`include/linux/wm.h`](include/linux/wm.h)): `wm_open`/`wm_close`/`wm_blit`/`wm_palette`/`wm_event`, a
   window on the desktop instead of the whole screen, which is what
   [`apps/calc`](apps/calc) and [`apps/clock`](apps/clock) ask for first and
   22-27 / 36 what they fall back to. 44 is `spawn_bg` — `#21` waits for the
   program it starts, so until this there could only ever be one at a time, and
   a window manager that can show four of them wants a shell that can start
   four (`cmd &` in [`apps/zsh`](apps/zsh)).
-* The ELF loader ([`elf.c`](elf.c)) maps every page of a `PT_LOAD` segment to
+* The ELF loader ([`fs/elf.c`](fs/elf.c)) maps every page of a `PT_LOAD` segment to
   its own frame and covers the `.bss` tail, so multi-page ring-3 binaries load.
 * Example programs in [`apps/`](apps), each linked as a flat ring-3 binary with
   its own linker script and no crt0 (entry point is `main`), copied onto both
@@ -666,10 +666,10 @@ a machine with no desktop (`calc -f` forces it).
     returns
   * [`apps/hello-cpp`](apps/hello-cpp) — first C++ userspace app (staged as
     `hellocpp`): g++ against the same C libc headers, with a from-scratch
-    Itanium ABI shim ([`lib/cxxabi.cpp`](lib/cxxabi.cpp) — `operator
+    Itanium ABI shim ([`usr/lib/cxxabi.cpp`](usr/lib/cxxabi.cpp) — `operator
     new`/`delete` over `malloc`/`free`, `__cxa_pure_virtual`, guard
     functions) and a small entry trampoline
-    ([`lib/cxx_start.c`](lib/cxx_start.c)) that is this app's actual ELF
+    ([`usr/lib/cxx_start.c`](usr/lib/cxx_start.c)) that is this app's actual ELF
     entry point instead of `main`, since global constructors need
     `.init_array` walked before anything else runs. Both are shared with
     every other C++ app. Exercises global constructors, virtual dispatch and
@@ -681,7 +681,7 @@ a machine with no desktop (`calc -f` forces it).
     compile must **not** pass `-ffreestanding` — that sets
     `_GLIBCXX_HOSTED=0`, which walls those headers off behind a `#error` in
     `bits/requires_hosted.h`). There is still no compiled libstdc++.a, so
-    `lib/cxxabi.cpp` also supplies the full `std::__throw_*` error-path
+    `usr/lib/cxxabi.cpp` also supplies the full `std::__throw_*` error-path
     shim (`bits/functexcept.h`) that the headers call instead of `throw`
     under `-fno-exceptions`. `std::string` *does* link this way despite the
     worry above — see `apps/hello-str`.
@@ -690,7 +690,7 @@ a machine with no desktop (`calc -f` forces it).
     `std::to_string(int)`. Turned out to link fine header-only after all —
     the `extern template`-instantiated-into-libstdc++.a worry in
     `apps/hello-stl` above didn't bite for this usage. What *did* need
-    fixing: `memcmp`/`memchr` didn't exist in `lib/string.c` at all (needed
+    fixing: `memcmp`/`memchr` didn't exist in `usr/lib/string.c` at all (needed
     by `char_traits<char>::compare`/`find` — added, standard signatures, no
     existing callers to break since they're new). And this app deliberately
     does **not** include our own `<stdio.h>`: the real `<string>` pulls in
@@ -717,23 +717,23 @@ a machine with no desktop (`calc -f` forces it).
     routes its const_iterator through the non-const overload and so never
     references them, which is why defining only that pair built fine here but
     failed to link under GCC 13 and GCC 14.
-    [`lib/cxx_rbtree.cpp`](lib/cxx_rbtree.cpp) reimplements the standard
+    [`usr/lib/cxx_rbtree.cpp`](usr/lib/cxx_rbtree.cpp) reimplements the standard
     red-black tree insert-fixup/delete-fixup/successor-predecessor
     algorithms from scratch against the real, ABI-fixed
     `std::_Rb_tree_node_base` layout (pulled in via `<map>`, not redeclared).
-    `lib/cxxabi.cpp` also gained `std::__glibcxx_assert_fail` — GCC 15 ships
+    `usr/lib/cxxabi.cpp` also gained `std::__glibcxx_assert_fail` — GCC 15 ships
     `_GLIBCXX_ASSERTIONS` hardening on by default, and `map::erase` hits it.
     The app inserts 40 keys ascending (the worst case for rotations), erases
     a third of them (hitting leaf/one-child/two-child erase cases), then
     verifies sorted order, values, iterator count, `find`/`count`, and a
     full drain via repeated `begin()`-erase, printing `PASS`/`FAIL` rather
-    than trusting the output by eye. `lib/cxx_rbtree.cpp` builds **without**
-    `-I.. -I../include` (unlike the rest of `lib/`): those pull in
-    `include/stddef.h` (another kernel-internal placeholder, see
-    `apps/hello-str` above for the same class of problem with `stdio.h`)
-    ahead of the compiler's real one, breaking `max_align_t` inside
-    `<bits/memory_resource.h>` — this file only needs `<map>`, so it just
-    doesn't pass those flags.
+    than trusting the output by eye. `usr/lib/cxx_rbtree.cpp` builds **without**
+    the `-I` flags the rest of `usr/lib/` gets (`-I../include -I../../include`):
+    this file only needs the real `<map>`, and the kernel's `stddef.h` — a
+    placeholder that used to sit at the top of `include/` and shadow the
+    compiler's real one (see `apps/hello-str` above for the same class of
+    problem with `stdio.h`), breaking `max_align_t` inside
+    `<bits/memory_resource.h>` — is what those flags were once able to pull in.
   * [`apps/hello-umap`](apps/hello-umap) — `std::unordered_map` (staged as
     `helloump` — FAT here is strict 8.3, no long-name support, so it's
     truncated to fit like every other staged binary): another
@@ -741,7 +741,7 @@ a machine with no desktop (`calc -f` forces it).
     `_Hashtable` itself is header-only, but its default rehash policy,
     `std::__detail::_Prime_rehash_policy`, leaves `_M_next_bkt`/
     `_M_need_rehash` out-of-line — normally compiled into libstdc++'s
-    `hashtable_c++0x.cc`. [`lib/cxx_hashtable.cpp`](lib/cxx_hashtable.cpp)
+    `hashtable_c++0x.cc`. [`usr/lib/cxx_hashtable.cpp`](usr/lib/cxx_hashtable.cpp)
     implements them fresh: the header's own comment gives the whole contract
     for `_M_next_bkt` ("a bucket size no smaller than n"), which does not
     require matching GCC's actual (much larger, hand-tuned) prime table —
@@ -754,12 +754,12 @@ a machine with no desktop (`calc -f` forces it).
     container, unlike `hello-map`, so this checks membership + a sum rather
     than sorted order), `find`/`count`, an explicit `reserve(10000)` to
     stress the policy directly, then a full drain. Also builds without
-    `-I.. -I../include`, same reason as `cxx_rbtree.cpp`.
+    those `-I` flags, same reason as `cxx_rbtree.cpp`.
   * [`apps/hello-set`](apps/hello-set) — `std::set` (staged as `helloset`):
     the one entry in this list that needed **zero** new runtime code —
     `std::set` is backed by the exact same `std::_Rb_tree` as `std::map`
     (keyed on the value itself instead of a pair's first member), so it
-    links straight against the `lib/cxx_rbtree.cpp` functions
+    links straight against the `usr/lib/cxx_rbtree.cpp` functions
     `apps/hello-map` already exercises. Confirms that shim is genuinely
     general rather than accidentally `std::map`-shaped. Checks duplicate
     inserts are dropped (a real behavioral check, not just tree shape),
@@ -776,7 +776,7 @@ a machine with no desktop (`calc -f` forces it).
     rather than trusting a clean exit. `PASS`, 5 separate runs.
   * [`apps/hello-pthread`](apps/hello-pthread) — the pthread-shaped API
     (staged as `hellopth`; see **Scheduling & processes** above for
-    `lib/pthread.c`): covers what `hello-thread` didn't — the mutex again,
+    `usr/lib/pthread.c`): covers what `hello-thread` didn't — the mutex again,
     through `pthread_mutex_t` specifically, a 5,000-item producer/consumer
     over a condition variable, and thread-local storage read back correctly
     by 4 separate threads. `PASS`, 5 separate runs.
@@ -797,7 +797,7 @@ a machine with no desktop (`calc -f` forces it).
   * [`apps/hello-tls`](apps/hello-tls) — regression test for real ELF
     thread-local storage (staged as `tlsthr`; see **Thread-local storage**
     above). Built like Qt's threaded code is — against the real system
-    `<pthread.h>`, with `lib/tls.c` and a linker script that defines the TLS
+    `<pthread.h>`, with `usr/lib/tls.c` and a linker script that defines the TLS
     segment symbols: `thread_local` variables from `.tdata` and `.tbss`, a
     `thread_local` object with a constructor and a destructor, one private
     copy per thread that survives context switches, and thread slots created
@@ -863,7 +863,7 @@ a machine with no desktop (`calc -f` forces it).
     and [`apps/clock`](apps/clock) — an **analog clock** (staged as `clock`):
     ring-3 programs that are **windows on the desktop**, not full-screen
     programs. Both are built on [`apps/microui`](apps/microui), a shared
-    runtime that compiles the kernel's own vendored [`microui.c`](microui.c) a
+    runtime that compiles the kernel's own vendored [`lib/microui.c`](lib/microui.c) a
     *second* time, for ring 3, and renders its command list into an 8-bpp
     indexed surface the window manager composites (see **Window manager**
     below) — or, when there is no desktop to put a window on, into the
@@ -938,7 +938,7 @@ in [`apps/lua/shim/`](apps/lua/shim):
 * **libm** — `sin`/`cos`/`tan`/`atan2`/`exp`/`log`/`pow`/`sqrt`/`floor`/`ceil`/
   `fmod`/`frexp`/`ldexp` implemented directly on the **x87 FPU**
   ([`libm.S`](apps/lua/shim/libm.S)). The scheduler now saves per-thread FPU
-  state ([`fpu.c`](fpu.c), [`sched.c`](sched.c)) so this is safe under preemption.
+  state ([`arch/x86/kernel/fpu.c`](arch/x86/kernel/fpu.c), [`kernel/sched.c`](kernel/sched.c)) so this is safe under preemption.
 * **setjmp/longjmp** — 6-word i386 buffer ([`port_asm.S`](apps/lua/shim/port_asm.S)),
   used for Lua's error handling.
 * **stdio** — `stdout`/`stderr` go to the console via the `write` syscall,
@@ -946,7 +946,7 @@ in [`apps/lua/shim/`](apps/lua/shim):
   read through `fopen`/`fread`/`fclose` ([`stdio.c`](apps/lua/shim/stdio.c)).
 * `strtod`, a standard-signature `string.c`, ascii `ctype.h`, a civil-time
   `time.c` (for `os.time`/`os.date`), and the in-tree
-  [`printf.c`](printf.c)/[`arith64.c`](arith64.c) round it out.
+  [`lib/printf.c`](lib/printf.c)/[`arch/x86/lib/arith64.c`](arch/x86/lib/arith64.c) round it out.
 
 `lua_Number` is `double` and `lua_Integer` is 64-bit. Libraries: `base`,
 `package`, `coroutine`, `table`, `string`, `math`, `utf8`, and a trimmed `os`
@@ -996,17 +996,17 @@ the top of the input code in
   upscale (**Graphics / UI** above). The grab is deferred to the first frame,
   so the WAD-loading chatter — and, more usefully, a startup that fails —
   still lands on a console the player can read.
-* **Input.** [`keyboard.c`](keyboard.c) grew a second ring carrying **raw
+* **Input.** [`drivers/input/keyboard/keyboard.c`](drivers/input/keyboard/keyboard.c) grew a second ring carrying **raw
   scancodes with make/break and the 0xE0 prefix**, because the ASCII ring has
   no releases and no entry for the arrows, Ctrl or Alt. It is separate rather
   than a mode switch: the ASCII ring has exactly one consumer and a second
-  reader would split the keystrokes. [`usb_hid.c`](usb_hid.c) feeds it too,
+  reader would split the keystrokes. [`drivers/hid/usb_hid.c`](drivers/hid/usb_hid.c) feeds it too,
   mapping HID usages back to set-1 codes, so a machine with no PS/2
   controller can play. That half had no test: `sendkey` reaches the i8042 in
   the configs the scenarios below use, so the arrows were only ever checked on
   the one path that is *not* the one a MacBook has. The three of them —
   i8042, USB HID over UHCI, USB HID over xHCI with the i8042 switched off —
-  are now checked by [`test/keys-boot.sh`](test/keys-boot.sh)
+  are now checked by [`tools/testing/keys-boot.sh`](tools/testing/keys-boot.sh)
   (`make qemu-keys`), which needs no WAD, and the `keys` console command
   prints the same stream on the machine's own screen for a keyboard that
   sends something unexpected.
@@ -1039,7 +1039,7 @@ the top of the input code in
   It is also all one thread, so the two mutexes upstream needs for SDL's
   audio thread become nothing.
 
-No mouse. [`test/doom-boot.sh`](test/doom-boot.sh) (`make qemu-doom`) drives
+No mouse. [`tools/testing/doom-boot.sh`](tools/testing/doom-boot.sh) (`make qemu-doom`) drives
 the game headless in QEMU, screenshots each step, and for the `sound`
 scenario records the codec to a WAV and reports what is in it. See
 [`apps/doom/PORTING.md`](apps/doom/PORTING.md) for the shim, the nine engine
@@ -1077,14 +1077,14 @@ completes, `^U`/`^W` kill the line / the word before the cursor, `^L` clears,
 The cursor keys work on **any** of this machine's keyboards, which they did not
 before: the editor only ever appended, so there was nowhere for Left and Right
 to go, and nothing delivered the keys anyway. The arrow cluster has no ASCII,
-so the PS/2 decoder dropped the 0xE0-prefixed codes, [`usb_hid.c`](usb_hid.c)
+so the PS/2 decoder dropped the 0xE0-prefixed codes, [`drivers/hid/usb_hid.c`](drivers/hid/usb_hid.c)
 had no table entry for the usages — the whole story on a machine with no PS/2
 controller, like the MacBook Air — and over a serial console the terminal's
 `ESC [ A` arrived as three keystrokes, which put `[A` in the line. Each path
 now decodes a cursor key to the one control character the readline-shaped
-editor was already written around (Up *is* `^P` to it; [`keyboard.h`](keyboard.h)
+editor was already written around (Up *is* `^P` to it; [`keyboard.h`](include/linux/keyboard.h)
 says why one byte rather than an escape sequence), and
-[`uart.c`](uart.c) reassembles a terminal's sequences into the same thing. A
+[`drivers/tty/serial/uart.c`](drivers/tty/serial/uart.c) reassembles a terminal's sequences into the same thing. A
 consequence worth knowing at the serial console: a lone `ESC` can no longer
 shut the machine down, because a cursor key starts with one — **press `Esc`
 twice**. Ctrl itself is still not decoded from the PS/2 controller, so
@@ -1100,12 +1100,12 @@ New syscalls behind this: `getkey` (17, one unechoed keystroke), `run` (18,
 `console_exec` on behalf of ring 3), `getcwd` (19), `listdir` (20, for
 completion/globbing) and `spawn` (21). `spawn` is marshalled onto `main_proc`
 because the ELF loader stages the image at a fixed kernel address that a ring-3
-process's page directory does not map ([`commands.c`](commands.c)
+process's page directory does not map ([`kernel/debug/commands.c`](kernel/debug/commands.c)
 `console_spawn_request` / `console_spawn_service`).
 
 ### Kernel console (`kmain_console`)
 
-The kernel debug console ([`commands.c`](commands.c), `kmain_console`) is the
+The kernel debug console ([`kernel/debug/commands.c`](kernel/debug/commands.c), `kmain_console`) is the
 fallback shell and the command table that `zsh`'s `run` syscall and the SSH
 `shell` channel dispatch through. It reads keystrokes from the ring-buffered
 keyboard driver, echoes them, supports backspace, and executes a line on Enter.
@@ -1148,7 +1148,7 @@ working directory, or against `/rd` when none is set — so `start hello` runs
 for the device names. (`/fda` is still reachable by an explicit path, but the
 floppy driver's read path can wedge on a cold motor, so it is not the default.)
 
-#### `coreutils` — a busybox-style toolbox ([`coreutils.c`](coreutils.c))
+#### `coreutils` — a busybox-style toolbox ([`kernel/debug/coreutils.c`](kernel/debug/coreutils.c))
 
 `console_exec()` tries the built-ins above first, then hands anything else to a
 small toolbox of coreutils / util-linux commands. They are reachable the same
@@ -1176,17 +1176,55 @@ just run — the console has no `$?`.
 
 ## Layout
 
+The tree follows the Linux kernel's. Each subsystem has a directory; the headers of the
+generic ones sit in `include/linux`, the x86 ones in `arch/x86/include/asm`
+(`#include <linux/sched.h>`, `#include <asm/io.h>`, `#include <crypto/sha2.h>`).
+
 ```
-*.c *.S            kernel sources (flat, top-level)
-*_asm.S            GAS assembly stubs for the matching driver
-include/           kernel headers (also include/lib for userspace)
-lib/               minimal userspace C library
-apps/              userspace programs
-mods/              sample MOD music
-iso/               staging dir for grub-mkrescue (generated)
-kernel.lds         kernel linker script
-grub.cfg           GRUB menu
-hda.sh floppy.sh   scripts to (re)build the FAT images (initrd / hd / floppy)
+arch/x86/boot/         multiboot entry (boot.S), Multiboot 1/2 info parsing, GRUB menu (grub/grub.cfg)
+arch/x86/realmode/     the 16-bit AP trampoline (ap_boot.S) and its linker script
+arch/x86/kernel/       GDT/IDT/TSS, exceptions, PIC, LAPIC + SMP bring-up, CPU/FPU, E820 map,
+                       ISA DMA, port I/O, the kernel linker script (kernel.lds)
+arch/x86/mm/           page-table allocator (paging.c), virtual memory manager (vmm.c), PAT
+arch/x86/lib/          arith64.c: the 64-bit helpers libgcc would otherwise supply
+arch/x86/include/asm/  x86-only headers
+block/                 block-device registry (device.c)
+crypto/                AES, SHA-2, Curve25519, Ed25519, bignum, CSPRNG (for the SSH server)
+drivers/acpi/          ACPI tables (MADT), PIIX4 power management
+drivers/ata/           legacy IDE (ata.c) and AHCI
+drivers/block/         floppy, boot RAM disk (initrd.c)
+drivers/nvme/          NVMe
+drivers/clocksource/   8254 PIT
+drivers/gpu/           virtio-gpu
+drivers/hid/           USB HID (keyboards, mice)
+drivers/input/         keyboard/ (PS/2), mouse/ (PS/2, bcm5974 trackpad), joystick/ (gamepad HID parser)
+drivers/net/           e1000 / e1000e
+drivers/pci/           PCI enumeration, ID tables, PIIX3 glue
+drivers/rtc/           MC146818 RTC
+drivers/tty/serial/    16550 UART
+drivers/usb/           core/ (usb.c, hubs) and host/ (UHCI, EHCI, xHCI)
+drivers/video/         VGA/Bochs, framebuffer, BMP loader, and the desktop: microui front end
+                       (graphics.c), renderer, window manager; mouse.bmp is the cursor
+fs/                    VFS, ELF loader, fat/ (FAT12/16/32), nfs/ (NFSv4.1 client)
+include/linux/         generic kernel headers
+include/crypto/        headers of crypto/
+init/                  main.c: kernel start-up
+kernel/                scheduler, processes, threads, system calls, panic; locking/ (spinlock),
+                       printk/ (kconsole), debug/ (the built-in command interpreter and coreutils)
+lib/                   kernel library: printf, ctype, rbtree/list/hashtable/queue/stack, qsort,
+                       rand, cmdline, the vendored microui toolkit, fonts/ (unifont.sfn)
+mm/                    physical frame allocator, kernel heap, per-process heap
+net/                   Ethernet/ARP/IP (net.c), TCP, ICMP, DHCP, DNS, NTP, and the SSH server
+sound/                 SB16, AC'97, Intel HD Audio, PC speaker, PCM mixer, MOD player (mods/01.mod)
+scripts/               hda.sh, floppy.sh, make-usb.sh: build the FAT images and the UEFI USB stick
+Documentation/         Doxyfile (`make docs`)
+tools/testing/         the QEMU boot tests (`make qemu-*`) and the host-side gamepad test
+usr/lib/               the userland C library (libc, pthread, TLS, libm, the C++ runtime);
+                       six of its objects are linked into the kernel image as well
+usr/include/lib/       its headers
+apps/                  userspace programs
+third_party/           vendored sources (Qt 6, ChipNomad)
+iso/                   staging dir for grub-mkrescue (generated)
 ```
 
 ## Building and Running
@@ -1223,9 +1261,9 @@ only from EFI (no CSM) — see the MacBook Air section below. `hda.img` /
 persistent storage across reboots.
 
 ```bash
-IMG=initrd.img ./hda.sh           # what `make iso` runs (8M, or 16M with a WAD)
-./hda.sh                          # 16M FAT16 hd image (hda.img)
-./floppy.sh                       # 1.44M FAT12 floppy image
+IMG=initrd.img ./scripts/hda.sh           # what `make iso` runs (8M, or 16M with a WAD)
+./scripts/hda.sh                          # 16M FAT16 hd image (hda.img)
+./scripts/floppy.sh                       # 1.44M FAT12 floppy image
 ```
 
 All use mtools (no root / loop device) and stage the `zsh` shell (with its
@@ -1283,7 +1321,7 @@ stick boots under **UEFI** or **Legacy/CSM**. On a ThinkPad X250 either works
 firmware setup.
 
 The X250 has no serial port, so **all boot output goes to the screen** via a
-framebuffer text console (`fbcon`, in [`video.c`](video.c)): the full kernel
+framebuffer text console (`fbcon`, in [`drivers/video/video.c`](drivers/video/video.c)): the full kernel
 log scrolls during bring-up, and a panic paints the fault + register dump
 full-screen instead of triple-faulting into a reboot loop. Once the desktop
 compositor starts it takes over the screen and the log continues in the
@@ -1293,18 +1331,18 @@ What comes up on the X250:
 
 | Subsystem   | Driver                                    | Notes |
 |-------------|-------------------------------------------|-------|
-| Display     | multiboot2 GOP/VBE framebuffer ([`video.c`](video.c)), write-combining via PAT ([`pat.c`](pat.c)) | any width/pitch/bpp; 32-bpp GOP is ideal, 24-bpp VBE works. No native modeset — the firmware sets the mode, the kernel just draws to it |
-| Keyboard / TrackPoint / touchpad | i8042 PS/2 ([`keyboard.c`](keyboard.c), [`mouse.c`](mouse.c)) | full controller bring-up, not firmware-dependent |
-| Storage     | AHCI / SATA ([`ahci.c`](ahci.c))          | the M.2 SSD, mounted `/hda` |
-| USB         | xHCI ([`xhci.c`](xhci.c))                 | external HID keyboards / mice (boot protocol) |
-| Ethernet    | Intel I218-LM ([`e1000.c`](e1000.c))      | shares the 8254x register model; PCH-LAN reset quirks handled |
+| Display     | multiboot2 GOP/VBE framebuffer ([`drivers/video/video.c`](drivers/video/video.c)), write-combining via PAT ([`arch/x86/mm/pat.c`](arch/x86/mm/pat.c)) | any width/pitch/bpp; 32-bpp GOP is ideal, 24-bpp VBE works. No native modeset — the firmware sets the mode, the kernel just draws to it |
+| Keyboard / TrackPoint / touchpad | i8042 PS/2 ([`drivers/input/keyboard/keyboard.c`](drivers/input/keyboard/keyboard.c), [`drivers/input/mouse/mouse.c`](drivers/input/mouse/mouse.c)) | full controller bring-up, not firmware-dependent |
+| Storage     | AHCI / SATA ([`drivers/ata/ahci.c`](drivers/ata/ahci.c))          | the M.2 SSD, mounted `/hda` |
+| USB         | xHCI ([`drivers/usb/host/xhci.c`](drivers/usb/host/xhci.c))                 | external HID keyboards / mice (boot protocol) |
+| Ethernet    | Intel I218-LM ([`drivers/net/e1000.c`](drivers/net/e1000.c))      | shares the 8254x register model; PCH-LAN reset quirks handled |
 | Timers / IRQ | LAPIC timer + PIT ch.2 + i8259 virtual-wire | no dependency on IRQ 0 being delivered |
 | SMP         | ACPI MADT (RSDP from the multiboot2 tag under UEFI) | all cores |
-| Audio | Intel HD Audio ([`hda.c`](hda.c)) | analog codec `8086:9ca0`; one-shot PCM / `beep` |
+| Audio | Intel HD Audio ([`sound/hda.c`](sound/hda.c)) | analog codec `8086:9ca0`; one-shot PCM / `beep` |
 | RTC, ACPI power-off, PC speaker | as on QEMU | |
 
 The framebuffer is mapped **write-combining** (a WC entry programmed into
-IA32_PAT, [`pat.c`](pat.c)) rather than strong-uncacheable. On real hardware
+IA32_PAT, [`arch/x86/mm/pat.c`](arch/x86/mm/pat.c)) rather than strong-uncacheable. On real hardware
 the panel lives across the display link, so an uncached mapping turned every
 pixel into its own bus transaction and the desktop crawled; WC lets the CPU
 burst a cache line at a time. There is no native Intel-graphics driver — no
@@ -1317,7 +1355,7 @@ Not supported: the Intel Wireless-AC 7265 WiFi, the Realtek RTS5227 SD-card
 reader, the fingerprint reader, and USB mass storage. Every device is named
 in the `pci` output regardless.
 
-`test/x250-boot.sh` boots `os.iso` in QEMU `q35` configurations that
+`tools/testing/x250-boot.sh` boots `os.iso` in QEMU `q35` configurations that
 approximate the X250 (AHCI, xHCI, `e1000e`), under both SeaBIOS and OVMF
 (UEFI), capturing a serial log and a screenshot for each.
 
@@ -1333,22 +1371,22 @@ small NVMe driver.
 
 | Subsystem | Driver | Notes |
 |-----------|--------|-------|
-| Display | multiboot2 GOP/VBE framebuffer ([`video.c`](video.c)), WC via PAT ([`pat.c`](pat.c)) | HD Graphics 620 (`8086:5916`); firmware sets the mode (1920×1080 or 2560×1440), no native modeset |
-| Keyboard / TrackPoint / touchpad | i8042 PS/2 ([`keyboard.c`](keyboard.c), [`mouse.c`](mouse.c)) | Synaptics absolute + TrackPoint pass-through; a non-Synaptics pad falls back to the plain 3-byte protocol (`nosyn` forces it) |
-| Storage (NVMe) | [`nvme.c`](nvme.c) | the M.2 PCIe SSD — one admin + one I/O queue, polled, namespace 1 mounted as the next free `hd{a,b,…}` (512-byte-block namespaces only) |
-| Storage (SATA) | AHCI ([`ahci.c`](ahci.c)) | for a T470s built with an M.2 **SATA** SSD instead |
-| USB | xHCI ([`xhci.c`](xhci.c)) | Sunrise Point-LP `8086:9d2f`; external HID keyboards / mice |
-| Ethernet | Intel I219-LM ([`e1000.c`](e1000.c)) | `is_pch_lan()` covers the whole I219 family (Kaby Lake `15d7`/`15d8`/`15b8`…) |
-| Audio | Intel HD Audio ([`hda.c`](hda.c)) | Sunrise Point-LP `8086:9d71` |
+| Display | multiboot2 GOP/VBE framebuffer ([`drivers/video/video.c`](drivers/video/video.c)), WC via PAT ([`arch/x86/mm/pat.c`](arch/x86/mm/pat.c)) | HD Graphics 620 (`8086:5916`); firmware sets the mode (1920×1080 or 2560×1440), no native modeset |
+| Keyboard / TrackPoint / touchpad | i8042 PS/2 ([`drivers/input/keyboard/keyboard.c`](drivers/input/keyboard/keyboard.c), [`drivers/input/mouse/mouse.c`](drivers/input/mouse/mouse.c)) | Synaptics absolute + TrackPoint pass-through; a non-Synaptics pad falls back to the plain 3-byte protocol (`nosyn` forces it) |
+| Storage (NVMe) | [`drivers/nvme/nvme.c`](drivers/nvme/nvme.c) | the M.2 PCIe SSD — one admin + one I/O queue, polled, namespace 1 mounted as the next free `hd{a,b,…}` (512-byte-block namespaces only) |
+| Storage (SATA) | AHCI ([`drivers/ata/ahci.c`](drivers/ata/ahci.c)) | for a T470s built with an M.2 **SATA** SSD instead |
+| USB | xHCI ([`drivers/usb/host/xhci.c`](drivers/usb/host/xhci.c)) | Sunrise Point-LP `8086:9d2f`; external HID keyboards / mice |
+| Ethernet | Intel I219-LM ([`drivers/net/e1000.c`](drivers/net/e1000.c)) | `is_pch_lan()` covers the whole I219 family (Kaby Lake `15d7`/`15d8`/`15b8`…) |
+| Audio | Intel HD Audio ([`sound/hda.c`](sound/hda.c)) | Sunrise Point-LP `8086:9d71` |
 | Timers / IRQ / SMP / RTC / power-off | as on the X250 | LAPIC timer, ACPI MADT, no IRQ-0 dependency |
 
-The NVMe driver ([`nvme.c`](nvme.c)) is deliberately minimal: it disables the
+The NVMe driver ([`drivers/nvme/nvme.c`](drivers/nvme/nvme.c)) is deliberately minimal: it disables the
 controller, sets up a page-aligned admin queue pair in identity-mapped `.bss`,
 `IDENTIFY`s the controller and the active namespace list, creates one I/O
 queue pair (interrupts off — every completion is polled), and serves
-512-byte sector reads/writes through the same [`device_t`](device.h) block
+512-byte sector reads/writes through the same [`device_t`](include/linux/device.h) block
 interface AHCI and IDE use. A 64-bit BAR a UEFI firmware parked above 4 GiB is
-re-homed into the low PCI hole, same as [`xhci.c`](xhci.c). A namespace with a
+re-homed into the low PCI hole, same as [`drivers/usb/host/xhci.c`](drivers/usb/host/xhci.c). A namespace with a
 non-512-byte LBA format is detected and left unmounted rather than
 mis-mounted.
 
@@ -1360,7 +1398,7 @@ early-boot progress beacon: at checkpoint N of the pre-console bring-up
 framebuffer up) the kernel beeps N times and, while paging is still off,
 floods the framebuffer with a per-checkpoint colour. The last beep count /
 colour you get is the last checkpoint the kernel reached — the next step is
-the one that hung. See [`main.c`](main.c).
+the one that hung. See [`init/main.c`](init/main.c).
 
 Escape hatches on the GRUB line (press `e`): `nonvme` `noahci` `noxhci`
 `nousb` `nonet` `nosmp` `nofb` `nosyn`. The "safe" menu entry sets
@@ -1370,7 +1408,7 @@ Not supported: the Intel Wireless-AC 8265 WiFi, the Realtek RTS522A SD-card
 reader, the fingerprint reader, and USB mass storage — every device is still
 named in the `pci` output.
 
-`test/t470s-boot.sh` (`make qemu-t470s`) boots `os.iso` in QEMU `q35` configs
+`tools/testing/t470s-boot.sh` (`make qemu-t470s`) boots `os.iso` in QEMU `q35` configs
 that approximate the T470s (NVMe, xHCI, `e1000e`, Intel HD Audio) under both
 SeaBIOS and OVMF/UEFI, capturing a serial log and a screenshot for each.
 
@@ -1389,12 +1427,12 @@ Intel HD Audio, so everything else carries over unchanged.
 
 | Subsystem | Driver | Notes |
 |-----------|--------|-------|
-| Display | multiboot2 GOP/VBE framebuffer ([`video.c`](video.c)), WC via PAT ([`pat.c`](pat.c)) | HD Graphics 3000 (`8086:0126`); the CSM VBIOS sets a 1366×768 linear mode (24- or 32-bpp), no native modeset |
-| Keyboard / TrackPoint / touchpad | i8042 PS/2 ([`keyboard.c`](keyboard.c), [`mouse.c`](mouse.c)) | Synaptics absolute + TrackPoint pass-through; `nosyn` forces the plain 3-byte protocol |
-| Storage | AHCI ([`ahci.c`](ahci.c)) | the 2.5" SATA SSD/HDD (`8086:1c03`), mounted `/hda`. Set the BIOS SATA mode to `AHCI` |
-| USB (opt-in) | **EHCI** ([`ehci.c`](ehci.c)) | `8086:1c26` / `8086:1c2d`; external HID keyboards / mice. **Off by default** — add `ehci` to the boot line |
-| Ethernet | Intel 82579LM ([`e1000.c`](e1000.c)) | `8086:1502`; `is_pch_lan()` skips the disruptive MAC reset and reads the MAC from `RAL0`/`RAH0` |
-| Audio | Intel HD Audio ([`hda.c`](hda.c)) | Cougar Point `8086:1c20` |
+| Display | multiboot2 GOP/VBE framebuffer ([`drivers/video/video.c`](drivers/video/video.c)), WC via PAT ([`arch/x86/mm/pat.c`](arch/x86/mm/pat.c)) | HD Graphics 3000 (`8086:0126`); the CSM VBIOS sets a 1366×768 linear mode (24- or 32-bpp), no native modeset |
+| Keyboard / TrackPoint / touchpad | i8042 PS/2 ([`drivers/input/keyboard/keyboard.c`](drivers/input/keyboard/keyboard.c), [`drivers/input/mouse/mouse.c`](drivers/input/mouse/mouse.c)) | Synaptics absolute + TrackPoint pass-through; `nosyn` forces the plain 3-byte protocol |
+| Storage | AHCI ([`drivers/ata/ahci.c`](drivers/ata/ahci.c)) | the 2.5" SATA SSD/HDD (`8086:1c03`), mounted `/hda`. Set the BIOS SATA mode to `AHCI` |
+| USB (opt-in) | **EHCI** ([`drivers/usb/host/ehci.c`](drivers/usb/host/ehci.c)) | `8086:1c26` / `8086:1c2d`; external HID keyboards / mice. **Off by default** — add `ehci` to the boot line |
+| Ethernet | Intel 82579LM ([`drivers/net/e1000.c`](drivers/net/e1000.c)) | `8086:1502`; `is_pch_lan()` skips the disruptive MAC reset and reads the MAC from `RAL0`/`RAH0` |
+| Audio | Intel HD Audio ([`sound/hda.c`](sound/hda.c)) | Cougar Point `8086:1c20` |
 | Timers / IRQ / SMP / RTC / power-off | as on the X250 | LAPIC timer, ACPI MADT (RSDP from the BIOS scan), no IRQ-0 dependency |
 
 **USB is opt-in on the X220.** Taking the EHCI controller from the firmware
@@ -1406,8 +1444,8 @@ which the machine needs, since its keyboard and TrackPoint are PS/2. So
 `keyboard_reinit()` after the handoff to put the 8042's translation + IRQ 1
 back. The default boot leaves USB alone and the built-in keyboard works.
 
-When enabled, the EHCI driver ([`ehci.c`](ehci.c)) is the same shape as
-[`xhci.c`](xhci.c): the `USBLEGSUP` handoff, a controller reset, an **async
+When enabled, the EHCI driver ([`drivers/usb/host/ehci.c`](drivers/usb/host/ehci.c)) is the same shape as
+[`drivers/usb/host/xhci.c`](drivers/usb/host/xhci.c): the `USBLEGSUP` handoff, a controller reset, an **async
 schedule** (one queue head, one control transfer in flight) for enumeration,
 and a **periodic schedule** (a 1024-entry frame list feeding a chain of
 interrupt queue heads, one persistent transfer descriptor per HID endpoint,
@@ -1424,7 +1462,7 @@ Not supported: the Intel Centrino Advanced-N 6205 WiFi, the SD-card reader,
 the fingerprint reader, and USB mass storage — every device is still named in
 the `pci` output.
 
-`test/x220-boot.sh` (`make qemu-x220`) boots the kernel (via `-kernel`, with
+`tools/testing/x220-boot.sh` (`make qemu-x220`) boots the kernel (via `-kernel`, with
 `ehci` on the command line) in a BIOS (`qemu-system-i386 -machine pc`) and a
 `q35` config, each with an EHCI controller, a USB keyboard and a USB tablet,
 capturing a serial log and a
@@ -1453,11 +1491,11 @@ set, and hands the kernel the framebuffer + the Multiboot2 memory map.
 
 | Subsystem | Driver | Notes |
 |-----------|--------|-------|
-| Display | multiboot2 GOP framebuffer ([`video.c`](video.c)), WC via PAT ([`pat.c`](pat.c)) | Haswell HD 5000 (`8086:0a26`); 13" panel is 1440×900, 11" is 1366×768 — the kernel reads the real size/pitch from the framebuffer tag |
-| Keyboard / trackpad | xHCI HID + BCM5974 ([`xhci.c`](xhci.c), [`bcm5974.c`](bcm5974.c)) | xHCI-only PCH (`8086:9c31`). The built-in topcase works: it is one composite USB device (`05ac:0290`) whose interface 0 is a boot keyboard and whose trackpad is driven natively as a "wellspring 8" multi-touch pad (see below) |
-| Storage | **AHCI** ([`ahci.c`](ahci.c)) | Samsung S4LN053X01 PCIe SSD (`144d:1600`, `8086:9c03` PCH), mounted `/hda` |
+| Display | multiboot2 GOP framebuffer ([`drivers/video/video.c`](drivers/video/video.c)), WC via PAT ([`arch/x86/mm/pat.c`](arch/x86/mm/pat.c)) | Haswell HD 5000 (`8086:0a26`); 13" panel is 1440×900, 11" is 1366×768 — the kernel reads the real size/pitch from the framebuffer tag |
+| Keyboard / trackpad | xHCI HID + BCM5974 ([`drivers/usb/host/xhci.c`](drivers/usb/host/xhci.c), [`drivers/input/mouse/bcm5974.c`](drivers/input/mouse/bcm5974.c)) | xHCI-only PCH (`8086:9c31`). The built-in topcase works: it is one composite USB device (`05ac:0290`) whose interface 0 is a boot keyboard and whose trackpad is driven natively as a "wellspring 8" multi-touch pad (see below) |
+| Storage | **AHCI** ([`drivers/ata/ahci.c`](drivers/ata/ahci.c)) | Samsung S4LN053X01 PCIe SSD (`144d:1600`, `8086:9c03` PCH), mounted `/hda` |
 | Ethernet | — | no wired NIC; the BCM4360 WiFi (`14e4:43a0`) is unsupported |
-| Audio | Intel HD Audio ([`hda.c`](hda.c)) | PCH analog controller `8086:9c20` with the Cirrus CS4208 codec, chosen over the digital-only Haswell HDMI controller `8086:0a0c`. Needs the Intel NoSnoop bit cleared and the codec's speaker-amp GPIO raised (see below); playback starts muted, so `sound on` at the console |
+| Audio | Intel HD Audio ([`sound/hda.c`](sound/hda.c)) | PCH analog controller `8086:9c20` with the Cirrus CS4208 codec, chosen over the digital-only Haswell HDMI controller `8086:0a0c`. Needs the Intel NoSnoop bit cleared and the codec's speaker-amp GPIO raised (see below); playback starts muted, so `sound on` at the console |
 | Timers / IRQ / RTC / power-off | as on the X250 | Apple EFI exposes the RSDP/MADT the same way; 8 GiB RAM |
 
 **Audio: four ways to get silence.** Getting the MOD player audible here meant
@@ -1500,7 +1538,7 @@ companion on this machine, so the topcase is reachable only through xHCI. It
 enumerates as a single composite device (`05ac:0290`, "Apple Internal Keyboard /
 Trackpad"): interface 0 is a HID boot keyboard, while the trackpad advertises
 itself as a HID *mouse* — the same thing Linux matches `bcm5974` on — and is
-then driven in its native TYPE3 multi-touch format ([`bcm5974.c`](bcm5974.c))
+then driven in its native TYPE3 multi-touch format ([`drivers/input/mouse/bcm5974.c`](drivers/input/mouse/bcm5974.c))
 rather than as a boot mouse. Reaching that meant fixing most of the xHCI path,
 and every one of these was invisible under QEMU:
 
@@ -1527,7 +1565,7 @@ and every one of these was invisible under QEMU:
   until it is explicitly asked for the report protocol.
 * **The event-ring segment table was published half-built.** This one goes the
   other way round — QEMU catches it and real silicon races it. Unlike
-  [`uhci.c`](uhci.c) and [`ehci.c`](ehci.c), whose descriptors are `volatile`
+  [`drivers/usb/host/uhci.c`](drivers/usb/host/uhci.c) and [`drivers/usb/host/ehci.c`](drivers/usb/host/ehci.c), whose descriptors are `volatile`
   field by field, the xHCI TRBs and the ERST are plain memory, and only
   *volatile* accesses are ordered against each other: the plain stores that
   build a structure may legally be scheduled **after** the volatile MMIO write
@@ -1536,8 +1574,8 @@ and every one of these was invisible under QEMU:
   size 0, rejected the table (`USBSTS.HCE`, "host controller error"), and from
   then on every command timed out — Enable Slot first, so **no USB device was
   ever enumerated**, which on this machine is the keyboard and the trackpad
-  gone. [`io.h`](io.h) grew `dma_wmb()` (a compiler barrier; x86 keeps stores
-  in order, so the hardware needs nothing) and [`xhci.c`](xhci.c) uses it at
+  gone. [`arch/x86/include/asm/io.h`](arch/x86/include/asm/io.h) grew `dma_wmb()` (a compiler barrier; x86 keeps stores
+  in order, so the hardware needs nothing) and [`drivers/usb/host/xhci.c`](drivers/usb/host/xhci.c) uses it at
   every hand-off: the ERST, the DCBAA, the command ring, and inside
   `ring_push`, where a TRB's cycle bit — the bit that says "this entry is
   yours now" — is now stored last, after the body.
@@ -1560,7 +1598,7 @@ a 32-bit Multiboot kernel a CPU with CR4 still in a 64-bit-era state
 (PAE/PGE/PCID set), which makes the `CR0.PG`/`CR3` writes for this
 kernel's non-PAE page tables #GP the CPU (a triple fault — invisible
 on a machine with no UART). `enable_paging()`
-([`mm.c`](mm.c)) now does the transition in the order x86 mandates
+([`mm/mm.c`](mm/mm.c)) now does the transition in the order x86 mandates
 (paging off → non-PAE CR4 → clear EFER.LME → reload CR3 → paging on).
 On Haswell-class UEFI firmware (MacBook Air 2013), the bootloader can
 also leave `IA32_EFER` Long Mode Enable (LME) bit set; with LME=1 and
@@ -1575,7 +1613,7 @@ Note that `nousb` and `noxhci` also take out the built-in keyboard and trackpad
 here, since xHCI is the only thing they are attached to; `ehci` enables the
 otherwise-disabled EHCI driver for external USB input on machines that have one.
 
-`test/mba-boot.sh` (`make qemu-mba`) boots `os.iso` in MBA-shaped QEMU configs
+`tools/testing/mba-boot.sh` (`make qemu-mba`) boots `os.iso` in MBA-shaped QEMU configs
 (q35 + xHCI-only + QXL GOP-like video under OVMF), capturing a serial log and a
 screenshot for each. `make usb` builds the GPT USB image the real machine needs.
 
@@ -1594,7 +1632,7 @@ make clean        # remove build artifacts
 
 ## Kernel startup
 
-`kernel_main` ([`main.c`](main.c)) brings the system up in this order:
+`kernel_main` ([`init/main.c`](init/main.c)) brings the system up in this order:
 
 UART/log → parse multiboot → **relocate the initrd module** → physical MM
 (e820, initrd frames reserved) → VMM (initrd identity-mapped) → kernel heap →
@@ -1605,7 +1643,7 @@ scheduler.
 
 `sched_init()` does not return: it builds one idle thread per core, releases
 the parked application processors and `iret`s into the scheduler's first
-process (`main_proc` in [`sched.c`](sched.c)), which mounts the boot RAM disk
+process (`main_proc` in [`kernel/sched.c`](kernel/sched.c)), which mounts the boot RAM disk
 (`/rd`), probes the floppy and IDE channels for any extra FAT volumes, starts
 the framebuffer redraw thread,
 the USB thread (`usb_thread` — enumerate, then poll HID endpoints and hub

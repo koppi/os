@@ -15,28 +15,28 @@ make qemu-iso                 # then, at the shell:
                               #   calc          a window on the desktop
                               #   clock &       ...and a second one beside it
                               #   calc -f       the whole screen instead
-make qemu-microui             # or drive it all headless (test/microui-boot.sh)
+make qemu-microui             # or drive it all headless (tools/testing/microui-boot.sh)
 ```
 
 Esc quits, and so does the window's close box.
 
 ## Why there is anything to port at all
 
-The kernel already draws its desktop with microui: [`microui.c`](../../microui.c)
-is vendored at the repo root, [`graphics.c`](../../graphics.c) drives it and
-[`renderer.c`](../../renderer.c) renders its command list into the 32-bpp
+The kernel already draws its desktop with microui: [`lib/microui.c`](../../lib/microui.c)
+is vendored in `lib/`, [`drivers/video/graphics.c`](../../drivers/video/graphics.c) drives it and
+[`drivers/video/renderer.c`](../../drivers/video/renderer.c) renders its command list into the 32-bpp
 framebuffer shadow. None of that is reachable from ring 3 — the shadow is
 kernel memory, and `draw_rect`/`draw_string` are kernel functions.
 
 What ring 3 *does* have is an 8-bpp indexed surface of its own, which the
 kernel will put on screen one of two ways:
 
-* **as a window** ([`wm.h`](../../wm.h), syscalls 39–43). The desktop keeps
+* **as a window** ([`include/linux/wm.h`](../../include/linux/wm.h), syscalls 39–43). The desktop keeps
   drawing, the window has a title bar to drag it by and a close box, up to four
   programs can have one at once, and the keyboard reaches a program only while
   its window is focused. The window manager owns the frame; the program owns
   the content and never learns where on screen it is.
-* **as the whole screen** ([`video.h`](../../video.h), syscalls 22–25 — the
+* **as the whole screen** ([`include/linux/video.h`](../../include/linux/video.h), syscalls 22–25 — the
   grab the Doom port added). The desktop is parked until the program gives it
   back. This is the fallback when there is no desktop to put a window on, and
   what `-f` asks for.
@@ -53,7 +53,7 @@ copied or forked.
 | `mui.c` / `mui.h` | the runtime: grab, paletted renderer, input pump, frame loop, drawing primitives |
 | `mkfont.c` | build-machine tool: slices the ASCII range out of `unifont.sfn` into `mui_font.h` |
 | `mui.mk` | the shared build rules an app's `Makefile` includes |
-| `shim/` | the three headers the vendored `microui.c` and the apps need that `lib/` does not have |
+| `shim/` | the three headers the vendored `microui.c` and the apps need that `usr/lib/` does not have |
 
 ### Colour: the palette is built, not chosen
 
@@ -121,19 +121,19 @@ too would put two on screen, a frame apart.
 ## The shim
 
 Three headers, for the gap between what the vendored `microui.c` includes and
-what the ring-3 libc in [`lib/`](../../lib) actually has:
+what the ring-3 libc in [`usr/lib/`](../../usr/lib) actually has:
 
-* `io.h` — `microui.c` includes the kernel's port-I/O header for exactly one
+* `asm/io.h` — `microui.c` includes the kernel's port-I/O header for exactly one
   symbol, `halt()`, which its `expect()` macro calls on a failed assertion. In
   ring 0 that is the `hlt` instruction, which ring 3 may not execute: it would
   turn a diagnosable assertion into a general protection fault. `mui.c` defines
   a userspace one that gives the screen back and exits.
-* `stdlib.h` — adds `qsort`, which `mu_end()` uses to order root containers by
-  z-index and which `include/lib/stdlib.h` has no reason to carry for anyone
+* `linux/stdlib.h` — adds `qsort`, which `mu_end()` uses to order root containers by
+  z-index and which `usr/include/lib/stdlib.h` has no reason to carry for anyone
   else. `mui.c` implements it as an insertion sort; the one caller sorts at
   most 32 pointers, already nearly in order, once a frame.
-* `printf.h` — the repo root's, by path, so that the apps and `microui.c`
-  (whose own quoted `#include "printf.h"` resolves next to itself) agree on
+* `linux/printf.h` — `include/linux/printf.h`, by path, so that the apps and `microui.c`
+  (which includes `<linux/printf.h>` too) agree on
   what `sprintf` means without putting the whole kernel include directory on an
   app's search path. The implementation linked in is
   [`apps/doom/shim/printf.c`](../doom/shim/printf.c) — the same upstream,
@@ -147,7 +147,7 @@ lays widgets out — and therefore cannot tell, and does not need to, which of
 the two paths it is on.
 
 ```c
-#include <printf.h>
+#include <linux/printf.h>
 #include "mui.h"
 
 static void frame(mu_Context *ctx, void *udata) {
@@ -159,9 +159,9 @@ int main(void) { return mui_run("Hello", 200, 120, frame, 0) < 0 ? 1 : 0; }
 ```
 
 plus a `Makefile` of four lines (`APP`, `OBJ`, an optional `APP_LIB_OBJ` for
-more of `lib/`, and `include ../microui/mui.mk`) and a linker script copied
+more of `usr/lib/`, and `include ../microui/mui.mk`) and a linker script copied
 from a neighbour. Then add it to [`apps/Makefile`](../Makefile),
-[`hda.sh`](../../hda.sh) and `.gitignore`.
+[`scripts/hda.sh`](../../scripts/hda.sh) and `.gitignore`.
 
 ## Licensing
 

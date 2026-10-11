@@ -3,7 +3,7 @@
  * @brief The ring-3 microui runtime: a microui window for a userspace
  *        program, on the desktop or on the whole screen.
  *
- * The kernel's own desktop drives the same vendored microui (../../microui.c)
+ * The kernel's own desktop drives the same vendored microui (lib/microui.c)
  * through renderer.c, straight into the 32-bpp framebuffer shadow. A ring-3
  * program cannot touch that shadow. What it gets instead is an 8-bpp indexed
  * surface of its own, presented one frame at a time through a 256-entry
@@ -26,7 +26,7 @@
  */
 #pragma once
 
-#include "../../microui.h"
+#include "../../include/linux/microui.h"
 
 /**
  * @name The surface

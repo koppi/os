@@ -15,7 +15,7 @@
  *
  * There is no audio thread. This kernel has userspace threads (syscalls
  * 32-35) and the tracker would be a reasonable use for one, but a process
- * gets a single CPU (lib/pthread.c's note on process_t::cpu), so a render
+ * gets a single CPU (usr/lib/pthread.c's note on process_t::cpu), so a render
  * thread would be interleaved with the UI by the scheduler rather than run
  * beside it -- the same total work, with a shared Engine to protect. Pumping
  * from the frame loop keeps the engine single-threaded, which is what

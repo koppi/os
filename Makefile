@@ -12,39 +12,33 @@ CC=gcc
 LD=ld
 OBJCOPY=objcopy
 
-SRCS = $(wildcard *.c *.S) $(wildcard lib/*.c)
-# ap_boot.S is a flat binary (AP trampoline), not an ELF asm object, so it is
-# excluded from the generic *.c/*.S rule and built via ap_boot_bin.o.
-SRCS := $(filter-out ap_boot.S,$(SRCS))
-# lib/cxx_start.c is a userspace-only ELF entry point for C++ apps (it calls
-# `main`, which the kernel has no symbol named); it belongs to lib/Makefile's
-# own build, not the kernel's.
-SRCS := $(filter-out lib/cxx_start.c,$(SRCS))
-# lib/pthread_glibc.c is a userspace-only pthread implementation built
-# against the real system <pthread.h>/<sched.h> (for Qt/libstdc++ ABI
-# compatibility -- see its own file comment); <sched.h> collides head-on
-# with this kernel's own top-level sched.h (the in-kernel scheduler) once
-# both are reachable via the same -I., so it is compiled by its own app's
-# Makefile with a narrower include path instead of the kernel's.
-SRCS := $(filter-out lib/pthread_glibc.c,$(SRCS))
-# lib/libc_ext.c is a userspace-only libc extension (real glibc-shaped
-# semaphore/setjmp/time/etc. surface for the real Qt6 graphical closure)
-# built against real system <semaphore.h>/<setjmp.h>/<time.h> and
-# lib/pthread_glibc.c's own clock_gettime()/__errno_location() -- same
-# reasoning and same exclusion as lib/pthread_glibc.c above.
-SRCS := $(filter-out lib/libc_ext.c,$(SRCS))
-# lib/emutls.c, lib/tls.c, lib/libm.c and lib/pthread.c are userspace-only too (emulated TLS on
-# top of the pthread shim, the real ELF TLS runtime behind the set_thread_area syscall, the x87
-# libm, and the pthread-shaped shim over the thread syscalls); lib/Makefile builds them with the
-# user flags. Left in SRCS they only "worked" while a stale lib/*.o from that build sat there for
-# the kernel link to pick up, and broke every clean kernel build (host <string.h>,
-# -pedantic-errors).
-SRCS := $(filter-out lib/emutls.c lib/tls.c lib/libm.c lib/pthread.c,$(SRCS))
-AP_BOOT_BIN = ap_boot_bin.o
-OBJS = $(addsuffix .o,$(basename $(SRCS))) font.o $(AP_BOOT_BIN)
+# The kernel is laid out like Linux: one directory per subsystem, with the headers in
+# include/linux (generic), include/crypto and arch/x86/include/asm (x86 only).
+KDIRS := \
+	arch/x86/boot arch/x86/kernel arch/x86/mm arch/x86/lib \
+	block crypto \
+	drivers/acpi drivers/ata drivers/block drivers/clocksource drivers/gpu drivers/hid \
+	drivers/input/joystick drivers/input/keyboard drivers/input/mouse drivers/net \
+	drivers/nvme drivers/pci drivers/rtc drivers/tty/serial drivers/usb/core \
+	drivers/usb/host drivers/video \
+	fs fs/fat fs/nfs init kernel kernel/debug kernel/locking kernel/printk lib mm net sound
+
+# Six files of the userland C library (usr/lib) are linked into the kernel image as well --
+# string.c's memcpy and friends, and system_calls.c's end_process_return(), whose code sched.c
+# copies to RETURN_ADDR. `make libc` builds them with the user flags and the kernel link just picks the
+# objects up; the rest of usr/lib (pthread, the C++ runtime, TLS, libm, ...) is ring-3 only.
+KLIBC = mutex stdio stdlib string system_calls unistd
+
+SRCS = $(foreach d,$(KDIRS),$(wildcard $(d)/*.c $(d)/*.S)) \
+       $(addprefix usr/lib/,$(addsuffix .c,$(KLIBC)))
+# The AP trampoline (arch/x86/realmode/ap_boot.S) is a flat binary, not an ELF asm object, so it
+# lives outside KDIRS and is built via ap_boot_bin.o below.
+AP_BOOT_BIN = arch/x86/realmode/ap_boot_bin.o
+FONT_OBJ = lib/fonts/font.o
+OBJS = $(addsuffix .o,$(basename $(SRCS))) $(FONT_OBJ) $(AP_BOOT_BIN)
 KERNEL = kernel.elf
 
-ASFLAGS += -m32 -I.
+ASFLAGS += -m32 -I. -Iinclude -Iarch/x86/include
 
 CFLAGS += -O3
 CFLAGS += -DDEBUG
@@ -55,7 +49,10 @@ CFLAGS += -finline-functions -Wno-missing-field-initializers
 CFLAGS += -fno-omit-frame-pointer -ffreestanding -fno-builtin
 CFLAGS += -nodefaultlibs
 #CFLAGS += -nostdlib -nostdinc -fno-builtin
-CFLAGS += -I. -Iinclude
+CFLAGS += -Iinclude -Iarch/x86/include
+# usr/lib's sources say <lib/string.h> and friends; this is only so they also compile when the
+# kernel Makefile has to build them itself (no `make libc` first).
+CFLAGS += -Iusr/include
 
 GIT_COUNT := $(shell git rev-list --count HEAD 2>/dev/null || echo 0)
 GIT_HASH_TAIL := $(shell git rev-parse HEAD 2>/dev/null | sed 's/^.\{32\}//')
@@ -66,7 +63,7 @@ CFLAGS += -DOS_VER_MAJ=0 -DOS_VER_MIN=$(GIT_COUNT) -DOS_VER_REV=$(GIT_REV)
 #CFLAGS += -Wno-int-conversion -Wno-sign-compare -Wno-maybe-uninitialized
 #CFLAGS += -Wno-strict-aliasing
 
-LDFLAGS += -melf_i386 -T kernel.lds -Map kernel.map -z muldefs -z noexecstack
+LDFLAGS += -melf_i386 -T arch/x86/kernel/kernel.lds -Map kernel.map -z muldefs -z noexecstack
 
 # Networking backend for the e1000 NIC:
 #   NET=user   (default) SLIRP user-mode networking. No host setup needed, but
@@ -130,27 +127,27 @@ QEMUFLAGS += -device usb-kbd,port=1
 QEMUFLAGS += -device usb-hub,port=2 -device usb-mouse,port=2.1
 QEMUFLAGS += $(NETDEV)
 
-all: lib apps $(KERNEL)
+all: libc apps $(KERNEL)
 
-lib:
-	$(MAKE) -C lib
+libc:
+	$(MAKE) -C usr/lib
 
 apps:
 	$(MAKE) -C apps
 
 # The boot RAM disk: the whole userland, packed into a FAT16 image that GRUB
-# hands to the kernel as a Multiboot module. hda.sh picks the size -- 8 MiB is
+# hands to the kernel as a Multiboot module. scripts/hda.sh picks the size -- 8 MiB is
 # plenty for the payload plus a few generations of cc output (it is RAM-backed
 # and ephemeral), 16 MiB when a Doom IWAD is being staged with it.
-initrd.img: hda.sh apps $(wildcard doom1.wad)
+initrd.img: scripts/hda.sh apps $(wildcard doom1.wad)
 	@echo "  IMG initrd.img"
-	@IMG=initrd.img ./hda.sh >/dev/null
+	@IMG=initrd.img ./scripts/hda.sh >/dev/null
 
 iso: $(KERNEL) initrd.img
 	@mkdir -p iso/boot/grub
 	@cp $(KERNEL) iso/boot/$(KERNEL)
 	@cp initrd.img iso/boot/initrd.img
-	@cp grub.cfg iso/boot/grub/grub.cfg
+	@cp arch/x86/boot/grub/grub.cfg iso/boot/grub/grub.cfg
 	@grub-mkrescue -o os.iso iso 1>&2 2>/dev/null
 
 qemu-kernel: $(KERNEL) initrd.img
@@ -168,61 +165,61 @@ qemu-nox: iso
 # Boot os.iso in X250-shaped QEMU configs (q35 + AHCI + xHCI + e1000e) under
 # both SeaBIOS and OVMF/UEFI; serial log + screenshot per config in /tmp/x250-boot.
 qemu-x250: iso
-	@bash test/x250-boot.sh all
+	@bash tools/testing/x250-boot.sh all
 
 # Boot os.iso in T470s-shaped QEMU configs (q35 + NVMe + xHCI + e1000e + HD
 # Audio) under both SeaBIOS and OVMF/UEFI; logs + screenshots in /tmp/t470s-boot.
 qemu-t470s: iso
-	@bash test/t470s-boot.sh all
+	@bash tools/testing/t470s-boot.sh all
 
 # Boot the kernel (via -kernel, with `ehci` on the command line) in X220-shaped
 # QEMU configs (BIOS/CSM + AHCI + EHCI USB — no xHCI — + an Intel e1000 NIC);
 # logs + screenshots in /tmp/x220-boot.
 qemu-x220: $(KERNEL) initrd.img
-	@bash test/x220-boot.sh all
+	@bash tools/testing/x220-boot.sh all
 
 # Boot os.iso in MacBook Air 2013-shaped QEMU configs (q35 + xHCI-only + QXL
 # GOP-like video, UEFI/OVMF only); logs + screenshots in /tmp/mba-boot.
 qemu-mba: iso
-	@bash test/mba-boot.sh all
+	@bash tools/testing/mba-boot.sh all
 
 # Log into the in-kernel SSH server with a stock OpenSSH client and check its
 # shell's line editor (needs ssh + sshpass on the host); logs in /tmp/ssh-boot.
 qemu-ssh: iso
-	@bash test/ssh-boot.sh
+	@bash tools/testing/ssh-boot.sh
 
 # Check the raw key stream (what a full-screen program reads) on all three
 # keyboard paths -- i8042, USB HID over UHCI, USB HID over xHCI with no i8042 at
 # all, which is the MacBook Air's topology. Needs no WAD; logs in /tmp/keys-boot.
 qemu-keys: iso
-	@bash test/keys-boot.sh all
+	@bash tools/testing/keys-boot.sh all
 
 # Check the USB game-controller driver on all three host controllers: a pad that
-# QEMU does not have is played by test/usbpad.py over usb-redir (a generic pad on
+# QEMU does not have is played by tools/testing/usbpad.py over usb-redir (a generic pad on
 # UHCI, a DualShock-shaped one on xHCI with an unplug/replug, an Xbox 360 pad on
-# EHCI). Needs no WAD; logs in /tmp/pad-boot. `bash test/pad-boot.sh doom` then
+# EHCI). Needs no WAD; logs in /tmp/pad-boot. `bash tools/testing/pad-boot.sh doom` then
 # plays Doom with the pad (needs doom1.wad).
 qemu-pad: iso
-	@bash test/pad-boot.sh all
+	@bash tools/testing/pad-boot.sh all
 
 # The game-controller descriptor parser and report decoder as a plain host
 # program, with AddressSanitizer + a fuzzer: no kernel, no QEMU.
 test-gamepad:
 	@gcc -std=gnu11 -Wall -Wextra -g -fsanitize=address,undefined \
-	    -fno-sanitize-recover=undefined -I test/hoststubs -idirafter . \
-	    -o /tmp/gamepad-test test/gamepad-test.c gamepad.c
+	    -fno-sanitize-recover=undefined -I tools/testing/hoststubs -idirafter include \
+	    -o /tmp/gamepad-test tools/testing/gamepad-test.c drivers/input/joystick/gamepad.c
 	@/tmp/gamepad-test
 
 # Drive apps/doom headless in QEMU: start the game over the serial console,
 # send keystrokes through the monitor, screenshot each step into /tmp/doom-boot.
 # Needs a WAD staged on the RAM disk (apps/doom/PORTING.md).
 qemu-doom: iso
-	@bash test/doom-boot.sh all
+	@bash tools/testing/doom-boot.sh all
 
 # Drive apps/chipnomad the same way: start the tracker over the serial console,
 # walk its screens, load a song, play it into a WAV, screenshot each step.
 qemu-chipnomad: iso
-	@bash test/chipnomad-boot.sh all
+	@bash tools/testing/chipnomad-boot.sh all
 
 # Drive the ring-3 microui apps (apps/calc, apps/clock) and the window manager
 # they run on: start them over the serial console, check two windows share the
@@ -231,31 +228,31 @@ qemu-chipnomad: iso
 # check the full-screen fallback still works. Screenshots and the apps' own log
 # lines per step in /tmp/microui-boot.
 qemu-microui: iso
-	@bash test/microui-boot.sh all
+	@bash tools/testing/microui-boot.sh all
 
 # Drive apps/hello-qt-gui (the real Qt 6.8 window) and judge it from pixels:
 # right shape and gradient, the ball animates, Esc returns the desktop. Needs
 # the app built first: make -C apps/hello-qt-gui -j4
 qemu-qt-gui: iso
-	@bash test/qt-gui-boot.sh all
+	@bash tools/testing/qt-gui-boot.sh all
 
 # Drive apps/hello-qt-widgets (real QtWidgets) with the keyboard and the mouse and
 # judge it from the app's own serial log: focus chain, buttons, sliders, typing,
 # the combo-box popup, a run-time style switch, Quit. Needs the app built first:
 # make -C apps/hello-qt-widgets -j4
 qemu-qt-widgets: iso
-	@bash test/qt-widgets-boot.sh all
+	@bash tools/testing/qt-widgets-boot.sh all
 
 # Drive apps/qt-lua (Lua with the Qt6 bindings of tsujikiri-qt): the self-check of the bindings, then
 # the widgets demo with the keyboard and the mouse.
 # the app built first: make -C apps/qt-lua -j2
 qemu-qt-lua: iso
-	@bash test/qt-lua-boot.sh all
+	@bash tools/testing/qt-lua-boot.sh all
 
 # Build a GPT+FAT32 UEFI USB image (os-usb.img) that the UEFI-only laptops
 # (no CSM, e.g. a MacBook) boot from: grub2 x86_64-efi + kernel + initrd.
 usb: $(KERNEL) initrd.img
-	@bash ./make-usb.sh
+	@bash ./scripts/make-usb.sh
 
 $(KERNEL): $(OBJS)
 	@echo "  LD $@"
@@ -270,17 +267,19 @@ $(KERNEL): $(OBJS)
 	@$(CC) -MD $(ASFLAGS) -o $@ -c $<
 
 # AP trampoline: assemble to a flat binary and wrap it as an ELF object so the
-# linker embeds it; C accesses it via _binary_ap_boot_bin_start/_end/_size.
-ap_boot_bin.o: ap_boot.S ap_boot.ld
-	@echo "  AS ap_boot.S"
-	@$(CC) $(ASFLAGS) -o ap_boot.tmp.o -c ap_boot.S
-	@$(LD) -m elf_i386 -T ap_boot.ld -o ap_boot.tmp.elf ap_boot.tmp.o
-	@$(OBJCOPY) -O binary ap_boot.tmp.elf ap_boot.bin
-	@$(OBJCOPY) -I binary -O elf32-i386 -B i386 ap_boot.bin $@
-	@rm -f ap_boot.tmp.o ap_boot.tmp.elf
+# linker embeds it; C accesses it via _binary_ap_boot_bin_start/_end/_size. objcopy derives
+# those symbol names from the input file name as given, hence the cd.
+$(AP_BOOT_BIN): arch/x86/realmode/ap_boot.S arch/x86/realmode/ap_boot.ld
+	@echo "  AS $<"
+	@$(CC) $(ASFLAGS) -o $(@D)/ap_boot.tmp.o -c $<
+	@$(LD) -m elf_i386 -T $(@D)/ap_boot.ld -o $(@D)/ap_boot.tmp.elf $(@D)/ap_boot.tmp.o
+	@$(OBJCOPY) -O binary $(@D)/ap_boot.tmp.elf $(@D)/ap_boot.bin
+	@cd $(@D) && $(OBJCOPY) -I binary -O elf32-i386 -B i386 ap_boot.bin $(@F)
+	@rm -f $(@D)/ap_boot.tmp.o $(@D)/ap_boot.tmp.elf
 
-font.o:
-	@$(OBJCOPY) -O elf32-i386 -B i386 -I binary unifont.sfn font.o
+# The console font, embedded as _binary_unifont_sfn_start/_end (again named after the input).
+$(FONT_OBJ): lib/fonts/unifont.sfn
+	@cd $(@D) && $(OBJCOPY) -O elf32-i386 -B i386 -I binary unifont.sfn $(@F)
 
 kernel.lst: $(KERNEL)
 	objdump -D $(KERNEL) > kernel.lst
@@ -289,13 +288,14 @@ cloc::
 	cloc . --exclude-ext=md,txt,toml,json
 
 docs::
-	doxygen Doxyfile
+	doxygen Documentation/Doxyfile
 
 clean::
-	@$(MAKE) -C lib clean
+	@$(MAKE) -C usr/lib clean
 	@$(MAKE) -C apps clean
-	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin ap_boot.tmp.* *.d lib/*.d *~ os.iso iso initrd.img docs
+	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) $(OBJS:.o=.d) arch/x86/realmode/ap_boot.bin \
+	    arch/x86/realmode/ap_boot.tmp.* *~ os.iso iso initrd.img docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-pad test-gamepad qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets qemu-qt-lua cloc docs clean
+.PHONY: all libc apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-pad test-gamepad qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets qemu-qt-lua cloc docs clean
 
 -include $(OBJS:.o=.d)

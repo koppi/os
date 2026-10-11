@@ -14,7 +14,7 @@ Everything Qt-side lives in [`third_party/qt6-gui`](../../third_party/qt6-gui)
 
 ```
 make -C apps/hello-qt-gui -j4      # ~20 min the first time (shared with hello-qt-widgets), incremental after
-make initrd.img                    # hda.sh stages hqtgui + /rd/font.ttf if the binary exists
+make initrd.img                    # scripts/hda.sh stages hqtgui + /rd/font.ttf if the binary exists
 make qemu-iso                      # needs the GRUB framebuffer boot; then type: hqtgui
 ```
 

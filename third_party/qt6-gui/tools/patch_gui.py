@@ -43,7 +43,7 @@ if not already_gui:
 # QThreadData::current() was one shared global and the first pool worker made the
 # main thread "see" the worker's thread data (tried 2026-10-05: sendEvent asserts
 # "owned by a different thread"). That reason is gone -- TLS is real now
-# (set_thread_area + lib/tls.c), and the seven thread_local patches are dropped.
+# (set_thread_area + usr/lib/tls.c), and the seven thread_local patches are dropped.
 p2 = sys.argv[1] + "/src/corelib/thread/qthreadpool.cpp"
 t = open(p2).read()
 if "koppios" not in t:

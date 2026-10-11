@@ -35,8 +35,8 @@ qtlua /rd/my.lua            # a script of your own (FAT 8.3 names)
 
 Needs a framebuffer boot (the ISO), like the other Qt programs. `print` goes to the serial console.
 
-`make qemu-qt-lua` boots headless and judges `selftest.lua` and the demo from the serial log and a few pixels (`test/qt-lua-boot.sh`); `test/qt-lua-boot.sh script file.lua` runs a script of yours on a fresh boot and shows what it printed.
+`make qemu-qt-lua` boots headless and judges `selftest.lua` and the demo from the serial log and a few pixels (`tools/testing/qt-lua-boot.sh`); `tools/testing/qt-lua-boot.sh script file.lua` runs a script of yours on a fresh boot and shows what it printed.
 
 ## What the OS gave it
 
-The bindings are generated from the headers of the vendored Qt with the OS's feature set, and only for what the vendored libraries define, so they follow `third_party/qt6-gui`: vendor more of Qt and the next build binds it. For the Lua runtime, `lib/` grew `ldexp`, `frexp`, `asin`, `sincos`, `strspn`, `strpbrk`, `time`, `clock` and the POSIX file calls that fail the way a read-only file system does (`mkdir`, `unlink`, `flock`, `uname`, ...), and `lib/cxx_start.c` now hands `argc` and `argv` to `main`.
+The bindings are generated from the headers of the vendored Qt with the OS's feature set, and only for what the vendored libraries define, so they follow `third_party/qt6-gui`: vendor more of Qt and the next build binds it. For the Lua runtime, `lib/` grew `ldexp`, `frexp`, `asin`, `sincos`, `strspn`, `strpbrk`, `time`, `clock` and the POSIX file calls that fail the way a read-only file system does (`mkdir`, `unlink`, `flock`, `uname`, ...), and `usr/lib/cxx_start.c` now hands `argc` and `argv` to `main`.

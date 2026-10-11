@@ -27,7 +27,7 @@
 /*
  * Vendored mpaland printf (apps/doom/shim/printf.c) with its SOFT alias
  * config, which defines only the trailing-underscore names; these are the
- * standard spellings on top. lib/libc_ext.c has its own snprintf, but it
+ * standard spellings on top. usr/lib/libc_ext.c has its own snprintf, but it
  * ignores width and precision entirely -- "%02X" comes out as "A" -- and the
  * tracker's whole 40x20 grid is built out of those, so this app compiles
  * libc_ext.c with -DKOPPIOS_APP_STDIO and uses the real formatter.
@@ -76,7 +76,7 @@ int __snprintf_chk(char *s, size_t n, int flag, size_t slen, const char *fmt, ..
 /*
  * Real functions, not the __ctype_b_loc() table lookups glibc's macros
  * expand to in C: this app is C++, where <ctype.h> declares these as
- * functions and the call needs a symbol. (lib/libc_ext.c supplies the table
+ * functions and the call needs a symbol. (usr/lib/libc_ext.c supplies the table
  * for anything that does use the macro form.)
  *
  * The #undefs are for this file only: in C, which this file is, glibc's

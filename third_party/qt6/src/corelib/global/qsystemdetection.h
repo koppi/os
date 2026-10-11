@@ -56,7 +56,7 @@
     * syscall ABI, not a real Unix -- falls through to the generic
     * Q_OS_UNIX branch below (deliberately no Q_OS_LINUX: no epoll, no
     * /proc, no real Linux syscalls beneath this, just a from-scratch
-    * pthread-shaped shim -- see lib/pthread.c in that tree). Checked FIRST,
+    * pthread-shaped shim -- see usr/lib/pthread.c in that tree). Checked FIRST,
     * ahead of every real-OS #elif below: this is compiled with the host's
     * own g++, which predefines __linux__ (and, on other hosts, __APPLE__/
     * _WIN32/...) regardless of what target this file is actually building

@@ -1,7 +1,7 @@
 /*
  * sscanf for this port.
  *
- * lib/libc_ext.c has one, but it handles only %d/%i/%u/%s -- enough for the
+ * usr/lib/libc_ext.c has one, but it handles only %d/%i/%u/%s -- enough for the
  * Qt closure it was written for, not for ChipNomad, which parses its whole
  * project format with sscanf and needs more:
  *
@@ -149,7 +149,7 @@ int koppios_vsscanf(const char *str, const char *fmt, va_list ap)
             while (is_space((unsigned char) *s)) s++;
             if (!*s) return assigned ? assigned : EOF;
 
-            /* strtod (lib/libc_ext.c has the real one) does the conversion;
+            /* strtod (usr/lib/libc_ext.c has the real one) does the conversion;
              * a field width is honoured by copying out that many characters
              * first, which no call site here actually uses. */
             char tmp[64];

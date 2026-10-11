@@ -11,7 +11,7 @@ LDFLAGS += -melf_i386 -T hello_umap.lds -Map hello_umap.map
 
 all:
 	@$(CXX) $(CXXFLAGS) -c main.cpp
-	@$(LD) $(LDFLAGS) -o helloump ../../lib/cxx_start.o main.o ../../lib/cxxabi.o ../../lib/cxx_hashtable.o ../../lib/stdio.o ../../lib/string.o ../../lib/system_calls.o ../../lib/stdlib.o
+	@$(LD) $(LDFLAGS) -o helloump ../../usr/lib/cxx_start.o main.o ../../usr/lib/cxxabi.o ../../usr/lib/cxx_hashtable.o ../../usr/lib/stdio.o ../../usr/lib/string.o ../../usr/lib/system_calls.o ../../usr/lib/stdlib.o
 
 clean:
 	@rm -f helloump hello_umap.map *.o

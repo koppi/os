@@ -4,7 +4,7 @@
  *        zero new runtime code -- std::set is backed by the exact same
  *        std::_Rb_tree as std::map (just keyed on the value itself instead
  *        of a pair's first member), so it links straight against the
- *        lib/cxx_rbtree.cpp functions apps/hello-map already exercises.
+ *        usr/lib/cxx_rbtree.cpp functions apps/hello-map already exercises.
  *
  * Same reason as apps/hello-str/hello-map for not including our own
  * <stdio.h>: the real <set> transitively reaches the real system <cstdio>.

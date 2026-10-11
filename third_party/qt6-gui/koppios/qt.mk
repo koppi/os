@@ -18,7 +18,7 @@
 
 .DEFAULT_GOAL := all
 
-LIB := ../../lib
+LIB := ../../usr/lib
 B   := $(Q)/build
 
 include $(Q)/koppios/sources.mk
@@ -49,7 +49,7 @@ QT_INC := $(addprefix -I $(Q)/,$(QT_INCDIRS))
 # Compiled with the host's real system headers (no -ffreestanding), linked against this
 # kernel's runtime. No -fkeep-inline-functions (it made objects 50x larger and OOM-killed
 # ar/ld). -fno-exceptions/-fno-rtti: no unwinder or typeinfo runtime exists here
-# (lib/cxxabi.cpp).
+# (usr/lib/cxxabi.cpp).
 QT_CXXFLAGS := -m32 -std=gnu++20 -fno-builtin -fno-exceptions -fno-rtti -fno-strict-aliasing \
   -ffunction-sections -fdata-sections -Os -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=0 \
   -fno-stack-protector -D__KOPPIOS__ -DQT_USE_QSTRINGBUILDER -DQT_BUILD_GUI_LIB \
@@ -82,7 +82,7 @@ QGRAY_FLAGS := -m32 -fno-builtin -fno-strict-aliasing -ffunction-sections -fdata
   -DQT_BUILD_CORE_LIB -DQT_DISABLE_DEPRECATED_UP_TO=QT_VERSION \
   -include $(Q)/koppios/include/QtCore/qglobal.h -include dirent.h -w $(QT_INC)
 
-# object path mirrors the source path ("../../lib/x.cpp" -> build/_/_/lib/x.o), so same-named
+# object path mirrors the source path ("../../usr/lib/x.cpp" -> build/_/_/lib/x.o), so same-named
 # files (corelib and gui both have removed_api.cpp) can never collide.
 objof = $(B)/$(subst ../,_/,$(basename $(1))).o
 
@@ -151,7 +151,7 @@ endef
 klib:
 	@$(MAKE) -s -C $(LIB)
 
-# lib/Makefile recompiles all of lib/ on every run, so after `klib` the objects are always new
+# usr/lib/Makefile recompiles all of lib/ on every run, so after `klib` the objects are always new
 # and an app relinks whenever it is built. (As an order-only prerequisite `klib` ran but a change
 # in lib/ never relinked the app: it kept the old runtime.)
 $(KLIB): klib

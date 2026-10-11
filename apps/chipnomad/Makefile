@@ -16,7 +16,7 @@
 # only work with libstdc++'s idea of <stdint.h> and friends.
 
 CN   = ../../third_party/chipnomad
-LIB  = ../../lib
+LIB  = ../../usr/lib
 DOOM = ../doom
 
 CXX = g++
@@ -91,7 +91,7 @@ AYUMI_OBJ   = $(addprefix $(BUILD)/,$(notdir $(AYUMI_SRC:.cpp=.o)))
 PORT_OBJ    = $(addprefix $(BUILD)/,$(notdir $(PORT_SRC:.cpp=.o)))
 
 # This port's C library: the FILE/printf/sscanf surface lib/ does not have,
-# plus lib/libc_ext.c rebuilt with that surface left out (-DKOPPIOS_APP_STDIO).
+# plus usr/lib/libc_ext.c rebuilt with that surface left out (-DKOPPIOS_APP_STDIO).
 # printf.c is the vendored mpaland printf apps/doom already carries -- compiled
 # here into this app's own object, not shared with doom's build.
 SHIM_OBJ = $(BUILD)/stdio_koppios.o $(BUILD)/scanf_koppios.o \

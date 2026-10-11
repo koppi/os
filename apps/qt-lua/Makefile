@@ -8,7 +8,7 @@
 # tsujikiri-qt or tsujikiri-qt6, or TSUJIKIRI_QT6=/path), tsujikiri in a Python virtual environment (made on demand, see
 # koppios/requirements.txt there) and a git clone of LuaBridge3. All the rules live in
 # $(TSUJIKIRI_QT6)/koppios/koppios.mk; the Qt objects are shared with the other Qt apps.
-# hda.sh stages qtlua and the scripts of $(TSUJIKIRI_QT6)/koppios/scripts when the binary exists.
+# scripts/hda.sh stages qtlua and the scripts of $(TSUJIKIRI_QT6)/koppios/scripts when the binary exists.
 #
 # One translation unit of bindings needs about a gigabyte: -j2 is plenty on a 16 GB machine.
 

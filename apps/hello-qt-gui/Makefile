@@ -5,7 +5,7 @@
 #
 # Deliberately NOT part of `make -C apps`: Qt is ~560 translation units (about 20 minutes at
 # -j4 on first build, incremental afterwards; objects are shared with apps/hello-qt-widgets
-# in third_party/qt6-gui/build). hda.sh stages hqtgui + font.ttf on the RAM disk only when the
+# in third_party/qt6-gui/build). scripts/hda.sh stages hqtgui + font.ttf on the RAM disk only when the
 # binary exists, the way it treats the Doom IWAD. Run `hqtgui` from the shell on a
 # framebuffer boot. All flags live in third_party/qt6-gui/koppios/qt.mk.
 

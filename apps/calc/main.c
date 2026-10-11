@@ -19,7 +19,7 @@
  * or '=' applies, Backspace rubs out a digit, 'c' clears, 'n' negates, and
  * Esc gives the screen back to the desktop.
  */
-#include <printf.h>
+#include <linux/printf.h>
 
 #include "mui.h"
 
@@ -124,7 +124,7 @@ static void type_back(calc *c) {
  * Every completed operation is echoed to the console. That console is behind
  * the grabbed screen while this program runs, so it is not something the user
  * reads now -- it goes to the serial log, which is how the port is checked
- * without sitting in front of a display (test/microui-boot.sh).
+ * without sitting in front of a display (tools/testing/microui-boot.sh).
  */
 static int apply(calc *c, double rhs) {
     char lhs[32];

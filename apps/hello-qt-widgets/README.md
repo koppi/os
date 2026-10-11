@@ -20,7 +20,7 @@ popups.
 Every state change is also written to the serial console as
 `widgets: <what happened>` (`button clicked 3`, `slider 26`, `focus QCheckBox
 'Enable the thing'`, `combo 1 'Windows'`, ...). That log, not pixel matching,
-is what `test/qt-widgets-boot.sh` asserts.
+is what `tools/testing/qt-widgets-boot.sh` asserts.
 
 Everything Qt-side lives in [`third_party/qt6-gui`](../../third_party/qt6-gui)
 (real, vendored source; start with its README).
@@ -29,7 +29,7 @@ Everything Qt-side lives in [`third_party/qt6-gui`](../../third_party/qt6-gui)
 
 ```
 make -C apps/hello-qt-widgets -j4  # first Qt build ~20 min, shared with hello-qt-gui; then seconds
-make iso                           # hda.sh stages hqtwid + /rd/font.ttf if the binary exists
+make iso                           # scripts/hda.sh stages hqtwid + /rd/font.ttf if the binary exists
 make qemu-iso                      # needs the GRUB framebuffer boot; then type: hqtwid
 ```
 

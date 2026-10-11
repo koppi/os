@@ -18,8 +18,8 @@
  * extra syscall and a 1 KiB copy per frame and means the indices in the
  * surface can never refer to a palette the kernel no longer has.
  */
-#include <io.h>            /* the shim/ one: declares halt() -- see shim/io.h */
-#include <stdlib.h>        /* the shim/ one too: declares qsort() */
+#include <asm/io.h>        /* the shim/ one: declares halt() -- see shim/asm/io.h */
+#include <linux/stdlib.h>  /* the shim/ one too: declares qsort() */
 #include <lib/string.h>
 
 #include "mui.h"
@@ -98,7 +98,7 @@ unsigned mui_ms(void)   { return ksys0(SYS_CLOCK); }
 unsigned mui_unix(void) { return ksys0(SYS_TIME); }
 
 /**
- * @brief The character sink behind the vendored printf (../../printf.c's
+ * @brief The character sink behind the vendored printf (lib/printf.c's
  *        `putchar_` hook, which apps/doom/shim/printf.c expects the program
  *        to provide).
  *
@@ -132,7 +132,7 @@ void halt(void) {
  * ------------------------------------------------------------------ */
 
 /**
- * @brief The `qsort` the vendored microui.c calls (see shim/stdlib.h).
+ * @brief The `qsort` the vendored microui.c calls (see shim/linux/stdlib.h).
  *
  * Insertion sort, deliberately: the one caller is mu_end(), ordering at most
  * MU_ROOTLIST_SIZE (32) container pointers by z-index once a frame, on a list

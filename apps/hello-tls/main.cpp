@@ -5,8 +5,8 @@
  *        private copy per thread that survives context switches, and thread slots that can be
  *        created and reclaimed over and over.
  *
- * Built like Qt's threaded code is: against the real system <pthread.h> (lib/pthread_glibc.c),
- * with the TLS runtime from lib/tls.c and a linker script that defines the TLS segment symbols.
+ * Built like Qt's threaded code is: against the real system <pthread.h> (usr/lib/pthread_glibc.c),
+ * with the TLS runtime from usr/lib/tls.c and a linker script that defines the TLS segment symbols.
  * Prints one "tls: <what>: ok|FAIL" line per check and "tls: PASS" / "tls: FAIL" at the end;
  * the exit status says the same.
  */

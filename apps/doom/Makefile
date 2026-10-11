@@ -76,7 +76,7 @@ shim/libm_s.o: shim/libm.S
 
 # 64-bit soft arithmetic (FixedDiv and friends): build our own copy - the
 # kernel's arith64.o may not exist yet when `make` reaches apps/.
-shim/arith64.o: ../../arith64.c
+shim/arith64.o: ../../arch/x86/lib/arith64.c
 	@$(CC) -m32 -O2 -ffreestanding -fno-builtin -nostdlib -fno-pic -fno-pie \
 	       -fno-stack-protector -w -c $< -o $@
 

@@ -1,0 +1,48 @@
+# Doxygen configuration for koppi's hobby OS.
+# Generate with:  make docs   (output in docs/html/index.html)
+
+PROJECT_NAME           = "koppi's hobby OS"
+PROJECT_BRIEF          = "A small hobby OS for the i386 architecture"
+OUTPUT_DIRECTORY       = docs
+CREATE_SUBDIRS         = NO
+
+# Sources: the kernel tree and the example apps. Skip vendored code, the
+# Apache-licensed userspace libc (usr/), and generated / build artefacts.
+INPUT                  = arch block crypto drivers fs include init kernel lib mm net sound apps
+FILE_PATTERNS          = *.c *.h *.S
+RECURSIVE              = YES
+EXCLUDE                = lib/printf.c include/linux/printf.h \
+                         lib/microui.c include/linux/microui.h \
+                         sound/hxcmod.c include/linux/hxcmod.h \
+                         include/linux/ssfn.h \
+                         lib/rbtree.c include/linux/rbtree.h \
+                         lib/list.c include/linux/list.h \
+                         lib/hashtable.c include/linux/hashtable.h \
+                         lib/queue.c include/linux/queue.h \
+                         lib/stack.c include/linux/stack.h \
+                         arch/x86/lib/arith64.c \
+                         lib/qsort.c lib/qsort_r.c \
+                         lib/ctype.c include/linux/ctype.h \
+                         lib/hash_string.c include/linux/hash_string.h \
+                         include/linux/fat_mount.h
+EXCLUDE_PATTERNS       = */iso/* */docs/*
+INCLUDE_PATH           = include arch/x86/include
+PREDEFINED             = DEBUG __ASSEMBLER__=0 "__attribute__(x)=" "volatile="
+MACRO_EXPANSION        = YES
+EXPAND_ONLY_PREDEF     = YES
+
+# Extraction.
+EXTRACT_ALL            = YES
+EXTRACT_STATIC         = YES
+EXTRACT_LOCAL_CLASSES  = YES
+OPTIMIZE_OUTPUT_FOR_C  = YES
+TYPEDEF_HIDES_STRUCT   = YES
+
+# Output.
+GENERATE_HTML          = YES
+GENERATE_LATEX         = NO
+GENERATE_TREEVIEW      = YES
+SOURCE_BROWSER         = YES
+QUIET                  = YES
+WARN_IF_UNDOCUMENTED   = YES
+WARN_NO_PARAMDOC       = YES

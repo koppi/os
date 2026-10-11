@@ -1,11 +1,11 @@
 CXX=g++
 LD=ld
 
-# Real ELF thread-local storage: %gs-relative thread_local variables backed by lib/tls.c and
+# Real ELF thread-local storage: %gs-relative thread_local variables backed by usr/lib/tls.c and
 # the set_thread_area syscall (38). Built against the system <pthread.h> like Qt's threads are
-# (lib/pthread_glibc.o), hence no -I ../../include/lib (its stdio.h/stddef.h would shadow the
+# (lib/pthread_glibc.o), hence no -I ../../usr/include/lib (its stdio.h/stddef.h would shadow the
 # compiler's own). -fno-exceptions -fno-rtti -fno-threadsafe-statics: as every C++ app here
-# (no unwinder/typeinfo runtime, minimal lib/cxxabi.cpp). Unlike the others this one does NOT
+# (no unwinder/typeinfo runtime, minimal usr/lib/cxxabi.cpp). Unlike the others this one does NOT
 # pass -fno-use-cxa-atexit: with it GCC silently drops the registration of thread_local
 # destructors (no __cxa_thread_atexit call at all), which is the thing under test here.
 CXXFLAGS += -Wall -g -Wextra -Werror -std=gnu++20 -m32 -fno-builtin
@@ -14,7 +14,7 @@ CXXFLAGS += -fno-pic -fno-pie -fno-stack-protector -nostdlib
 
 LDFLAGS += -melf_i386 -T hello_tls.lds -Map hello_tls.map
 
-LIB = ../../lib
+LIB = ../../usr/lib
 LIBGCC := $(shell $(CXX) -m32 -print-libgcc-file-name)
 
 all:

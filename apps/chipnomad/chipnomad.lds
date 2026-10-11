@@ -10,7 +10,7 @@ SECTIONS {
 		*(.rodata .rodata.*)
 	}
 
-	/* Global constructor pointers, walked by _start() in lib/cxx_start.c
+	/* Global constructor pointers, walked by _start() in usr/lib/cxx_start.c
 	 * before main() runs. The tracker has real ones: the FontManager and
 	 * the screens' static tables. */
 	.init_array BLOCK(4K) : ALIGN(4K) {

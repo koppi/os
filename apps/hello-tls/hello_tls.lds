@@ -23,8 +23,8 @@ SECTIONS {
 		*(.data .data.*)
 	}
 
-	/* The TLS segment image (lib/tls.c copies it for every thread). Alignment must stay 16:
-	 * that is what lib/tls.c lays the per-thread block out for. .tbss takes no space here. */
+	/* The TLS segment image (usr/lib/tls.c copies it for every thread). Alignment must stay 16:
+	 * that is what usr/lib/tls.c lays the per-thread block out for. .tbss takes no space here. */
 	.tdata : ALIGN(16) {
 		__tdata_start = .;
 		*(.tdata .tdata.* .gnu.linkonce.td.*)

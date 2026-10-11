@@ -39,7 +39,7 @@ Every change is marked inline (`grep -r "koppios addition" qtbase`):
 
 Qt's own `thread_local` is used as-is, unchanged: the kernel sets up a
 per-thread `%gs` segment for ring 3 (syscall 38, `set_thread_area`),
-`lib/tls.c` builds the per-thread TLS block, and `koppios/qt_app.lds` defines
+`usr/lib/tls.c` builds the per-thread TLS block, and `koppios/qt_app.lds` defines
 the TLS segment symbols the compiler needs. An earlier port replaced those
 seven `thread_local`s with plain `static`s because no such `%gs` existed; that
 patch (`tools/patch_tls.py`) is gone. See the kernel README's **Thread-local
@@ -77,9 +77,9 @@ file (`std::locale::classic()`'s `ctype<char>::tolower` is plain ASCII
 * `qstandardpaths_koppios.cpp` — no per-user directories exist.
 * `freetype/` — FreeType's module list trimmed to TrueType + smooth/mono
   rasterizers + `psnames` + autofit; memory-only `ftsystem`; gzip stubs.
-* `../../lib/qfileengine_koppios.cpp`, `../../lib/qfsfileengine_koppios_stub.cpp`
+* `../../usr/lib/qfileengine_koppios.cpp`, `../../usr/lib/qfsfileengine_koppios_stub.cpp`
   — Qt's `QAbstractFileEngineHandler` over the kernel's file syscalls (these
-  live in `lib/`, built by the app's Makefile with the Qt flags).
+  live in `usr/lib/`, built by the app's Makefile with the Qt flags).
 
 ## Configuration decisions (all forced by a real failure)
 
@@ -114,7 +114,7 @@ file (`std::locale::classic()`'s `ctype<char>::tolower` is plain ASCII
 
 ## What the kernel/libc had to grow for this
 
-Real fixes in `lib/` that every user-space app can use: glibc-shaped `ctype`
+Real fixes in `usr/lib/` that every user-space app can use: glibc-shaped `ctype`
 tables, a real `getcwd`, `setlocale`/`nl_langinfo` for `C.UTF-8`, an
 in-process `eventfd` + working `ppoll`/`poll` (so Qt's *real* Unix event
 dispatcher runs), a millisecond `clock_gettime`, `wcscoll`/`strcoll`,
@@ -150,7 +150,7 @@ from it.
   the platform glue (`qt_koppios_create_platform_integration`): the kernel runs all threads of a
   process on one CPU, so there is nothing to gain, and every hand-off costs a scheduler tick. With
   the pool a full-window repaint of `apps/hello-qt-widgets` took 50-90 ms; without it, 7-12 ms
-  (`test/qt-widgets-boot.sh` bounds it). Revisit once a process can use more than one CPU.
+  (`tools/testing/qt-widgets-boot.sh` bounds it). Revisit once a process can use more than one CPU.
 
 ## Licences
 

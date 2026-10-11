@@ -6,7 +6,7 @@
 #
 # Opt-in like apps/hello-qt-gui (not part of `make -C apps`); the Qt objects are shared with it
 # in third_party/qt6-gui/build, so whichever is built second only compiles its own source and
-# links. hda.sh stages hqtwid + font.ttf when the binary exists. Needs a framebuffer boot.
+# links. scripts/hda.sh stages hqtwid + font.ttf when the binary exists. Needs a framebuffer boot.
 
 Q := ../../third_party/qt6-gui
 include $(Q)/koppios/qt.mk

@@ -24,7 +24,7 @@
  * Esc gives the screen back to the desktop.
  */
 #include <math.h>
-#include <printf.h>
+#include <linux/printf.h>
 
 #include "mui.h"
 
@@ -132,7 +132,7 @@ static void tick(clock_state *c) {
 
     /* The console is behind the grabbed screen, so this is for the serial log
      * -- which is how the port is checked without a display in front of it
-     * (test/microui-boot.sh). Off unless asked for: one line a second would
+     * (tools/testing/microui-boot.sh). Off unless asked for: one line a second would
      * otherwise bury everything else in that log. */
     if (c->verbose && t != before)
         printf("clock: %s  %s\n", c->digital, c->date);

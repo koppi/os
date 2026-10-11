@@ -224,7 +224,7 @@ def rel_src(u):
     if p.startswith(QT + "/"): return "qtbase/" + os.path.relpath(p, QT)
     if p.startswith(MOCGEN + "/"): return "koppios/mocgen/" + os.path.relpath(p, MOCGEN)
     if p.startswith(QTT + "/dc_patched/"): return "koppios/dc_patched/" + os.path.basename(p)
-    if p.startswith(f"{REPO}/lib/"): return "../../lib/" + os.path.basename(p)   # relative to third_party/qt6-gui
+    if p.startswith(f"{REPO}/lib/"): return "../../usr/lib/" + os.path.basename(p)   # relative to third_party/qt6-gui
     if p.startswith(f"{DEST}/koppios/freetype/"): return "koppios/freetype/" + os.path.basename(p)
     if p.startswith(f"{DEST}/koppios/"): return "koppios/" + os.path.basename(p)
     raise SystemExit(("unmapped", p))

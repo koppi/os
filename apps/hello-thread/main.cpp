@@ -1,7 +1,7 @@
 /**
  * @file apps/hello-thread/main.cpp
  * @brief First userspace-threading app: thread_create/thread_join (syscalls
- *        32/33) and the ring-3 mutex (lib/mutex.c) built to support them.
+ *        32/33) and the ring-3 mutex (usr/lib/mutex.c) built to support them.
  *        Self-checking like the STL container demos, for the same reason --
  *        a broken mutex or a scheduler-ring bug in create_user_thread()
  *        would show up as an occasionally-wrong number, not a crash, so

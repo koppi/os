@@ -1,7 +1,7 @@
 /**
  * @file apps/hello-umap/main.cpp
  * @brief std::unordered_map: a self-checking stress test (same reasoning as
- *        apps/hello-map -- lib/cxx_hashtable.cpp hand-implements the
+ *        apps/hello-map -- usr/lib/cxx_hashtable.cpp hand-implements the
  *        rehash policy this container relies on, so trust the checks, not
  *        the eye). Iteration order is unspecified for an unordered_map, so
  *        this checks size/find/values/checksum instead of sorted order.

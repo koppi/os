@@ -9,7 +9,7 @@
  * (Tab, Shift+Tab, arrows, Space, Enter, typing) and mouse both work; Esc quits.
  *
  * Every state change is also written to the serial console as "widgets: ...",
- * which is how test/qt-widgets-boot.sh checks behaviour rather than pixels.
+ * which is how tools/testing/qt-widgets-boot.sh checks behaviour rather than pixels.
  */
 #include <QApplication>
 #include <QWidget>
@@ -100,7 +100,7 @@ struct Job : QRunnable
     }
 };
 
-// Runs before the event loop starts and logs what it saw, so test/qt-widgets-boot.sh can check that
+// Runs before the event loop starts and logs what it saw, so tools/testing/qt-widgets-boot.sh can check that
 // Qt's threads really work and not only that nothing crashed. The queued `finished` connection is
 // delivered once the main thread is in exec().
 static void threadSelfTest(QObject *context)
@@ -377,7 +377,7 @@ int main()
 
     // How fast does the window repaint? Ten full repaints, flush to the framebuffer included. A
     // regression here (a slow scheduler hand-off, an expensive fill) is what makes the app feel
-    // sluggish, so test/qt-widgets-boot.sh bounds it.
+    // sluggish, so tools/testing/qt-widgets-boot.sh bounds it.
     QTimer::singleShot(1500, &window, [&window] {
         QElapsedTimer t;
         t.start();

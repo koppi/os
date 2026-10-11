@@ -1,6 +1,6 @@
 /**
  * @file apps/hello-pthread/main.cpp
- * @brief lib/pthread.c: self-checking coverage of the parts hello-thread
+ * @brief usr/lib/pthread.c: self-checking coverage of the parts hello-thread
  *        did not exercise -- condition variables and thread-local storage
  *        are new code, not just a pthread-shaped wrapper over the already-
  *        verified thread_create/mutex primitives, so they need their own

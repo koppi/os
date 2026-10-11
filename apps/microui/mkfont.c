@@ -33,7 +33,7 @@
 #define SSFN_CONSOLEBITMAP_CLEARBG
 /* By path, not by -I: the repo root also holds the kernel's own <stdlib.h>
  * and friends, which would shadow the host's for the rest of this file. */
-#include "../../ssfn.h"
+#include "../../include/linux/ssfn.h"
 
 #define CELL_W 8
 #define CELL_H 16

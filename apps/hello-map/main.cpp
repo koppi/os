@@ -1,7 +1,7 @@
 /**
  * @file apps/hello-map/main.cpp
  * @brief std::map: a self-checking stress test, not just a "does it link"
- *        demo, since lib/cxx_rbtree.cpp hand-implements the rb-tree
+ *        demo, since usr/lib/cxx_rbtree.cpp hand-implements the rb-tree
  *        insert/erase-fixup algorithms this container relies on.
  *
  * Same reason as apps/hello-str for not including our own <stdio.h>: the

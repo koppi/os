@@ -3,7 +3,7 @@
  *
  * The mobile builds unpack their bundled themes, instruments and demo songs
  * into writable storage on first run, because an .apk is not a filesystem.
- * Here they are already files -- staged on the boot RAM disk by hda.sh, which
+ * Here they are already files -- staged on the boot RAM disk by scripts/hda.sh, which
  * is this system's only packaging step -- so there is nothing to unpack.
  */
 #ifndef __ASSETS_KOPPIOS_H__

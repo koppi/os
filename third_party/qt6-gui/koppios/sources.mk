@@ -512,8 +512,8 @@ KOPPIOS_SRCS := \
   koppios/qkoppiosfontdatabase.cpp \
   koppios/qresources_koppios.cpp \
   koppios/qt_koppios_platform.cpp \
-  ../../lib/qfileengine_koppios.cpp \
-  ../../lib/qfsfileengine_koppios_stub.cpp
+  ../../usr/lib/qfileengine_koppios.cpp \
+  ../../usr/lib/qfsfileengine_koppios_stub.cpp
 
 DC_SRCS := \
   qtbase/src/3rdparty/double-conversion/double-conversion/bignum.cc \

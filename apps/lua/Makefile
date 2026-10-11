@@ -30,7 +30,7 @@ OBJ     = $(LUAOBJ) openlibs.o $(SHIMOBJ)
 
 # 64-bit soft arithmetic: build our own copy - the kernel's arith64.o may not
 # exist yet when `make` reaches apps/ (apps build before the kernel objects).
-LIBOBJ  = ../../lib/stdlib.o ../../lib/system_calls.o ../../lib/unistd.o
+LIBOBJ  = ../../usr/lib/stdlib.o ../../usr/lib/system_calls.o ../../usr/lib/unistd.o
 
 all: lua
 
@@ -48,7 +48,7 @@ shim/libm_s.o: shim/libm.S
 shim/port_asm.o: shim/port_asm.S
 	@$(CC) -m32 -c $< -o $@
 
-shim/arith64.o: ../../arith64.c
+shim/arith64.o: ../../arch/x86/lib/arith64.c
 	@$(CC) -m32 -O3 -ffreestanding -fno-builtin -nostdlib -fno-pic -fno-pie \
 	       -fno-stack-protector -w -c $< -o $@
 

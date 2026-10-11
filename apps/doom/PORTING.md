@@ -19,7 +19,7 @@ cp /path/to/doom1.wad .        # the Doom shareware IWAD, 4,196,020 bytes
 make iso
 ```
 
-`hda.sh` grows the RAM disk from 8 MiB to 16 MiB when it finds one, so the
+`scripts/hda.sh` grows the RAM disk from 8 MiB to 16 MiB when it finds one, so the
 image only carries that weight when you ask for it.
 
 The port was developed and tested against the **shareware `doom1.wad`**
@@ -99,7 +99,7 @@ The frame crosses the boundary **indexed, not true-colour**: 320x200 is
 64 KiB paletted against 256 KiB at 32 bpp, and the engine already renders into
 an 8-bpp buffer (`-DCMAP256`), so the palette lookup and the integer upscale
 happen once, in the kernel, straight into the framebuffer shadow
-(`video_blit8` in [`video.c`](../../video.c)).
+(`video_blit8` in [`drivers/video/video.c`](../../drivers/video/video.c)).
 
 Two details that are easy to get wrong:
 
@@ -108,7 +108,7 @@ Two details that are easy to get wrong:
   prints its progress, and a grabbed screen shows none of it. Waiting means a
   startup that fails reports itself on a console the player can still read.
 * **A process that dies holding the screen still gives it back.** `remove_proc`
-  ([`proc.c`](../../proc.c)) drops the grab when it reaps a process, so a
+  ([`kernel/proc.c`](../../kernel/proc.c)) drops the grab when it reaps a process, so a
   segfault mid-game leaves the desktop frozen on one frame rather than
   forever.
 
@@ -125,7 +125,7 @@ one consumer and a second reader would split the keystrokes between them. Both
 rings are flushed when the mode changes, so nothing typed during a game turns
 up in the shell afterwards.
 
-A USB keyboard works too — [`usb_hid.c`](../../usb_hid.c) maps HID usages back
+A USB keyboard works too — [`drivers/hid/usb_hid.c`](../../drivers/hid/usb_hid.c) maps HID usages back
 to set-1 scancodes and reports releases and modifiers, which the ASCII path
 had no reason to track. That is the path a machine with no PS/2 controller
 (a MacBook) has to use.
@@ -136,7 +136,7 @@ A USB pad reaches the game through `getpad` (#45), which copies out the
 state of one pad: buttons numbered **the way the pad's own report descriptor
 numbers them**, two sticks scaled to ±32767 (+y down), two analog triggers, and
 the D-pad as four bits however the pad sent it (see
-[`gamepad.h`](../../gamepad.h)). The kernel keeps no table of which pad numbers
+[`include/linux/gamepad.h`](../../include/linux/gamepad.h)). The kernel keeps no table of which pad numbers
 which button — that is what SDL's controller database is for — so what a
 button *does* is the game's business, and it is all in one place:
 `doomgeneric_koppi.c`, under "Game controller".
@@ -365,14 +365,14 @@ doomgeneric as it ships.
 
 ## Testing
 
-[`test/doom-boot.sh`](../../test/doom-boot.sh) boots `os.iso` headless, starts
+[`tools/testing/doom-boot.sh`](../../tools/testing/doom-boot.sh) boots `os.iso` headless, starts
 the game over the serial console, drives it through the QEMU monitor and saves
 a screenshot per step, so the port can be checked without a display:
 
 ```bash
 make qemu-doom               # all seven scenarios -> /tmp/doom-boot
-test/doom-boot.sh sound      # one: demo|menu|play|quit|timedemo|noiwad|sound
-VGA=std test/doom-boot.sh demo   # the 24-bpp 800x600 path instead of virtio
+tools/testing/doom-boot.sh sound      # one: demo|menu|play|quit|timedemo|noiwad|sound
+VGA=std tools/testing/doom-boot.sh demo   # the 24-bpp 800x600 path instead of virtio
 ```
 
 The scenarios cover the attract-mode demo, the menu (arrow keys, so the
@@ -386,8 +386,8 @@ boots (the module is muted from boot), fifteen seconds of stereo once the
 game has the stream, silence again after it quits, then the module in mono
 once the console's `sound on` unmutes it.
 
-The gamepad has its own: `test/pad-boot.sh doom` plays E1M1 with a pad that
-[`test/usbpad.py`](../../test/usbpad.py) emulates over QEMU's `usb-redir`
+The gamepad has its own: `tools/testing/pad-boot.sh doom` plays E1M1 with a pad that
+[`tools/testing/usbpad.py`](../../tools/testing/usbpad.py) emulates over QEMU's `usb-redir`
 (QEMU has no gamepad of its own) — walks, turns, fires, changes weapon, opens
 the menu and moves the cursor — and checks each step against the game's own
 frames. `DOOM_BUS=xhci DOOM_PAD=ds4|xinput|generic` picks the topology and pad.

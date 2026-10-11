@@ -31,9 +31,9 @@ SECTIONS {
 		*(.data .data.*)
 	}
 
-	/* The TLS segment image: real ELF thread_local (%gs-relative, local-exec). lib/tls.c
+	/* The TLS segment image: real ELF thread_local (%gs-relative, local-exec). usr/lib/tls.c
 	 * copies [__tdata_start, __tdata_end) and zero-fills up to __tbss_end into a fresh block
-	 * for every thread. Their alignment must stay 16: that is what lib/tls.c lays the block
+	 * for every thread. Their alignment must stay 16: that is what usr/lib/tls.c lays the block
 	 * out for. .tbss occupies no address space of its own. */
 	.tdata : ALIGN(16) {
 		__tdata_start = .;
