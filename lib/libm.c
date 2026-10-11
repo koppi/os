@@ -23,6 +23,9 @@
  * all always comfortably within a 64-bit integer's range.
  */
 
+/* The functions that were added after apps/chipnomad began carrying a libm of its own are weak, so its own win */
+#define WEAK __attribute__((weak))
+
 static double x87_sqrt(double x) {
     double result;
     __asm__("fsqrt" : "=t"(result) : "0"(x));
@@ -205,6 +208,55 @@ double fmod(double x, double y) {
                 : "0"(result), "u"(y));
     } while (sw & 0x0400);
     return result;
+}
+
+WEAK float atan2f(float y, float x) { return (float) x87_atan2((double) y, (double) x); }
+
+/* asin(x) = atan2(x, sqrt(1 - x^2)), the same composition acos() has */
+WEAK double asin(double x) {
+    return x87_atan2(x, x87_sqrt((1.0 - x) * (1.0 + x)));
+}
+
+WEAK float asinf(float x) { return (float) asin((double) x); }
+WEAK float acosf(float x) { return (float) acos((double) x); }
+
+/* sincos: fsincos computes both in one instruction. The argument has to be within +-2^63; beyond that the
+ * FPU leaves it alone and says so in C2, and fsin/fcos would too, so there is nothing better to return. */
+WEAK void sincos(double x, double *s, double *c) {
+    double sine, cosine;
+    __asm__("fsincos" : "=t"(cosine), "=u"(sine) : "0"(x));
+    *s = sine;
+    *c = cosine;
+}
+
+WEAK void sincosf(float x, float *s, float *c) {
+    double sine, cosine;
+    sincos((double) x, &sine, &cosine);
+    *s = (float) sine;
+    *c = (float) cosine;
+}
+
+/* ldexp(x, e) = x * 2^e: fscale does exactly that, in extended precision, so the
+ * only rounding is the final one to double. */
+WEAK double ldexp(double x, int e) {
+    double result;
+    __asm__("fscale\n\tfstp %%st(1)" : "=t"(result) : "0"(x), "u"((double) e));
+    return result;
+}
+
+/* frexp(x, &e): x = m * 2^e with |m| in [0.5, 1). fxtract splits x into
+ * an unbiased exponent and a significand in [1, 2); halving the
+ * significand and bumping the exponent gives the C convention. Zero,
+ * infinity and NaN come back unchanged with e = 0. */
+WEAK double frexp(double x, int *e) {
+    if (x == 0.0 || x != x || x - x != 0.0) {
+        *e = 0;
+        return x;
+    }
+    double mantissa, exponent;
+    __asm__("fxtract" : "=t"(mantissa), "=u"(exponent) : "0"(x));
+    *e = (int) exponent + 1;
+    return mantissa * 0.5;
 }
 
 int abs(int x) { return x < 0 ? -x : x; }

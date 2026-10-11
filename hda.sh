@@ -16,6 +16,14 @@ set -e
 
 WAD=${WAD:-doom1.wad}
 
+# The RAM disk is FAT16 with one-sector clusters, so it cannot be bigger than 32 MiB, and the big optional
+# files (the Doom WAD and the three Qt programs, each with a Qt of its own) do not all fit at once. Leave
+# out what a boot does not need:   HDA_SKIP="hqtgui hqtwid" make iso     (names: doom1.wad hqtgui hqtwid qtlua)
+skip() {
+    case " ${HDA_SKIP:-} " in *" $1 "*) return 0 ;; esac
+    return 1
+}
+
 IMG=${IMG:-hda.img}
 if [ -z "${SIZE:-}" ]; then
     # hda.img is the persistent scratch disk and is always 16 MiB. The RAM disk
@@ -26,7 +34,9 @@ if [ -z "${SIZE:-}" ]; then
         SIZE=16M
     else
         extra=0
-        for f in "$WAD" apps/hello-qt-gui/hqtgui apps/hello-qt-widgets/hqtwid; do
+        for f in "$WAD" apps/hello-qt-gui/hqtgui apps/hello-qt-widgets/hqtwid apps/qt-lua/qtlua; do
+            name=$(basename "$f"); [ "$f" = "$WAD" ] && name=doom1.wad
+            skip "$name" && continue
             [ -f "$f" ] && extra=$((extra + $(stat -c %s "$f")))
         done
         if [ "$extra" -eq 0 ]; then
@@ -34,7 +44,7 @@ if [ -z "${SIZE:-}" ]; then
         else
             mib=$((8 + (extra + 1048575) / 1048576 + 1))
             [ "$mib" -lt 16 ] && mib=16
-            [ "$mib" -gt 32 ] && { echo "hda.sh: optional files need ${mib} MiB; FAT16 with 512-byte clusters stops at 32" >&2; mib=32; }
+            [ "$mib" -gt 32 ] && { echo "hda.sh: optional files need ${mib} MiB; FAT16 with 512-byte clusters stops at 32. Leave some out: HDA_SKIP=\"hqtgui hqtwid\" (doom1.wad hqtgui hqtwid qtlua)" >&2; mib=32; }
             SIZE=${mib}M
         fi
     fi
@@ -100,7 +110,7 @@ mcopy -i "$IMG" -D o "$CNDATA/instruments/Waves.cni"          ::waves.cni
 # Doom. The engine is always staged; the IWAD only if one is present, since
 # it is not ours to redistribute (apps/doom/PORTING.md says where to get one).
 mcopy -i "$IMG" -D o apps/doom/doom       ::doom
-if [ -f "$WAD" ]; then
+if [ -f "$WAD" ] && ! skip doom1.wad; then
     mcopy -i "$IMG" -D o "$WAD"           ::doom1.wad
 fi
 
@@ -109,12 +119,27 @@ fi
 # `make -C apps/hello-qt-gui -j4` / `make -C apps/hello-qt-widgets -j4` and they are staged
 # here, together with the Unifont subset they load as /rd/font.ttf.
 # Needs a framebuffer boot (the ISO / real hardware), not `-kernel`.
-if [ -f apps/hello-qt-gui/hqtgui ] || [ -f apps/hello-qt-widgets/hqtwid ]; then
+qt_staged=
+for q in hqtgui:apps/hello-qt-gui/hqtgui hqtwid:apps/hello-qt-widgets/hqtwid qtlua:apps/qt-lua/qtlua; do
+    [ -f "${q#*:}" ] && ! skip "${q%%:*}" && qt_staged=1
+done
+if [ -n "$qt_staged" ]; then
     mcopy -i "$IMG" -D o apps/hello-qt-gui/unifont-subset.ttf  ::font.ttf
 fi
-if [ -f apps/hello-qt-gui/hqtgui ]; then
+if [ -f apps/hello-qt-gui/hqtgui ] && ! skip hqtgui; then
     mcopy -i "$IMG" -D o apps/hello-qt-gui/hqtgui              ::hqtgui
 fi
-if [ -f apps/hello-qt-widgets/hqtwid ]; then
+if [ -f apps/hello-qt-widgets/hqtwid ] && ! skip hqtwid; then
     mcopy -i "$IMG" -D o apps/hello-qt-widgets/hqtwid          ::hqtwid
+fi
+
+# qtlua: Lua with the Qt6 Lua bindings of tsujikiri-qt (apps/qt-lua; needs a checkout of that repo next
+# to this one, or TSUJIKIRI_QT6=/path). The scripts come from its koppios/scripts.
+# Run `qtlua` for the widgets demo or `qtlua /rd/selftest.lua` for the check of the bindings.
+TSUJIKIRI_QT6=${TSUJIKIRI_QT6:-$(for d in ../tsujikiri-qt6 ../tsujikiri-qt; do [ -d "$d/koppios/scripts" ] && { echo "$d"; break; }; done)}
+if [ -f apps/qt-lua/qtlua ] && ! skip qtlua; then
+    mcopy -i "$IMG" -D o apps/qt-lua/qtlua                     ::qtlua
+    for s in qtlua selftest; do
+        [ -f "$TSUJIKIRI_QT6/koppios/scripts/$s.lua" ] && mcopy -i "$IMG" -D o "$TSUJIKIRI_QT6/koppios/scripts/$s.lua" ::$s.lua
+    done
 fi

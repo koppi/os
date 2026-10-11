@@ -35,6 +35,7 @@
  */
 #include <QtCore/private/qabstractfileengine_p.h>
 #include <QtCore/qbytearray.h>
+#include <QtCore/qdir.h>
 
 /* Not include/lib/stdio.h: real Qt headers above transitively pull in the
  * real system <cstdio> (via <string>'s ext/string_conversions.h), so this
@@ -109,9 +110,28 @@ public:
         close();
         m_fileName = file;
     }
+    // QFileInfo asks for the kind of name it wants (fileName(), path(), absoluteFilePath() ...); the
+    // path as it was given is only the DefaultName.
     QString fileName(FileName file = DefaultName) const override {
-        Q_UNUSED(file);
-        return m_fileName;
+        switch (file) {
+        case BaseName:
+            return baseOf(m_fileName);
+        case PathName:
+            return pathOf(m_fileName);
+        case AbsoluteName:
+        case CanonicalName:
+            return absolute();
+        case AbsolutePathName:
+        case CanonicalPathName:
+            return pathOf(absolute());
+        case AbsoluteLinkTarget:
+        case RawLinkPath:
+        case BundleName:
+        case JunctionName:
+            return QString();
+        default:
+            return m_fileName;
+        }
     }
 
     bool open(QIODevice::OpenMode openMode, std::optional<QFile::Permissions> permissions = std::nullopt) override {
@@ -221,6 +241,20 @@ public:
     }
 
 private:
+    static QString baseOf(const QString &path) {
+        const qsizetype slash = path.lastIndexOf(u'/');
+        return slash < 0 ? path : path.mid(slash + 1);
+    }
+    static QString pathOf(const QString &path) {
+        const qsizetype slash = path.lastIndexOf(u'/');
+        if (slash < 0)
+            return QString();
+        return slash == 0 ? QStringLiteral("/") : path.left(slash);
+    }
+    QString absolute() const {
+        return QDir::cleanPath(QDir::isAbsolutePath(m_fileName) ? m_fileName : QDir::currentPath() + u'/' + m_fileName);
+    }
+
     QString m_fileName;
     KoppiosFile *m_handle = nullptr;
     qint64 m_readPos = 0;

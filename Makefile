@@ -246,6 +246,12 @@ qemu-qt-gui: iso
 qemu-qt-widgets: iso
 	@bash test/qt-widgets-boot.sh all
 
+# Drive apps/qt-lua (Lua with the Qt6 bindings of tsujikiri-qt): the self-check of the bindings, then
+# the widgets demo with the keyboard and the mouse.
+# the app built first: make -C apps/qt-lua -j2
+qemu-qt-lua: iso
+	@bash test/qt-lua-boot.sh all
+
 # Build a GPT+FAT32 UEFI USB image (os-usb.img) that the UEFI-only laptops
 # (no CSM, e.g. a MacBook) boot from: grub2 x86_64-efi + kernel + initrd.
 usb: $(KERNEL) initrd.img
@@ -290,6 +296,6 @@ clean::
 	@$(MAKE) -C apps clean
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) ap_boot.bin ap_boot.tmp.* *.d lib/*.d *~ os.iso iso initrd.img docs
 
-.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-pad test-gamepad qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets cloc docs clean
+.PHONY: all lib apps iso qemu-kernel qemu-iso qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-pad test-gamepad qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets qemu-qt-lua cloc docs clean
 
 -include $(OBJS:.o=.d)

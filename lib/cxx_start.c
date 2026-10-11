@@ -19,14 +19,17 @@ typedef void (*ctor_fn)(void);
 extern ctor_fn __init_array_start[];
 extern ctor_fn __init_array_end[];
 
-extern int main(void);
+/* A program that wants its command line declares main(int, char **); one that does not declares main(void)
+ * and the two words it is not looking at cost nothing under cdecl. */
+extern int main(int argc, char **argv);
 
 /* lib/tls.c: weak, so a program linked without it (or without TLS symbols in its linker script)
  * is unaffected. TLS must exist before the first constructor runs: they may use thread_local. */
 extern int __tls_thread_init(void) __attribute__((weak));
 extern void __tls_main_exit(void) __attribute__((weak));
 
-int _start(void) {
+/* The kernel's initial stack is [return address][argc][argv] (proc.c), which is a cdecl frame for exactly this. */
+int _start(int argc, char **argv) {
     if (__tls_thread_init) {
         __tls_thread_init();
     }
@@ -35,7 +38,7 @@ int _start(void) {
         (*f)();
     }
 
-    int rc = main();
+    int rc = main(argc, argv);
 
     if (__tls_main_exit) {
         __tls_main_exit();     /* the main thread's thread_local destructors (not its pthread keys: exit() skips those) */

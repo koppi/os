@@ -30,6 +30,10 @@
 #include <stdarg.h>
 #include <time.h>
 
+/* A program that brings a C library of its own (apps/chipnomad has a stdio and a few syscall wrappers) may
+ * define some of what is added here for the programs that do not. Theirs wins. */
+#define WEAK __attribute__((weak))
+
 extern unsigned int syscall3(unsigned int n, unsigned int a, unsigned int b, unsigned int c);
 
 /* Not <string.h>/<sys/mman.h>/<sys/poll.h>: this file already declares a
@@ -343,6 +347,26 @@ char *strrchr(const char *s, int c) {
     return (char *) last;
 }
 
+WEAK size_t strspn(const char *s, const char *accept) {
+    size_t n = 0;
+    for (; s[n]; n++) {
+        const char *a = accept;
+        while (*a && *a != s[n])
+            a++;
+        if (!*a)
+            break;
+    }
+    return n;
+}
+
+WEAK char *strpbrk(const char *s, const char *accept) {
+    for (; *s; s++)
+        for (const char *a = accept; *a; a++)
+            if (*a == *s)
+                return (char *) s;
+    return 0;
+}
+
 char *strstr(const char *haystack, const char *needle) {
     if (!*needle)
         return (char *) haystack;
@@ -641,6 +665,15 @@ struct tm *localtime_r(const time_t *timer, struct tm *result) {
     return result;
 }
 
+/* The RTC's whole seconds, the same clock CLOCK_REALTIME reads. */
+WEAK time_t time(time_t *out) {
+    struct timespec now;
+    clock_gettime(CLOCK_REALTIME, &now);
+    if (out)
+        *out = now.tv_sec;
+    return now.tv_sec;
+}
+
 time_t mktime(struct tm *tm) {
     /* days_from_civil, the inverse of civil_from_days above (same
      * source). */
@@ -678,6 +711,147 @@ int stat(const char *path, void *buf) {
 int closedir(void *dirp) {
     (void) dirp;
     return 0;
+}
+
+/* The rest of what a program that links the real Qt file classes (QFile, QDir, QFileInfo, ...) names even
+ * when it only ever reads: the VFS has no directories to make or remove, no links, no owners, no locks,
+ * no processes to signal. A request this kernel cannot honour fails the way POSIX says it does, so the
+ * caller gets "false" or an empty string, never a link error and never a silently wrong success. */
+
+WEAK int mkdir(const char *path, unsigned mode) {
+    (void) path; (void) mode;
+    errno = EROFS;
+    return -1;
+}
+
+WEAK int unlink(const char *path) {
+    (void) path;
+    errno = EROFS;
+    return -1;
+}
+
+WEAK int rmdir(const char *path) {
+    (void) path;
+    errno = EROFS;
+    return -1;
+}
+
+WEAK int chdir(const char *path) {
+    (void) path;
+    errno = ENOENT;
+    return -1;
+}
+
+WEAK int openat(int dirfd, const char *path, int flags, ...) {
+    (void) dirfd; (void) path; (void) flags;
+    errno = ENOENT;
+    return -1;
+}
+
+WEAK int mkdirat(int dirfd, const char *path, unsigned mode) {
+    (void) dirfd; (void) path; (void) mode;
+    errno = EROFS;
+    return -1;
+}
+
+WEAK int unlinkat(int dirfd, const char *path, int flags) {
+    (void) dirfd; (void) path; (void) flags;
+    errno = EROFS;
+    return -1;
+}
+
+WEAK int renameat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath) {
+    (void) olddirfd; (void) oldpath; (void) newdirfd; (void) newpath;
+    errno = EROFS;
+    return -1;
+}
+
+WEAK int linkat(int olddirfd, const char *oldpath, int newdirfd, const char *newpath, int flags) {
+    (void) olddirfd; (void) oldpath; (void) newdirfd; (void) newpath; (void) flags;
+    errno = EROFS;
+    return -1;
+}
+
+WEAK int fstat(int fd, void *buf) {
+    (void) fd; (void) buf;
+    errno = EBADF;
+    return -1;
+}
+
+WEAK long lseek(int fd, long offset, int whence) {
+    (void) fd; (void) offset; (void) whence;
+    errno = EBADF;
+    return -1;
+}
+
+WEAK long ftello(void *stream) {
+    (void) stream;
+    errno = EBADF;
+    return -1;
+}
+
+WEAK int fdatasync(int fd) {
+    (void) fd;
+    errno = EINVAL;
+    return -1;
+}
+
+WEAK int flock(int fd, int operation) {
+    (void) fd; (void) operation;
+    errno = EBADF;
+    return -1;
+}
+
+WEAK int kill(int pid, int sig) {
+    (void) pid; (void) sig;
+    errno = ESRCH;
+    return -1;
+}
+
+/* No user or group database: POSIX says no match is 0 with *result == NULL */
+WEAK int getpwuid_r(unsigned uid, void *pwd, char *buf, unsigned buflen, void **result) {
+    (void) uid; (void) pwd; (void) buf; (void) buflen;
+    *result = 0;
+    return 0;
+}
+
+WEAK int getgrgid_r(unsigned gid, void *grp, char *buf, unsigned buflen, void **result) {
+    (void) gid; (void) grp; (void) buf; (void) buflen;
+    *result = 0;
+    return 0;
+}
+
+WEAK int gethostname(char *name, unsigned len) {
+    static const char host[] = "koppios";
+    if (len < sizeof(host)) {
+        errno = ENAMETOOLONG;
+        return -1;
+    }
+    for (unsigned i = 0; i < sizeof(host); i++)
+        name[i] = host[i];
+    return 0;
+}
+
+/* struct utsname: six fields of 65 bytes */
+WEAK int uname(void *buf) {
+    static const char *const fields[6] = {"koppios", "koppios", "1", "koppi/os", "i686", "(none)"};
+    char *out = (char *) buf;
+    for (int f = 0; f < 6; f++) {
+        char *dst = out + f * 65;
+        const char *src = fields[f];
+        int i = 0;
+        for (; src[i]; i++)
+            dst[i] = src[i];
+        dst[i] = 0;
+    }
+    return 0;
+}
+
+/* Processor time: the one CPU time there is is the monotonic clock */
+WEAK clock_t clock(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (clock_t) (now.tv_sec * 1000000L + now.tv_nsec / 1000);
 }
 
 /* ---- stdio: same model as third_party/qt6/koppios/qt_libc_compat.c's

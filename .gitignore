@@ -41,6 +41,7 @@ apps/chipnomad/chipnomad
 apps/hello-qt-gui/hqtgui
 third_party/qt6-gui/build/
 apps/hello-qt-widgets/hqtwid
+apps/qt-lua/qtlua
 os.sublime-workspace
 docs/
 
