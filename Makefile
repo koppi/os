@@ -249,7 +249,10 @@ qemu-qt-widgets: iso
 # Drive apps/qt-lua (Lua with the Qt6 bindings of tsujikiri-qt): the self-check of the bindings, then
 # the widgets demo with the keyboard and the mouse.
 # the app built first: make -C apps/qt-lua -j2
-qemu-qt-lua: iso
+# The RAM disk holds 32 MiB and qtlua is 14 of them, so the other Qt programs and the WAD stay out of it
+# (HDA_SKIP="..." to change that).
+qemu-qt-lua:
+	@HDA_SKIP="$(or $(HDA_SKIP),hqtgui hqtwid doom1.wad)" $(MAKE) --no-print-directory iso
 	@bash test/qt-lua-boot.sh all
 
 # Build a GPT+FAT32 UEFI USB image (os-usb.img) that the UEFI-only laptops

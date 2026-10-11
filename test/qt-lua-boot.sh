@@ -306,6 +306,93 @@ do_selftest() {
     verdict "selftest" $rc
 }
 
+# The frame positions of the demo's controls (window-frame pixels, 640x400, the pointer starts at 320,200).
+TAB_INPUT="43,48";    TAB_SLIDERS="115,48"
+NAME="300,82";        SPIN_UP="609,108";    FRUIT="300,144"
+FRUIT_BANANA="140,169"
+LIKES="115,172";      GREET="62,200";       BTN_QUIT="589,378"
+SLIDER_HANDLE_5="125,78";  SLIDER_TO_HALF="355,78"
+
+# The demo window comes up: right shape, light background, text drawn, and the script says it is ready.
+do_start() {
+    run start $'6:shot:up'
+    local rc=0 d="$OUT/start"
+    analyse window "$d/up.ppm" || rc=1
+    expect start "qtlua.lua is running and its window is ready with 2 tabs" "running /rd/qtlua.lua" "ready tabs=2" || rc=1
+    verdict "start" $rc
+}
+
+# Keyboard only on the Input tab: Tab walks the focus chain, typing fills the edit, Up/Down change the
+# spin box and the combo box, Space presses the check box and the button.
+do_keys() {
+    run keys $'6:key:tab\n1:type:ada\n1:key:tab\n1:key:up\n1:key:up\n1:key:tab\n1:key:down\n1:key:tab\n1:key:spc\n1:key:tab\n1:key:spc\n1:shot:end'
+    local rc=0 d="$OUT/keys"
+    analyse window "$d/end.ppm" || rc=1
+    expect keys "Tab through the chain, typing, spin box, combo box, check box, button" \
+        "focus QLineEdit" "name a" "name ad" "name ada" \
+        "focus QSpinBox" "age 31" "age 32" \
+        "focus QComboBox" "fruit Banana" \
+        "focus QCheckBox 'I like Lua'" "likes true" \
+        "focus QPushButton 'Greet'" "greeted 1 Hello, ada! (1, age 32, Banana)" || rc=1
+    verdict "keys" $rc
+}
+
+# Sliders tab: the keyboard moves the focused slider and the progress bar and the dial follow; the dial moves
+# the slider back; a mouse drag moves the slider handle.
+do_sliders() {
+    run sliders $'6:move:'"$TAB_SLIDERS"$'\n1:click\n1:shot:tab\n1:key:tab\n1:key:right\n1:key:right\n1:key:right\n1:key:tab\n1:key:right\n1:key:right\n1:shot:keys\n1:move:'"$SLIDER_HANDLE_5"$'\n1:drag:'"$SLIDER_TO_HALF"$'\n1:shot:dragged'
+    local rc=0 d="$OUT/sliders"
+    analyse window "$d/tab.ppm" || rc=1
+    analyse differs "$d/tab.ppm" "$d/dragged.ppm" 1500 || rc=1
+    expect sliders "tab switch, Tab to the slider, the arrow keys move it" "tab 1" "focus QSlider" "slider 1" "slider 2" "slider 3" || rc=1
+    has sliders "the progress bar and the dial followed the slider to 3" "progress 3" "dial 3" || rc=1
+    expect sliders "Tab to the dial, its arrow keys move it, and the slider and the bar follow" "focus QDial" "dial 5" || rc=1
+    has sliders "slider and progress bar followed the dial to 5" "slider 5" "progress 5" || rc=1
+    lastval sliders "dragged from 5 to about half" slider 40 60 || rc=1
+    lastval sliders "the progress bar agrees with the slider" progress 40 60 || rc=1
+    lastval sliders "the dial agrees with the slider" dial 40 60 || rc=1
+    verdict "sliders" $rc
+}
+
+# Mouse only on the Input tab: click into the edit and type, step the spin box, tick the check box, pick a fruit
+# from the popup, press Greet, then the Quit button: the program ends with status 0 and the desktop is back.
+do_mouse() {
+    run mouse $'6:shot:before\n1:move:'"$NAME"$'\n1:click\n1:type:bob\n1:move:'"$SPIN_UP"$'\n1:click\n1:move:'"$LIKES"$'\n1:click\n1:move:'"$FRUIT"$'\n1:click\n1:shot:popup\n1:move:'"$FRUIT_BANANA"$'\n1:click\n1:move:'"$GREET"$'\n1:click\n1:shot:after\n1:move:'"$BTN_QUIT"$'\n1:click\n3:shot:desktop\n1:serial:ls /rd\n3:shot:shell'
+    local rc=0 d="$OUT/mouse"
+    analyse window "$d/before.ppm" || rc=1
+    analyse differs "$d/before.ppm" "$d/popup.ppm" 4000 || rc=1
+    analyse differs "$d/before.ppm" "$d/after.ppm" 800 || rc=1
+    analyse desktop "$d/desktop.ppm" || rc=1
+    expect mouse "mouse clicks hit the right controls" \
+        "focus QLineEdit" "name b" "name bo" "name bob" \
+        "age 31" "likes true" "fruit Banana" \
+        "greeted 1 Hello, bob! (1, age 31, Banana)" "quit" || rc=1
+    grep -q "Process returned with exit code 0" "$d/serial.log" \
+        && echo "    program exited with status 0: ok" || { echo "    program exited with status 0: FAIL"; rc=1; }
+    grep -q "selftest" "$d/serial.log" \
+        && echo "    shell answers 'ls /rd' after the app: ok" || { echo "    shell answers 'ls /rd' after the app: FAIL"; rc=1; }
+    verdict "mouse" $rc
+}
+
+# Esc: with a combo box popup open it closes the popup and nothing else; with nothing open it ends the program with
+# status 0 and hands the screen back. (The script's application-wide filter must leave the popup's Esc alone.)
+do_esc() {
+    run esc $'6:shot:before\n1:move:'"$FRUIT"$'\n1:click\n1:shot:popup\n1:key:esc\n1:shot:closed\n1:key:esc\n3:shot:after'
+    local rc=0 d="$OUT/esc"
+    analyse window "$d/before.ppm" || rc=1
+    analyse differs "$d/before.ppm" "$d/popup.ppm" 4000 || rc=1
+    analyse same "$d/before.ppm" "$d/closed.ppm" 1500 || rc=1
+    analyse desktop "$d/after.ppm" || rc=1
+    expect esc "the popup opened, and the second Esc quit" "focus QComboBoxListView" "quit" || rc=1
+    local quits
+    quits=$(grep -c "qtlua: quit$" "$d/serial.log")
+    [ "$quits" = 1 ] && echo "    one quit, so the first Esc only closed the popup: ok" \
+        || { echo "    $quits quits (want 1: the first Esc must only close the popup): FAIL"; rc=1; }
+    grep -q "Process returned with exit code 0" "$d/serial.log" \
+        && echo "    program exited with status 0: ok" || { echo "    program exited with status 0: FAIL"; rc=1; }
+    verdict "esc" $rc
+}
+
 # script <file.lua> [seconds]: not a test, a way to try a script on a fresh boot. The file goes onto the RAM
 # disk as /rd/probe.lua, the ISO is made again, qtlua runs it, and everything it printed is shown.
 do_script() {
@@ -320,9 +407,14 @@ do_script() {
 
 case "${1:-all}" in
     selftest) do_selftest ;;
+    start)    do_start ;;
+    keys)     do_keys ;;
+    sliders)  do_sliders ;;
+    mouse)    do_mouse ;;
+    esc)      do_esc ;;
     script)   do_script "${2:-}" "${3:-}" ;;
-    all)      do_selftest ;;
-    *)        echo "usage: $0 [selftest|script file.lua [seconds]|all]"; exit 1 ;;
+    all)      do_selftest; do_start; do_keys; do_sliders; do_mouse; do_esc ;;
+    *)        echo "usage: $0 [selftest|start|keys|sliders|mouse|esc|script file.lua [seconds]|all]"; exit 1 ;;
 esac
 echo "output in $OUT"
 exit $FAILED
