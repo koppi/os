@@ -15,8 +15,8 @@
 #
 #   test/qt-lua-boot.sh [selftest|start|keys|sliders|mouse|esc|all]
 #
-# Needs apps/qt-lua built and staged (the RAM disk holds 32 MiB: leave the other Qt programs out):
-#   make -C apps/qt-lua -j2 && HDA_SKIP="hqtgui hqtwid doom1.wad" make iso
+# Needs apps/qt-lua built and staged:
+#   make -C apps/qt-lua -j2 && make iso
 # Output, one subdirectory per scenario, in $OUT.
 set -u
 cd "$(dirname "$0")/.."
@@ -33,7 +33,7 @@ for t in qemu-system-i386 socat mdir python3; do
 done
 [ -f os.iso ] || { echo "qt-lua-boot: no os.iso -- run 'make iso' first"; exit 1; }
 mdir -i initrd.img ::$APP >/dev/null 2>&1 \
-    || { echo "qt-lua-boot: $APP is not on the RAM disk -- make -C apps/qt-lua -j2 && HDA_SKIP=\"hqtgui hqtwid doom1.wad\" make iso"; exit 1; }
+    || { echo "qt-lua-boot: $APP is not on the RAM disk -- make -C apps/qt-lua -j2 && make iso"; exit 1; }
 
 # analyse <check> <a.ppm> [<b.ppm>]  -- prints one line per finding, exit 0 = pass
 analyse() {

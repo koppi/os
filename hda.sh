@@ -16,9 +16,10 @@ set -e
 
 WAD=${WAD:-doom1.wad}
 
-# The RAM disk is FAT16 with one-sector clusters, so it cannot be bigger than 32 MiB, and the big optional
-# files (the Doom WAD and the three Qt programs, each with a Qt of its own) do not all fit at once. Leave
-# out what a boot does not need:   HDA_SKIP="hqtgui hqtwid" make iso     (names: doom1.wad hqtgui hqtwid qtlua)
+# The RAM disk is FAT16 with one-sector clusters, so it cannot be bigger than 32 MiB. The big optional files (the
+# Doom WAD and the three Qt programs, each with a Qt of its own) all fit, with about 3 MiB to spare; if you add
+# more, or want the room, leave out what a boot does not need:
+#   HDA_SKIP="hqtgui hqtwid" make iso     (names: doom1.wad hqtgui hqtwid qtlua)
 skip() {
     case " ${HDA_SKIP:-} " in *" $1 "*) return 0 ;; esac
     return 1
@@ -42,9 +43,17 @@ if [ -z "${SIZE:-}" ]; then
         if [ "$extra" -eq 0 ]; then
             SIZE=8M
         else
-            mib=$((8 + (extra + 1048575) / 1048576 + 1))
+            extra_mib=$(( (extra + 1048575) / 1048576 ))
+            mib=$((8 + extra_mib + 1))
             [ "$mib" -lt 16 ] && mib=16
-            [ "$mib" -gt 32 ] && { echo "hda.sh: optional files need ${mib} MiB; FAT16 with 512-byte clusters stops at 32. Leave some out: HDA_SKIP=\"hqtgui hqtwid\" (doom1.wad hqtgui hqtwid qtlua)" >&2; mib=32; }
+            # 8 MiB is the roomy guess for the base userland (about 3 MiB of it is files, the rest is space to
+            # write to); above the 32 MiB ceiling what has to fit is the files themselves plus a little slack
+            if [ "$mib" -gt 32 ]; then
+                if [ $((4 + extra_mib + 1)) -gt 32 ]; then
+                    echo "hda.sh: the optional files need ${extra_mib} MiB and FAT16 with 512-byte clusters stops at 32 MiB. Leave some out: HDA_SKIP=\"hqtgui hqtwid\" (doom1.wad hqtgui hqtwid qtlua)" >&2
+                fi
+                mib=32
+            fi
             SIZE=${mib}M
         fi
     fi

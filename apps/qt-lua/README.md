@@ -23,7 +23,7 @@ Needs a checkout of tsujikiri-qt next to this repository (as `tsujikiri-qt` or `
 
 ```bash
 make -C apps/qt-lua -j2                                  # about 15 minutes cold; a unit of bindings takes ~1 GB, so -j2, not -j12
-HDA_SKIP="hqtgui hqtwid doom1.wad" make iso              # the RAM disk is 32 MiB at most and qtlua is 14 MB of it
+make iso                                                 # qtlua is 11.7 MB; with hqtgui, hqtwid and the WAD the 32 MiB RAM disk keeps ~3 MiB free
 make qemu-iso                                            # then, at the prompt:  qtlua
 ```
 
