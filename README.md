@@ -358,7 +358,14 @@ ports are still probed just once at boot. Try it from the QEMU monitor:
   PCIe SSD on a Kaby Lake laptop (T470s), mounted as the next free `hd{a,b,…}`.
   See **Booting on real hardware (ThinkPad T470s …)** below.
 
-Any drive that carries a FAT volume is mounted automatically. Programs and
+* **Raw access and partitions** — [`block/blk.c`](block/blk.c) gives ring 3 whole-disk sector access
+  (syscalls 46–49, [`include/linux/blk.h`](include/linux/blk.h): list, read, write, flush/rescan), which is
+  what the installer partitions and formats a disk with; only real disks may be written, never the
+  RAM disk, the payload or a floppy. The `lsblk` console command lists the devices. The FAT driver
+  also looks inside an MBR or a GPT for a FAT volume, so a disk the installer made mounts as `/hda`.
+  Bulk writes skip the per-sector cache flush and flush once at the end.
+
+Any drive that carries a FAT volume (bare, or in a partition) is mounted automatically. Programs and
 files are loaded from whichever device the path names — `start rd/hello`,
 `read rd/mouse.bmp`, `cd hda` — so the OS runs the same whether a file lives on
 the RAM disk or a real disk. `make qemu-iso` boots `os.iso` alone;
@@ -1047,6 +1054,30 @@ edits and the rest of the limitations.
 
 [doomgeneric]: https://github.com/ozkl/doomgeneric
 
+### Installer
+A graphical installer, [`apps/install`](apps/install), puts the system on a disk of the machine it
+runs on: **Welcome → Disk → Settings → Review → Install → Finish**, drawn with microui like
+[`apps/calc`](apps/calc). It writes the layout `grub-install` makes on a GPT disk — a protective MBR
+carrying GRUB's boot sector, a 1 MiB BIOS boot partition with `core.img`, and a FAT16 EFI System
+Partition with `/EFI/BOOT/BOOTX64.EFI`, the kernel, the RAM disk image and a boot menu — so the
+machine boots from it on **BIOS and on UEFI**; after the first boot the volume is `/hda`. The boot
+sector is written last, everything is read back and checksummed, and the kernel is then asked to
+re-mount the disk, which checks the installer against the kernel's own FAT code.
+
+```bash
+make qemu-install          # boot os.iso with a blank scratch disk; choose "Install koppi's os to a disk"
+make qemu-installed        # start from the disk it wrote, with no CD
+make test-install-host     # the engine on image files: sfdisk, fsck.fat, SeaBIOS and OVMF
+make qemu-install-test     # drive the real wizard in QEMU (ahci|nvme|ide), check the disk, boot it
+```
+
+There is no CD or USB driver, so GRUB carries everything in memory: the installer's menu entry loads
+`payload.img` (kernel, GRUB for BIOS and UEFI, the installed boot menu; built by
+[`scripts/payload.sh`](scripts/payload.sh)) as a second Multiboot module, next to the RAM disk it clones
+sector for sector. Ordinary boots never load it. Disks it can install onto are the ones the kernel
+drives: IDE, SATA (AHCI) and NVMe. See [`apps/install/README.md`](apps/install/README.md) for the layout,
+the engine and the kernel support.
+
 ### Shell
 
 The interactive shell is [`apps/zsh`](apps/zsh/main.c) — a small **zsh-flavoured
@@ -1286,6 +1317,7 @@ make qemu-iso                  # boot os.iso (GUI, SDL), serial on stdio
 make qemu-nox                  # same, no display
 make qemu-kernel               # boot kernel.elf directly (-kernel -initrd)
 make qemu-iso DISK=hda.img     # also attach a persistent scratch disk (/hda)
+make qemu-install              # try the graphical installer on a blank disk (see **Installer**)
 ```
 
 QEMU is launched with 256 MB RAM, `-vga std`, the `os.iso` CD-ROM (which

@@ -652,6 +652,8 @@ static void page_review(mu_Context *ctx) {
     row1(ctx, 28);
     snprintf(a, sizeof a, "I understand that everything on %s will be erased", d->bi.name);
     mu_checkbox(ctx, a, &A.agree);
+    row1(ctx, 18);
+    label_c(ctx, C_DIM, "Click the box, or press Space, then Install.");
     if (!ok) {
         row1(ctx, 0);
         text_c(ctx, C_BAD, g_inst.err);

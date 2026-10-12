@@ -9,15 +9,16 @@ make iso                  # builds os.iso, with the installer and its payload on
 make qemu-install         # boots it with a blank scratch disk (install-target.img);
                           #   at the boot menu choose "Install koppi's os to a disk"
 make qemu-installed       # then starts from the disk the installer wrote, no CD
-make qemu-install-test    # the whole thing, unattended (tools/testing/install-boot.sh)
+make test-install-host    # the engine over image files (tools/testing/install-host-test.sh)
+make qemu-install-test    # the whole thing, unattended (tools/testing/install-boot.sh; BUS=ahci|nvme|ide|all)
 ```
 
-On real hardware: write `os.iso` to a USB stick (`dd`), boot it, choose the "Install" entry.
-It handles IDE, SATA (AHCI) and NVMe disks — what the kernel has drivers for; the stick it
-boots from is not one of them, and there is no USB mass-storage driver yet to install *from*
-a second stick onto a third device. `install` at the shell opens the same wizard as a
-window on the desktop, but only the Install boot entry loads the payload, so there it
-just says so.
+On real hardware: write `os.iso` to a USB stick (`dd`), boot it, choose the "Install" entry. The
+target must be a disk the kernel has a driver for: IDE, SATA (AHCI) or NVMe. A USB drive cannot be
+installed onto -- there is no USB mass-storage driver -- but the stick the installer booted from
+never needs one, since GRUB has already loaded everything into memory. `install` at the shell opens
+the same wizard as a window on the desktop, but only the Install boot entry loads the payload, so
+there it says so and stops at the welcome page.
 
 The pages: **Welcome** → **Disk** (every installable disk, with what is on it now) →
 **Settings** (size of the system volume, its name) → **Review** (what will be erased, and a box to
@@ -91,6 +92,10 @@ interface keeps drawing (and answering the mouse) while a disk is written.
 ## Testing
 
 `tools/testing/install-host-test.sh` runs the engine on image files and checks them with `sfdisk`,
-`fsck.fat` and QEMU's SeaBIOS and OVMF. `tools/testing/install-boot.sh [ide|ahci|nvme|all]` drives the
-real wizard in QEMU, then checks the disk from the host and boots it alone. What neither can
+`fsck.fat` and QEMU's SeaBIOS and OVMF. `tools/testing/install-boot.sh [ahci|nvme|ide|all]` drives the
+real wizard in QEMU, then checks the disk from the host and boots it alone. Speed: AHCI and NVMe
+use DMA and take about 15 seconds for the 32 MiB RAM disk image (written, then read back); an IDE disk is
+PIO, and under KVM every word of port I/O traps to the emulator, so the same install takes minutes
+there (real IDE hardware does not pay that). `make qemu-install` therefore attaches its disk
+through AHCI. What neither test can
 tell: whether a particular real machine's firmware accepts the layout; that has to be tried.

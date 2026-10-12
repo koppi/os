@@ -94,7 +94,7 @@ echo "--- too small a disk must be refused, not half-written"
 rm -f "$OUT/tiny.img"; truncate -s 40M "$OUT/tiny.img"
 "$HOST" "$OUT/tiny.img" payload.img initrd.img >"$OUT/tiny.log" 2>&1
 check "40 MiB disk: refused" "grep -q 'too small' '$OUT/tiny.log'"
-check "40 MiB disk: nothing written" "[ -z \"\$(tr -d '\\\\0' < '$OUT/tiny.img' | head -c 16)\" ]"
+check "40 MiB disk: nothing written" "cmp -s '$OUT/tiny.img' <(head -c 41943040 /dev/zero)"
 
 if [ "$what" = bios ] || [ "$what" = all ]; then
     echo "--- boot under SeaBIOS"

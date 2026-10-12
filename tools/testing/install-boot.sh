@@ -1,7 +1,7 @@
 #!/bin/bash
 # install-boot.sh -- run the graphical installer in QEMU, end to end, and check what it wrote.
 #
-#   tools/testing/install-boot.sh [ide|ahci|nvme|all]            (default: ide)
+#   tools/testing/install-boot.sh [ahci|nvme|ide|all]            (default: ahci)
 #
 # For each disk bus:
 #   1. boot a copy of os.iso whose boot menu starts on the "Install" entry, with a blank disk
@@ -40,10 +40,14 @@ check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
 
 # An ISO whose menu starts on the installer (entry 1) and does not wait, so a script need
 # not catch GRUB's countdown. The kernel, RAM disk and payload are the real ones.
+#
+# They are copied to $OUT/ref first, and everything later is checked against that copy,
+# not against the tree: the checkout may be rebuilt (by a `make` in another terminal, say)
+# while a long run is going, and a file compared with its newer self is a false failure.
 make_install_iso() {
     local d="$OUT/isotree"
-    rm -rf "$d"; mkdir -p "$d/boot/grub"
-    for f in kernel.elf initrd.img payload.img; do ln -f "iso/boot/$f" "$d/boot/$f" 2>/dev/null || cp "iso/boot/$f" "$d/boot/$f"; done
+    rm -rf "$d" "$OUT/ref"; mkdir -p "$d/boot/grub" "$OUT/ref"
+    for f in kernel.elf initrd.img payload.img; do cp "iso/boot/$f" "$OUT/ref/$f"; cp "$OUT/ref/$f" "$d/boot/$f"; done
     sed -e 's/^set default=0/set default=1/' -e 's/^set timeout=.*/set timeout=1/' \
         arch/x86/boot/grub/grub.cfg > "$d/boot/grub/grub.cfg"
     grub-mkrescue -o "$OUT/install.iso" "$d" >/dev/null 2>&1
@@ -53,17 +57,19 @@ make_install_iso() {
 disk_args() {
     case $1 in
     ide)  echo "-machine pc -drive file=$2,format=raw,if=ide,index=0" ;;
-    ahci) echo "-machine q35 -drive id=tgt,file=$2,format=raw,if=none -device ich9-ahci,id=ahci -device ide-hd,drive=tgt,bus=ahci.0" ;;
+    ahci) echo "-machine pc -drive id=tgt,file=$2,format=raw,if=none -device ich9-ahci,id=ahci -device ide-hd,drive=tgt,bus=ahci.0" ;;
     nvme) echo "-machine pc -drive id=tgt,file=$2,format=raw,if=none -device nvme,drive=tgt,serial=koppios0" ;;
     esac
 }
 
-# cdrom_args <bus>: where the installation medium goes, so it never takes the disk's place
+# cdrom_args: where the installation medium goes -- the IDE CD slot, so it never takes the disk's place
 cdrom_args() {
-    case $1 in
-    ahci) echo "-drive id=cd0,file=$OUT/install.iso,format=raw,if=none,media=cdrom -device ide-cd,drive=cd0,bus=ahci.1 -boot d" ;;
-    *)    echo "-drive file=$OUT/install.iso,if=ide,index=2,media=cdrom -boot d" ;;
-    esac
+    echo "-drive file=$OUT/install.iso,if=ide,index=2,media=cdrom -boot d"
+}
+
+# usb_args: the keyboard and mouse the OS is developed against (UHCI, a hub, a mouse behind it)
+usb_args() {
+    echo "-usb -device usb-kbd,port=1 -device usb-hub,port=2 -device usb-mouse,port=2.1"
 }
 
 mon() { echo "$2" | socat - "unix-connect:$1" >/dev/null 2>&1; }
@@ -79,7 +85,7 @@ run_install() {
     # shellcheck disable=SC2046
     qemu-system-i386 $(disk_args "$bus" "$d/disk.img") $(cdrom_args "$bus") \
         -vga virtio -m 512M -smp 2 -no-reboot $KVM -rtc base=localtime,clock=vm \
-        -usb -device usb-kbd,port=1 -device usb-hub,port=2 -device usb-mouse,port=2.1 \
+        $(usb_args "$bus") \
         -display none -serial "file:$d/serial.log" -monitor "unix:$d/mon.sock,server,nowait" &
     local q=$!
     sleep "$BOOT_WAIT"
@@ -137,9 +143,9 @@ check_disk() {
     mcopy -i "$img@@$off" ::/boot/initrd.img "$d/initrd.img" 2>/dev/null
     mcopy -i "$img@@$off" ::/boot/grub/grub.cfg "$d/grub.cfg" 2>/dev/null
     mcopy -i "$img@@$off" ::/EFI/BOOT/BOOTX64.EFI "$d/BOOTX64.EFI" 2>/dev/null
-    check "$bus: /boot/kernel.elf is the kernel" "cmp -s '$d/kernel.elf' kernel.elf"
-    check "$bus: /boot/initrd.img is the RAM disk" "cmp -s '$d/initrd.img' initrd.img"
-    check "$bus: /boot/grub/grub.cfg has no installer entry" "[ -s '$d/grub.cfg' ] && ! grep -q 'payload' '$d/grub.cfg' && grep -q 'multiboot2 /boot/kernel.elf' '$d/grub.cfg'"
+    check "$bus: /boot/kernel.elf is the kernel" "cmp -s '$d/kernel.elf' '$OUT/ref/kernel.elf'"
+    check "$bus: /boot/initrd.img is the RAM disk" "cmp -s '$d/initrd.img' '$OUT/ref/initrd.img'"
+    check "$bus: /boot/grub/grub.cfg has no installer entry" "[ -s '$d/grub.cfg' ] && ! grep -q 'payload\.img' '$d/grub.cfg' && grep -q 'multiboot2 /boot/kernel.elf' '$d/grub.cfg'"
     check "$bus: /EFI/BOOT/BOOTX64.EFI present" "[ -s '$d/BOOTX64.EFI' ]"
 }
 
@@ -158,7 +164,7 @@ boot_installed() {
     # shellcheck disable=SC2046
     "${machine[@]}" "${extra[@]}" $(disk_args "$bus" "$d/disk.img") \
         -vga virtio -m 1G -smp 2 -no-reboot $KVM -rtc base=localtime,clock=vm \
-        -usb -device usb-kbd,port=1 -device usb-hub,port=2 -device usb-mouse,port=2.1 \
+        $(usb_args "$bus") \
         -display none -serial "unix:$d/$fw.ser,server,nowait" -monitor "unix:$d/$fw.sock,server,nowait" &
     local q=$!
     sleep 3
@@ -166,7 +172,13 @@ boot_installed() {
     socat "unix-connect:$d/$fw.ser" - < "$d/$fw.in" > "$d/$fw.log" 2>/dev/null &
     local sp=$!
     exec 8>"$d/$fw.in"
-    sleep "$BOOT_WAIT"
+    # Wait for the kernel's last start-up line rather than a fixed time: firmware and
+    # GRUB (reading a 32 MiB RAM disk through EFI block I/O is slow) vary a lot.
+    local waited=0
+    until grep -q 'ssh: listening' "$d/$fw.log" 2>/dev/null || [ $waited -ge "${BOOT_TIMEOUT:-150}" ]; do
+        sleep 2; waited=$((waited + 2))
+    done
+    sleep 3
     printf 'lsblk\r' >&8; sleep 2
     printf 'ls /hda\r' >&8; sleep 3
     shot "$d/$fw.sock" "$d/boot-$fw"
@@ -181,13 +193,13 @@ boot_installed() {
 
 make_install_iso
 
-buses=${1:-ide}
-[ "$buses" = all ] && buses="ide ahci nvme"
+buses=${1:-ahci}
+[ "$buses" = all ] && buses="ahci nvme ide"
 for bus in $buses; do
     run_install "$bus"
     check_disk "$bus"
     boot_installed "$bus" bios
-    [ "$bus" = ide ] && boot_installed "$bus" uefi
+    [ "$bus" = ahci ] && boot_installed "$bus" uefi
 done
 
 echo

@@ -169,19 +169,32 @@ qemu-iso: iso
 # Try the installer: boot os.iso with a blank scratch disk and, at the boot menu, choose
 # "Install koppi's os to a disk". Afterwards `make qemu-installed` starts from that disk.
 #   make qemu-install [INSTALL_DISK=install-target.img] [INSTALL_SIZE=1G]
+# The disk is attached through an AHCI controller, as on a laptop with a SATA SSD: it uses
+# DMA. An IDE disk is PIO, and under KVM every word of port I/O is a trap to the emulator --
+# installing onto one takes minutes (DISK=... attaches an IDE one, if you want to try).
 INSTALL_DISK ?= install-target.img
 INSTALL_SIZE ?= 1G
+INSTALL_DRIVE = -drive id=itgt,file=$(INSTALL_DISK),format=raw,if=none -device ich9-ahci,id=iahci -device ide-hd,drive=itgt,bus=iahci.0
 qemu-install: iso
 	@[ -f $(INSTALL_DISK) ] || qemu-img create -f raw $(INSTALL_DISK) $(INSTALL_SIZE) >/dev/null
 	@echo "QEMU .. (at the boot menu choose: Install koppi's os to a disk)"
-	@$(MAKE) --no-print-directory qemu-iso DISK=$(INSTALL_DISK)
+	@$(QEMU) $(QEMUFLAGS) $(INSTALL_DRIVE) -boot d,menu=off -serial 'mon:stdio'
+
+# The installer's tests. The first runs its engine over image files and judges them with
+# sfdisk, fsck.fat and SeaBIOS/OVMF; the second drives the real wizard in QEMU, checks the
+# disk it wrote from the host, and boots it alone (BUS=ahci|nvme|ide|all).
+test-install-host: iso
+	@bash tools/testing/install-host-test.sh
+
+qemu-install-test: iso
+	@bash tools/testing/install-boot.sh $(or $(BUS),ahci)
 
 # Start from the disk the installer wrote, with no installation medium: what a real
 # machine does after the first restart.
 qemu-installed:
 	@[ -f $(INSTALL_DISK) ] || { echo "no $(INSTALL_DISK): run make qemu-install first"; exit 1; }
 	@echo "QEMU .."
-	@$(QEMU) $(filter-out -drive file=os.iso%,$(QEMUFLAGS)) -drive file=$(INSTALL_DISK),format=raw,if=ide,index=0,media=disk -serial 'mon:stdio'
+	@$(QEMU) $(filter-out -drive file=os.iso%,$(QEMUFLAGS)) $(INSTALL_DRIVE) -serial 'mon:stdio'
 
 qemu-nox: iso
 	@echo "QEMU .."
@@ -321,6 +334,6 @@ clean::
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) $(OBJS:.o=.d) arch/x86/realmode/ap_boot.bin \
 	    arch/x86/realmode/ap_boot.tmp.* *~ os.iso iso initrd.img payload.img docs
 
-.PHONY: all libc apps iso qemu-kernel qemu-iso qemu-install qemu-installed qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-pad test-gamepad qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets qemu-qt-lua cloc docs clean
+.PHONY: all libc apps iso qemu-kernel qemu-iso qemu-install qemu-installed test-install-host qemu-install-test qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-pad test-gamepad qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets qemu-qt-lua cloc docs clean
 
 -include $(OBJS:.o=.d)

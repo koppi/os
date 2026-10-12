@@ -423,9 +423,14 @@ void vfs_mount(char *name) {
         klogf(LOG_INFO, "vfs: %s is not a FAT volume, not mounted\n", dev->mount);
         return;
     }
-    int s = fs_enter();
-    fat_defrag(dev);
-    fs_leave(s);
+    /* Defragment only a volume that is the whole device (the RAM disk is skipped inside).
+     * One found inside a partition table is somebody's partition -- another system's data
+     * disk, perhaps -- and not ours to rearrange at boot. */
+    if(dev->lba_base == 0) {
+        int s = fs_enter();
+        fat_defrag(dev);
+        fs_leave(s);
+    }
     devs[dev->id] = &dev->fs;
 }
 
