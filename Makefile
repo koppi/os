@@ -180,6 +180,12 @@ qemu-install: iso
 	@echo "QEMU .. (at the boot menu choose: Install koppi's os to a disk)"
 	@$(QEMU) $(QEMUFLAGS) $(INSTALL_DRIVE) -boot d,menu=off -serial 'mon:stdio'
 
+# Retake the README's screenshots (Documentation/screenshots) from the running OS: each
+# scenario boots a copy of os.iso headless and drives it. `make screenshots S="doom qt"`
+# retakes only those; see tools/testing/screenshots.sh for the list.
+screenshots: iso
+	@bash tools/testing/screenshots.sh $(S)
+
 # The installer's tests. The first runs its engine over image files and judges them with
 # sfdisk, fsck.fat and SeaBIOS/OVMF; the second drives the real wizard in QEMU, checks the
 # disk it wrote from the host, and boots it alone (BUS=ahci|nvme|ide|all).
@@ -334,6 +340,6 @@ clean::
 	@rm -rf $(KERNEL) kernel.lst kernel.map $(OBJS) $(OBJS:.o=.d) arch/x86/realmode/ap_boot.bin \
 	    arch/x86/realmode/ap_boot.tmp.* *~ os.iso iso initrd.img payload.img docs
 
-.PHONY: all libc apps iso qemu-kernel qemu-iso qemu-install qemu-installed test-install-host qemu-install-test qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-pad test-gamepad qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets qemu-qt-lua cloc docs clean
+.PHONY: all libc apps iso qemu-kernel qemu-iso qemu-install qemu-installed screenshots test-install-host qemu-install-test qemu-nox qemu-x250 qemu-t470s qemu-x220 qemu-mba qemu-keys qemu-ssh qemu-pad test-gamepad qemu-doom qemu-chipnomad qemu-microui qemu-qt-gui qemu-qt-widgets qemu-qt-lua cloc docs clean
 
 -include $(OBJS:.o=.d)

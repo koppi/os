@@ -8,6 +8,48 @@ few userspace programs.
 Current version: **git-derived** at build time — `(major, minor, revision)` is
 computed from the last commit (`ver.h`, `main.c`, `Makefile`).
 
+## Screenshots
+
+All of these come from the real OS running in QEMU, taken headless by [`tools/testing/screenshots.sh`](tools/testing/screenshots.sh) (`make screenshots`); nothing is mocked up.
+
+### Boot
+
+| | |
+|:--|:--|
+| ![GRUB boot menu](Documentation/screenshots/grub-menu.png)<br>**GRUB.** The boot menu: the system, the graphical installer, and the escape hatches for real hardware (no xHCI/AHCI/NVMe/SMP, EHCI on, forced mode, text console, Multiboot 1). | ![Kernel boot log](Documentation/screenshots/boot-log.png)<br>**Boot.** The kernel's log on the framebuffer console while the drivers come up, with a progress bar along the bottom. |
+
+### Desktop and window manager
+
+| | |
+|:--|:--|
+| ![The desktop](Documentation/screenshots/desktop.png)<br>**The desktop.** A system panel and a console window running the shell; `lsblk` lists the block devices, `cpus` shows the four cores and what each is running. | ![Two ring-3 programs as windows](Documentation/screenshots/windows.png)<br>**Windows.** Two userspace microui programs at once, each in a window the desktop composites: a calculator (just evaluated `2 + 3 * 4` = 20, immediate execution like a pocket calculator) and an analog clock. |
+
+### Shell and kernel console
+
+| | |
+|:--|:--|
+| ![help](Documentation/screenshots/shell-help.png)<br>**`help`.** The commands of the kernel console and the busybox-style toolbox behind the shell. | ![net and pci](Documentation/screenshots/console-pci.png)<br>**`net` and `pci`.** The e1000 NIC with its DHCP lease, and the PCI devices found, each with the driver that bound to it. |
+| ![C++, the STL and Lua](Documentation/screenshots/userland.png)<br>**Userland.** C++ with global and heap constructors, the STL (`vector`, `sort`), and the Lua port's self-test, all ring-3 programs started from the shell. | ![Fault isolation](Documentation/screenshots/fault-isolation.png)<br>**Fault isolation.** A divide-by-zero in a ring-3 program kills that process only; the register dump prints, the shell comes back, and the machine is still up. |
+
+### Programs
+
+| | |
+|:--|:--|
+| ![Doom](Documentation/screenshots/doom.png)<br>**Doom.** The doomgeneric port in ring 3: full-screen framebuffer grab, raw scancodes, PCM audio and OPL music. (The shareware IWAD is not in the repository.) | ![Doom menu](Documentation/screenshots/doom-menu.png)<br>**Doom's menu**, opened with Esc mid-game. |
+| ![ChipNomad song view](Documentation/screenshots/chipnomad.png)<br>**ChipNomad.** The AY/YM chiptune tracker, here on one of its bundled demo songs: the song view... | ![ChipNomad phrase view](Documentation/screenshots/chipnomad-phrase.png)<br>...and the phrase editor. Shift + the arrow keys move between its screens. |
+| ![Qt GUI](Documentation/screenshots/qt-gui.png)<br>**Qt 6.8 (QtGui).** Real Qt, compiled from source for this OS: a software-rendered scene with a gradient, a text panel and an animated ball. | ![QtWidgets](Documentation/screenshots/qt-widgets.png)<br>**QtWidgets.** Tabs, buttons, radio buttons, check boxes, sliders and combo boxes driven by the keyboard and the mouse. |
+| ![Lua with Qt](Documentation/screenshots/qt-lua.png)<br>**`qtlua`.** Lua with generated Qt6 bindings: the same kind of widgets, written as a Lua script. |  |
+
+### Installer
+
+The graphical installer ([`apps/install`](apps/install)), here installing onto a blank SATA disk. See **Installer** below.
+
+| | |
+|:--|:--|
+| ![Installer: welcome](Documentation/screenshots/installer-welcome.png)<br>**Welcome.** Boot the "Install" entry and the wizard starts full screen. | ![Installer: choose a disk](Documentation/screenshots/installer-disk.png)<br>**Disk.** Every disk the kernel can drive, with what is on it now. |
+| ![Installer: review](Documentation/screenshots/installer-review.png)<br>**Review.** What will be written, what will be erased, and a box to tick before Install lights up. | ![Installer: progress](Documentation/screenshots/installer-progress.png)<br>**Install.** GPT, GRUB for BIOS and UEFI, then the system; the interface keeps drawing while the disk is written. |
+| ![Installer: finished](Documentation/screenshots/installer-finish.png)<br>**Finish.** Everything read back and checksummed, and the kernel has mounted the new volume as `/hda`. |  |
+
 ## Features
 
 ### Boot
@@ -1656,6 +1698,7 @@ make qemu-keys    # raw-key-stream check on all three keyboard paths (no WAD)
 make qemu-pad     # USB game controller on UHCI, xHCI (+ unplug/replug) and EHCI (no WAD)
 make test-gamepad # the controller's descriptor parser as a host program, with a fuzzer
 make qemu-ssh     # log in over ssh and check the editor (needs ssh + sshpass)
+make screenshots  # retake the README's screenshots from the running OS (Documentation/screenshots)
 make kernel.lst   # full objdump disassembly
 make docs         # Doxygen API docs -> docs/html/index.html (needs doxygen)
 make cloc         # source line count (needs cloc)

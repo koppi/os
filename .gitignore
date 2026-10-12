@@ -9,6 +9,7 @@ hda.img
 floppy.img
 initrd.img
 payload.img
+install-target.img
 os-usb.img
 apps/01/01
 apps/hello/hello
